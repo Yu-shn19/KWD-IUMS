@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Hostinger API</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        h1 {
+            color: #333;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Test Hostinger API Connection</h1>
+    
+    <div class="test-box">
+        <h3>Configuration</h3>
+        <label>API Base URL:</label>
+        <input type="text" id="apiUrl" value="https://hagonoywaterdistrict.com/api" placeholder="https://yourdomain.com/api">
+        
+        <label>Test Username:</label>
+        <input type="text" id="username" value="" placeholder="Enter reader email/username">
+        
+        <label>Test Password:</label>
+        <input type="password" id="password" value="" placeholder="Enter password">
+    </div>
+
+    <div class="test-box">
+        <h3>Tests</h3>
+        <button onclick="testBasicConnection()">1️⃣ Test Basic Connection</button>
+        <button onclick="testTestEndpoint()">2️⃣ Test /test Endpoint</button>
+        <button onclick="testLogin()">3️⃣ Test Login</button>
+        <button onclick="testCORS()">4️⃣ Test CORS</button>
+        <button onclick="clearResults()">🗑️ Clear Results</button>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        function addResult(title, content, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = 'test-box';
+            div.innerHTML = `
+                <h3>${title}</h3>
+                <div class="result ${type}">${content}</div>
+            `;
+            results.appendChild(div);
+            results.scrollTop = results.scrollHeight;
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        async function testBasicConnection() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            addResult('🔍 Testing Basic Connection...', `Attempting to reach: ${apiUrl}`, 'info');
+            
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'GET',
+                    mode: 'cors',
+                });
+                
+                const text = await response.text();
+                addResult(
+                    '✅ Basic Connection Successful',
+                    `Status: ${response.status} ${response.statusText}\n` +
+                    `Headers: ${JSON.stringify([...response.headers.entries()], null, 2)}\n\n` +
+                    `Response:\n${text}`,
+                    'success'
+                );
+            } catch (error) {
+                addResult(
+                    '❌ Basic Connection Failed',
+                    `Error: ${error.message}\n\n` +
+                    `This usually means:\n` +
+                    `1. Server is not accessible\n` +
+                    `2. CORS is blocking the request\n` +
+                    `3. SSL certificate issue\n` +
+                    `4. URL is incorrect`,
+                    'error'
+                );
+            }
+        }
+
+        async function testTestEndpoint() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const testUrl = `${apiUrl}/test`;
+            addResult('🔍 Testing /test Endpoint...', `URL: ${testUrl}`, 'info');
+            
+            try {
+                const response = await fetch(testUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                    },
+                    mode: 'cors',
+                });
+                
+                const data = await response.json();
+                addResult(
+                    '✅ Test Endpoint Successful',
+                    `Status: ${response.status}\n\n` +
+                    `Response:\n${JSON.stringify(data, null, 2)}`,
+                    'success'
+                );
+            } catch (error) {
+                addResult(
+                    '❌ Test Endpoint Failed',
+                    `Error: ${error.message}\n\n` +
+                    `Possible causes:\n` +
+                    `1. Route not defined in routes/api.php\n` +
+                    `2. Laravel not properly configured\n` +
+                    `3. CORS headers missing`,
+                    'error'
+                );
+            }
+        }
+
+        async function testLogin() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            if (!username || !password) {
+                addResult('⚠️ Missing Credentials', 'Please enter username and password first', 'error');
+                return;
+            }
+            
+            const loginUrl = `${apiUrl}/reader/login`;
+            addResult('🔍 Testing Login...', `URL: ${loginUrl}\nUsername: ${username}`, 'info');
+            
+            try {
+                const response = await fetch(loginUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    }),
+                    mode: 'cors',
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    addResult(
+                        '✅ Login Successful!',
+                        `Status: ${response.status}\n\n` +
+                        `User: ${data.data?.user?.name}\n` +
+                        `Role: ${data.data?.user?.role}\n` +
+                        `Token: ${data.data?.token?.substring(0, 30)}...\n\n` +
+                        `Full Response:\n${JSON.stringify(data, null, 2)}`,
+                        'success'
+                    );
+                } else {
+                    addResult(
+                        '❌ Login Failed',
+                        `Status: ${response.status}\n\n` +
+                        `Message: ${data.message || 'Unknown error'}\n\n` +
+                        `Full Response:\n${JSON.stringify(data, null, 2)}`,
+                        'error'
+                    );
+                }
+            } catch (error) {
+                addResult(
+                    '❌ Login Request Failed',
+                    `Error: ${error.message}\n\n` +
+                    `This means the server couldn't be reached or rejected the request.`,
+                    'error'
+                );
+            }
+        }
+
+        async function testCORS() {
+            const apiUrl = document.getElementById('apiUrl').value;
+            addResult('🔍 Testing CORS Configuration...', `Checking: ${apiUrl}`, 'info');
+            
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'content-type,authorization',
+                    },
+                    mode: 'cors',
+                });
+                
+                const corsHeaders = {
+                    'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                    'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                    'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers'),
+                    'Access-Control-Allow-Credentials': response.headers.get('Access-Control-Allow-Credentials'),
+                };
+                
+                addResult(
+                    '✅ CORS Headers Received',
+                    `Status: ${response.status}\n\n` +
+                    `CORS Headers:\n${JSON.stringify(corsHeaders, null, 2)}\n\n` +
+                    `If any header is null, CORS is not properly configured!`,
+                    corsHeaders['Access-Control-Allow-Origin'] ? 'success' : 'error'
+                );
+            } catch (error) {
+                addResult(
+                    '❌ CORS Test Failed',
+                    `Error: ${error.message}\n\n` +
+                    `CORS is likely not configured on the server.`,
+                    'error'
+                );
+            }
+        }
+
+        // Auto-test on load
+        window.addEventListener('load', () => {
+            addResult(
+                '📋 Instructions',
+                '1. Verify the API URL is correct\n' +
+                '2. Click "Test Basic Connection" first\n' +
+                '3. If successful, test the /test endpoint\n' +
+                '4. Enter your reader credentials and test login\n' +
+                '5. Check CORS configuration\n\n' +
+                '📱 This helps diagnose mobile app connection issues!',
+                'info'
+            );
+        });
+    </script>
+</body>
+</html>
