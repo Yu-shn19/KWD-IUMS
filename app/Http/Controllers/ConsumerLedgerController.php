@@ -17,6 +17,61 @@ use Illuminate\Support\Facades\Auth;
 
 class ConsumerLedgerController extends Controller
 {
+     /**
+     * One ledger row: same running-balance step as consumer ledger UI (footer Current Balance).
+     */
+    public static function nextRunningBalance(float $runningBalance, ConsumerLedger $ledger): float
+    {
+        $debit = (float) ($ledger->debit ?? 0);
+        $credit = (float) ($ledger->credit ?? 0);
+        $trans = strtoupper(trim($ledger->trans ?? ''));
+
+        $newBalance = $runningBalance + $debit - $credit;
+
+        if ($trans === 'PAYMENT' && $credit > 0) {
+            if (abs($credit - $runningBalance) <= 0.01) {
+                $newBalance = 0.00;
+            } elseif ($runningBalance > 0 && $credit > $runningBalance && ($credit - $runningBalance) <= 0.01) {
+                $newBalance = 0.00;
+            }
+        }
+
+        return round($newBalance, 2);
+    }
+
+    /**
+     * Matches getLedger() summary.balance / ledger.blade.php footer Current Balance for the same year scope.
+     *
+     * @param  string|int|null  $year  Omit or null/'' for all years (no WHERE on date).
+     */
+    public static function computeLedgerFooterBalance(int $consumerZoneId, $year = null): float
+    {
+        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
+            ->where(function ($q) {
+                $q->whereNull('billing_adjustment_id')
+                    ->orWhereHas('billingAdjustment', function ($q2) {
+                        $q2->where('status', 'Approved');
+                    });
+            });
+
+        if ($year !== null && $year !== '') {
+            $ledgersQuery->whereYear('date', $year);
+        }
+
+        $ledgers = $ledgersQuery->orderByRaw('CAST(date AS DATE) ASC')
+            ->orderByRaw("CASE WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN 0 WHEN UPPER(TRIM(trans)) = 'PAYMENT' THEN 1 ELSE 2 END ASC")
+            ->orderBy('id', 'asc')
+            ->get();
+
+        $runningBalance = 0.00;
+        foreach ($ledgers as $ledger) {
+            $runningBalance = self::nextRunningBalance($runningBalance, $ledger);
+        }
+
+        return round($runningBalance, 2);
+    }
+
+    
     /**
      * Get ledger data for a consumer by account number
      */
@@ -72,8 +127,8 @@ class ConsumerLedgerController extends Controller
         // Use CAST to ensure proper date ordering if stored as string
         // Secondary sort by ID to maintain order for same-date entries
         $ledgers = $ledgersQuery->orderByRaw('CAST(date AS DATE) ASC')
-            ->orderBy('id', 'asc')
-            ->get();
+        ->orderByRaw("CASE WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN 0 WHEN UPPER(TRIM(trans)) = 'PENALTY' THEN 1 WHEN UPPER(TRIM(trans)) = 'PAYMENT' THEN 2 ELSE 3 END ASC")
+        ->get();
         
         \Log::info('Ledgers fetched from database', [
             'consumer_zone_id' => $consumer->id,
@@ -84,41 +139,45 @@ class ConsumerLedgerController extends Controller
         // Calculate running balance and handle exact payment matches
         // When payment exactly matches balance, show 0.00 instead of negative
         $runningBalance = 0.00;
-        $firstEntry = $ledgers->first();
+        // $firstEntry = $ledgers->first();
         
-        // If first entry exists, start with its balance minus its debit/credit to get the starting balance
-        if ($firstEntry) {
-            $firstBalance = (float)($firstEntry->balance ?? 0);
-            $firstDebit = (float)($firstEntry->debit ?? 0);
-            $firstCredit = (float)($firstEntry->credit ?? 0);
-            $runningBalance = $firstBalance - $firstDebit + $firstCredit;
-        }
+        // // If first entry exists, start with its balance minus its debit/credit to get the starting balance
+        // if ($firstEntry) {
+        //     $firstBalance = (float)($firstEntry->balance ?? 0);
+        //     $firstDebit = (float)($firstEntry->debit ?? 0);
+        //     $firstCredit = (float)($firstEntry->credit ?? 0);
+        //     $runningBalance = $firstBalance - $firstDebit + $firstCredit;
+        // }
         
-        $ledgersWithBalance = $ledgers->map(function($ledger) use (&$runningBalance) {
-            $debit = (float)($ledger->debit ?? 0);
-            $credit = (float)($ledger->credit ?? 0);
-            $trans = strtoupper(trim($ledger->trans ?? ''));
+        // $ledgersWithBalance = $ledgers->map(function($ledger) use (&$runningBalance) {
+        //     $debit = (float)($ledger->debit ?? 0);
+        //     $credit = (float)($ledger->credit ?? 0);
+        //     $trans = strtoupper(trim($ledger->trans ?? ''));
             
-            // Calculate new balance: previous balance + debit - credit
-            $newBalance = $runningBalance + $debit - $credit;
+        //     // Calculate new balance: previous balance + debit - credit
+        //     $newBalance = $runningBalance + $debit - $credit;
             
-            // Special handling for PAYMENT entries: if payment exactly matches balance, show 0.00
-            if ($trans === 'PAYMENT' && $credit > 0) {
-                // If payment exactly matches the previous balance (within 0.01 rounding tolerance), set to 0.00
-                if (abs($credit - $runningBalance) <= 0.01) {
-                    $newBalance = 0.00;
-                }
-                // If payment is slightly more than balance (within 0.01), also set to 0.00
-                elseif ($runningBalance > 0 && $credit > $runningBalance && ($credit - $runningBalance) <= 0.01) {
-                    $newBalance = 0.00;
-                }
-            }
+        //     // Special handling for PAYMENT entries: if payment exactly matches balance, show 0.00
+        //     if ($trans === 'PAYMENT' && $credit > 0) {
+        //         // If payment exactly matches the previous balance (within 0.01 rounding tolerance), set to 0.00
+        //         if (abs($credit - $runningBalance) <= 0.01) {
+        //             $newBalance = 0.00;
+        //         }
+        //         // If payment is slightly more than balance (within 0.01), also set to 0.00
+        //         elseif ($runningBalance > 0 && $credit > $runningBalance && ($credit - $runningBalance) <= 0.01) {
+        //             $newBalance = 0.00;
+        //         }
+        //     }
             
-            // Round to 2 decimal places
-            $newBalance = round($newBalance, 2);
+        //     // Round to 2 decimal places
+        //     $newBalance = round($newBalance, 2);
             
-            // Update running balance for next iteration
-            $runningBalance = $newBalance;
+        //     // Update running balance for next iteration
+        //     $runningBalance = $newBalance;
+        
+             $ledgersWithBalance = $ledgers->map(function ($ledger) use (&$runningBalance) {
+            $runningBalance = self::nextRunningBalance($runningBalance, $ledger);
+            $newBalance = $runningBalance;
             
             return [
                 'id' => $ledger->id ?? null,
@@ -165,6 +224,11 @@ class ConsumerLedgerController extends Controller
             'consumer' => [
                 'account_no' => $consumer->account_no,
                 'account_name' => $consumer->account_name,
+                    'zone_code' => $consumer->zone_code,
+                'address1' => $consumer->address1,
+                'meter_number' => $consumer->meter_number,
+                'cons_ctrl' => $consumer->cons_ctrl,
+                'sequence' => $consumer->sequence,
             ],
             'ledgers' => $ledgersWithBalance->values(),
             'summary' => [
@@ -336,135 +400,6 @@ class ConsumerLedgerController extends Controller
                 'message' => 'Error loading consumption data: ' . $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * Record an outstanding balance payment directly into consumer_ledgers (does not touch downloaded_readings)
-     */
-    public function payOutstanding(Request $request)
-    {
-        $validated = $request->validate([
-            'account_no' => 'required|string',
-            'amount' => 'required|numeric|min:0.01',
-            'official_receipt_number' => 'required|string|max:20',
-            'payment_method' => 'required|string|max:50',
-            'remarks' => 'nullable|string|max:500',
-            'senior_citizen_discount' => 'nullable|numeric|min:0',
-            'current_balance' => 'nullable|numeric',
-        ]);
-
-        // Normalize account number (strip dashes/trim/uppercase) for flexible matching
-        $accountNoInput = trim($validated['account_no']);
-        $normalizedAccount = str_replace('-', '', $accountNoInput);
-
-        $consumer = ConsumerZoneOne::where(function ($q) use ($accountNoInput, $normalizedAccount) {
-                $q->where('account_no', $accountNoInput)
-                  ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
-                  ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper($accountNoInput)]);
-            })->first();
-
-        if (!$consumer) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Consumer not found for account number: ' . $validated['account_no'],
-            ], 404);
-        }
-
-        // Get current balance:
-        // 1) If client provided current_balance (from ledger UI), prefer it.
-        // 2) Otherwise, use latest stored ledger balance (fallback to consumer balance).
-        $latestBalance = isset($validated['current_balance'])
-            ? round((float)$validated['current_balance'], 2)
-            : $this->getLatestStoredBalance($consumer);
-
-        try {
-            $now = Carbon::now();
-            $username = $this->getFormattedUserName();
-            $orNumber = $validated['official_receipt_number'];
-            $paymentMethod = $validated['payment_method'];
-            $remarks = $validated['remarks'] ?? null;
-            $scDiscount = round($validated['senior_citizen_discount'] ?? 0, 2);
-
-            // Outstanding payments are recorded in outstanding_payments and consumer_ledgers only.
-            // We do NOT create ConsumerPayment records here because consumer_payments.reading_id
-            // is required (NOT NULL) and outstanding payments have no billing/reading.
-            $paymentAmount = round((float)$validated['amount'], 2);
-            $newBalance = round($latestBalance - $paymentAmount, 2);
-
-            // Record to outstanding_payments table (does not touch downloaded_readings)
-            OutstandingPayment::create([
-                'consumer_zone_id' => $consumer->id,
-                'account_no' => $consumer->account_no,
-                'amount' => $paymentAmount,
-                'previous_balance' => $latestBalance,
-                'new_balance' => $newBalance,
-                'reference' => $orNumber,
-                'remarks' => $remarks,
-                'paid_at' => $now,
-                'created_by' => $username,
-            ]);
-
-            // Record to consumer_ledgers for running balance tracking (reference = OR number)
-            $ledger = ConsumerLedger::create([
-                'consumer_zone_id' => $consumer->id,
-                'consumer_payment_id' => null, // Outstanding payments have no ConsumerPayment (no reading_id)
-                'trans' => 'PAYMENT',
-                'date' => $now->format('Y-m-d'),
-                'due_date' => null,
-                'reference' => $orNumber,
-                'reading' => null,
-                'volume' => null,
-                'billamount' => 0,
-                'penalty' => 0,
-                'others' => 0,
-                'debit' => 0,
-                'credit' => $paymentAmount,
-                'balance' => $newBalance,
-                'username' => $username,
-                'txtime' => $now->format('Y-m-d H:i:s'),
-            ]);
-
-            // Update consumer balance for consistency
-            $consumer->balance = $newBalance;
-            $consumer->save();
-
-            // Cancel active disconnection orders for this consumer so disconnector gets notification not to disconnect
-            DisconnectionOrder::cancelActiveOrdersForConsumerDueToPayment($consumer->id, $now);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Outstanding payment recorded successfully.',
-                'data' => [
-                    'ledger_id' => $ledger->id,
-                    'new_balance' => $newBalance,
-                    'official_receipt_number' => $orNumber,
-                ],
-            ]);
-        } catch (\Throwable $th) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to record outstanding payment: ' . $th->getMessage(),
-            ], 500);
-        }
-    }
-
-    /**
-     * Get current balance for outstanding payments.
-     * Use latest stored balance; fallback to consumer.balance.
-     */
-    private function getLatestStoredBalance(ConsumerZoneOne $consumer): float
-    {
-        $latest = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-            ->whereNotNull('balance')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
-            ->first();
-
-        if ($latest) {
-            return round((float)($latest->balance ?? 0), 2);
-        }
-
-        return round((float)($consumer->balance ?? 0), 2);
     }
 
     /**
@@ -1521,16 +1456,6 @@ class ConsumerLedgerController extends Controller
 
         // Calculate running balance chronologically from ledger entries only
         $runningBalance = 0.00;
-        $firstEntry = $ledgers->first();
-        
-        if ($firstEntry) {
-            // Calculate starting balance: if first entry has a stored balance,
-            // work backwards to get the balance before that entry
-            $firstBalance = (float)($firstEntry->balance ?? 0);
-            $firstDebit = (float)($firstEntry->debit ?? 0);
-            $firstCredit = (float)($firstEntry->credit ?? 0);
-            $runningBalance = $firstBalance - $firstDebit + $firstCredit;
-        }
 
         // Recalculate balances for all entries chronologically
         foreach ($ledgers as $ledger) {

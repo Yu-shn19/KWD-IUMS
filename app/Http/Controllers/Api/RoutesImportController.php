@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Consumer;
+use App\Models\ConsumerZoneOne;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
@@ -50,10 +50,10 @@ class RoutesImportController extends Controller
             $category = $item['category'] ?? null;
             $address = $item['address'] ?? null;
 
-            // Determine unique keys for upsert
+            // Determine unique keys for upsert (consumer_zone: account_no, meter_number)
             $lookup = [];
             if (!empty($accountNumber)) {
-                $lookup['account_number'] = $accountNumber;
+                $lookup['account_no'] = $accountNumber;
             }
             if (empty($lookup) && !empty($meterNumber)) {
                 $lookup['meter_number'] = $meterNumber;
@@ -64,22 +64,32 @@ class RoutesImportController extends Controller
                 continue;
             }
 
+            $accountNo = $accountNumber ?: ('MTR-'.preg_replace('/\W+/', '', (string) $meterNumber));
+
             $payload = [
-                'full_name' => $fullName,
-                'category' => $category,
-                'address' => $address,
+                'account_name' => $fullName,
+                'category_code' => $category,
+                'address1' => $address,
                 'meter_number' => $meterNumber,
-                'account_number' => $accountNumber,
-                'status' => 'Active',
+                'account_no' => $accountNo,
+                'status_code' => 'A',
+                'zone_code' => $item['zone'] ?? $item['zoneCode'] ?? 'UN',
             ];
 
-            $existing = Consumer::where($lookup)->first();
+            $existing = ConsumerZoneOne::where($lookup)->first();
 
             if ($existing) {
-                $existing->update($payload);
+                $existing->update(array_filter([
+                    'account_name' => $fullName,
+                    'category_code' => $category,
+                    'address1' => $address,
+                    'meter_number' => $meterNumber,
+                    'account_no' => $accountNumber ?: $existing->account_no,
+                    'status_code' => 'A',
+                ], fn ($v) => $v !== null && $v !== ''));
                 $updated++;
             } else {
-                Consumer::create($payload);
+                ConsumerZoneOne::create($payload);
                 $inserted++;
             }
         }
@@ -91,6 +101,7 @@ class RoutesImportController extends Controller
             'updated' => $updated,
         ]);
     }
+}
 }
 
 

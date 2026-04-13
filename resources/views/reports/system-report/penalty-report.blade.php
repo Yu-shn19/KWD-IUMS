@@ -138,7 +138,7 @@
                                                     <span id="reportInfo">Select filters and click Generate</span>
                                                 </small>
                                                 <small class="text-muted">
-                                                    Total Penalties: <strong class="text-danger" id="totalPenalties">₱ 0.00</strong> | Accounts: <strong id="totalAccounts">0</strong>
+                                                    Total Penalties: <strong class="text-danger" id="totalPenalties"> 0.00</strong> | Accounts: <strong id="totalAccounts">0</strong>
                                                 </small>
                                             </div>
                                         </div>
@@ -225,6 +225,111 @@
         <i class="fas fa-angle-up"></i>
     </a>
 
+    <!-- Print-only formal report (hidden on screen) -->
+    <div id="penaltyPrintArea" class="print-only" style="display: none;">
+        <div class="print-report">
+            <style>
+                @media print {
+                    body * { visibility: hidden; }
+                    .print-only, .print-only * { visibility: visible; }
+                    .print-only { position: absolute; left: 0; top: 0; width: 100%; display: block !important; }
+                    #wrapper, .scroll-to-top, .no-print { display: none !important; }
+                    .print-report { padding: 0 1in; font-family: Arial, sans-serif; }
+                    .print-report .print-header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 15px; }
+                    .print-report .print-title { font-size: 22px; font-weight: bold; margin: 0; letter-spacing: 0.5px; }
+                    .print-report .print-subtitle { font-size: 16px; font-weight: bold; margin: 10px 0 5px; }
+                    .print-report .print-meta { font-size: 12px; color: #333; margin: 0; }
+                    .print-report .print-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 11px; }
+                    .print-report .print-table th, .print-report .print-table td { border: 1px solid #000; padding: 6px 8px; text-align: left; }
+                    .print-report .print-table th { background: #f0f0f0; font-weight: bold; text-align: center; }
+                    .print-report .print-table thead { display: table-header-group; }
+                    .print-report .print-table .text-center { text-align: center; }
+                    .print-report .print-table .text-right { text-align: right; }
+                    .print-report .print-footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #333; font-size: 12px; }
+                    .print-report .print-footer strong { margin-left: 4px; }
+                    .print-report .print-header-logo { max-height: 70px; width: auto; margin-top: 12px; margin-bottom: 10px; display: block; margin-left: auto; margin-right: auto; }
+                    .print-report .print-zone-line { font-size: 13px; font-weight: bold; margin: 8px 0 4px; }
+                    @page { size: A4; margin: 0.5in; }
+                }
+            </style>
+            <div class="print-header">
+                <img src="{{ url('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District" class="print-header-logo">
+                <h1 class="print-title">HAGONOY WATER DISTRICT</h1>
+                <p class="print-meta">Guihing, Hagonoy</p>
+                <h2 class="print-subtitle">PENALTY REPORT</h2>
+                <p class="print-zone-line" id="printZoneSelected">Zone: —</p>
+                <p class="print-meta" id="printReportSubtitle">—</p>
+                <p class="print-meta">Date generated: <span id="printDateGenerated"></span></p>
+            </div>
+            <table class="print-table">
+                <thead>
+                    <tr>
+                        <th class="text-center" style="width: 12%;">Zone_code</th>
+                        <th class="text-center" style="width: 12%;">Bill month</th>
+                        <th class="text-center" style="width: 14%;">Account_no</th>
+                        <th style="width: 22%;">Account_name</th>
+                        <th class="text-center" style="width: 10%;">Rate_code</th>
+                        <th class="text-center" style="width: 12%;">Date</th>
+                        <th class="text-right" style="width: 18%;">Penalty</th>
+                    </tr>
+                </thead>
+                <tbody id="penaltyPrintTableBody"></tbody>
+            </table>
+            <div class="print-footer">
+                <span>Total Penalties: <strong id="printTotalPenalties"> 0.00</strong></span>
+                <span style="margin-left: 24px;">Accounts: <strong id="printTotalAccounts">0</strong></span>
+            </div>
+
+            {{-- Breakdown section for printed Penalty Report (flows after main table to maximize page space) --}}
+            <div style="margin-top: 30px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div style="flex: 1;">
+                        <p style="margin: 0 0 5px 0; font-size: 13px; font-weight: bold;">
+                            <strong>BREAKDOWN OF PENALTY AND THIS CUBIC METER CONSUMED INTO PENALTY AMOUNT</strong>
+                        </p>
+                        <table style="width: 500px; border-collapse: collapse; font-weight: bold; margin-top: 10px;">
+                            <thead>
+                                <tr>
+                                    <th style="border: 1px solid #000; padding: 6px 4px; text-align: left; font-size: 12px; background-color: #f0f0f0;">
+                                        CATEGORY
+                                    </th>
+                                    <th style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; background-color: #f0f0f0;">
+                                        NUMBER OF CONSUMERS
+                                    </th>
+                                    <th style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; background-color: #f0f0f0;">
+                                        CUBIC METER CONSUMED
+                                    </th>
+                                    <th style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; background-color: #f0f0f0;">
+                                        PENALTY AMOUNT
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="penaltyBreakdownBody"></tbody>
+                        </table>
+                    </div>
+
+                    <div style="margin-left: 40px; min-width: 260px;">
+                        <div style="margin-bottom: 40px;">
+                            <p style="margin: 0 0 20px 0; font-size: 13px; font-weight: bold; color: #222;">PREPARED BY:</p>
+                            <div style="border-bottom: 1.5px solid #222; width: 100%; margin-bottom: 10px;"></div>
+                            <p style="margin: 0; font-size: 14px; font-weight: bold; color: #222;">MARLO B. PORRAS</p>
+                            <p style="margin: 2px 0 0 0; font-size: 12px; color: #353535;">Billing and Collection Clerk</p>
+                            <p style="margin: 6px 0 0 0; font-size: 12px; color: #222;">
+                                Date: {{ \Carbon\Carbon::now()->format('F d, Y') }}
+                            </p>
+                        </div>
+                        <div style="margin-top: 40px;">
+                            <p style="margin: 0 0 20px 0; font-size: 13px; font-weight: bold; color: #222;">Verified by:</p>
+                            <div style="border-bottom: 1.5px solid #222; width: 100%; margin-bottom: 10px;"></div>
+                            <p style="margin: 0; font-size: 14px; font-weight: bold; color: #222;">MERAFELOR C. DOLORITOS</p>
+                            <p style="margin: 2px 0 0 0; font-size: 12px; color: #353535;">Accounting Processor</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const generateBtn = document.getElementById('generateReportBtn');
@@ -238,7 +343,7 @@
             const penaltyReportEndpoint = @json(route('billing-processes.penalty-report'));
 
             function formatCurrency(value) {
-                return '₱ ' + parseFloat(value || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+                return '' + parseFloat(value || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
             }
 
             function formatDate(dateString) {
@@ -383,6 +488,9 @@
                 
                 // Populate summary by penalty type
                 populateSummaryByPenaltyType(summary.by_penalty_type || []);
+
+                // Populate breakdown by category for the print last page
+                populatePenaltyBreakdown(summary.by_category || []);
             }
             
             function populateSummaryByZone(zoneData) {
@@ -426,6 +534,60 @@
                 `;
                 
                 tbody.innerHTML = html;
+            }
+
+            // Normalize raw category / rate_code values into display labels
+            function resolvePenaltyCategoryLabel(rawCategory) {
+                if (!rawCategory) {
+                    return '';
+                }
+
+                const raw = String(rawCategory).trim().toUpperCase();
+
+                // Map of known codes/text to display labels
+                const map = {
+                    // Residential (rate_code A)
+                    '12': 'RESIDENTIAL',
+                    'RES': 'RESIDENTIAL',
+                    'RESIDENTIAL': 'RESIDENTIAL',
+                    'A': 'RESIDENTIAL',
+
+                    // Government (rate_code B)
+                    '22': 'GOVERNMENT',
+                    'GOV': 'GOVERNMENT',
+                    'GOVERNMENT': 'GOVERNMENT',
+                    'B': 'GOVERNMENT',
+
+                    // Commercial (base)
+                    '32': 'COMMERCIAL C',
+                    'COM': 'COMMERCIAL C',
+                    'C': 'COMMERCIAL C',
+                    'COMMERCIAL': 'COMMERCIAL C',
+
+                    // Commercial A
+                    '33': 'COMMERCIAL A',
+                    'COMA': 'COMMERCIAL A',
+                    'COMMERCIAL A': 'COMMERCIAL A',
+
+                    // Government 1
+                    '34': 'GOVERNMENT 1',
+                    'GOV1': 'GOVERNMENT 1',
+                    'GOVERNMENT 1': 'GOVERNMENT 1',
+
+                    // Commercial D
+                    '35': 'COMMERCIAL D',
+                    'COMD': 'COMMERCIAL D',
+                    'D': 'COMMERCIAL D',
+                    'COMMERCIAL D': 'COMMERCIAL D',
+
+                    // Bulk / Wholesale
+                    '36': 'BULK/WHOLESALE',
+                    'BULK': 'BULK/WHOLESALE',
+                    'WHOLESALE': 'BULK/WHOLESALE',
+                    'BULK/WHOLESALE': 'BULK/WHOLESALE',
+                };
+
+                return map[raw] || raw;
             }
             
             function populateSummaryByPenaltyType(penaltyTypeData) {
@@ -472,6 +634,76 @@
                 tbody.innerHTML = html;
             }
 
+            // Populate breakdown-by-category table used on the printed last page
+            function populatePenaltyBreakdown(categoryData) {
+                const tbody = document.getElementById('penaltyBreakdownBody');
+                if (!tbody) return;
+
+                if (!categoryData || categoryData.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="4" style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px;">
+                                No breakdown data available.
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+
+                let html = '';
+                let totalConsumers = 0;
+                let totalCubic = 0;
+                let totalPenalty = 0;
+
+                categoryData.forEach(item => {
+                    const consumers = item.consumers || 0;
+                    const cubic = item.cubic_meter || 0;
+                    const penalty = item.total_penalty || 0;
+
+                    // Map raw category/rate_code to human-friendly label
+                    const label = resolvePenaltyCategoryLabel(item.category);
+
+                    totalConsumers += consumers;
+                    totalCubic += cubic;
+                    totalPenalty += penalty;
+
+                    html += `
+                        <tr>
+                            <td style="border: 1px solid #000; padding: 6px 4px; font-size: 12px; font-weight: bold;">
+                                ${label}
+                            </td>
+                            <td style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; font-weight: bold;">
+                                ${consumers}
+                            </td>
+                            <td style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; font-weight: bold;">
+                                ${Math.round(cubic)}
+                            </td>
+                            <td style="border: 1px solid #000; padding: 6px 4px; text-align: right; font-size: 12px; font-weight: bold;">
+                                ${formatCurrency(penalty)}
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                // TOTAL row
+                html += `
+                    <tr>
+                        <td style="border: 1px solid #000; padding: 6px 4px; font-size: 12px; font-weight: bold;">TOTAL</td>
+                        <td style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; font-weight: bold;">
+                            ${totalConsumers}
+                        </td>
+                        <td style="border: 1px solid #000; padding: 6px 4px; text-align: center; font-size: 12px; font-weight: bold;">
+                            ${Math.round(totalCubic)}
+                        </td>
+                        <td style="border: 1px solid #000; padding: 6px 4px; text-align: right; font-size: 12px; font-weight: bold;">
+                            ${formatCurrency(totalPenalty)}
+                        </td>
+                    </tr>
+                `;
+
+                tbody.innerHTML = html;
+            }
+
             generateBtn.addEventListener('click', generateReport);
 
             // Export Excel functionality
@@ -490,8 +722,41 @@
                 window.location.href = url;
             });
 
-            // Print functionality
+            // Print functionality: populate formal print layout (exclude #, Sequence, Rate_code1, Ref) then print
             document.getElementById('printReportBtn').addEventListener('click', function() {
+                const printBody = document.getElementById('penaltyPrintTableBody');
+                const sourceBody = document.getElementById('penaltyTableBody');
+                const sourceRows = sourceBody.querySelectorAll('tr');
+                const hasData = sourceRows.length > 0 && !sourceRows[0].querySelector('td[colspan="11"]');
+
+                if (!hasData) {
+                    alert('Generate the report first, then click Print.');
+                    return;
+                }
+
+                // Columns to include: Zone_code(1), Bill month(2), Account_no(4), Account_name(5), Rate_code(6), Date(7), Penalty(9)
+                const colIndexes = [1, 2, 4, 5, 6, 7, 9];
+                printBody.innerHTML = '';
+                sourceRows.forEach(function(tr) {
+                    const cells = tr.querySelectorAll('td');
+                    if (cells.length !== 11) return;
+                    const row = document.createElement('tr');
+                    colIndexes.forEach(function(i) {
+                        const td = document.createElement('td');
+                        td.innerHTML = cells[i] ? cells[i].innerHTML : '';
+                        td.className = cells[i] ? cells[i].className : '';
+                        row.appendChild(td);
+                    });
+                    printBody.appendChild(row);
+                });
+
+                var zoneLabel = zoneSelect.value ? ('Zone: ' + zoneSelect.value) : 'Zone: All Zones';
+                document.getElementById('printZoneSelected').textContent = zoneLabel;
+                document.getElementById('printReportSubtitle').textContent = reportInfo.textContent || '—';
+                document.getElementById('printDateGenerated').textContent = new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+                document.getElementById('printTotalPenalties').textContent = totalPenalties.textContent || ' 0.00';
+                document.getElementById('printTotalAccounts').textContent = totalAccounts.textContent || '0';
+
                 window.print();
             });
         });

@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Consumer;
+use App\Models\ConsumerZoneOne;
 use App\Models\DownloadedReading;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
@@ -35,11 +35,12 @@ class DashboardController extends Controller
             ->whereBetween('paid_at', [$previousMonthStart, $previousMonthEnd])
             ->sum('payment_amount');
 
-        $newConnectionsCurrent = Consumer::whereNotNull('installation_date')
-            ->whereBetween('installation_date', [$currentMonthStart, $currentMonthEnd])
+        
+           $newConnectionsCurrent = ConsumerZoneOne::whereNotNull('install_date')
+            ->whereBetween('install_date', [$currentMonthStart, $currentMonthEnd])
             ->count();
-        $newConnectionsPrevious = Consumer::whereNotNull('installation_date')
-            ->whereBetween('installation_date', [$previousMonthStart, $previousMonthEnd])
+           $newConnectionsPrevious = ConsumerZoneOne::whereNotNull('install_date')
+            ->whereBetween('install_date', [$previousMonthStart, $previousMonthEnd])
             ->count();
 
         $pendingBillsCurrent = DB::table('downloaded_readings as dr')
@@ -150,16 +151,16 @@ class DashboardController extends Controller
                 'icon_color' => 'text-success',
                 'format' => 'currency',
             ],
-            [
-                'title' => 'New Connections',
-                'value' => $metrics['new_connections']['current'],
-                'change_percent' => $metrics['new_connections']['change_percent'],
-                'trend' => $metrics['new_connections']['trend'],
-                'subtitle' => 'vs last month',
-                'icon' => 'faucet',
-                'icon_color' => 'text-primary',
-                'format' => 'number',
-            ],
+             [
+                 'title' => 'New Connections',
+                 'value' => $metrics['new_connections']['current'],
+                 'change_percent' => $metrics['new_connections']['change_percent'],
+                 'trend' => $metrics['new_connections']['trend'],
+                 'subtitle' => 'vs last month',
+                 'icon' => 'faucet',
+                 'icon_color' => 'text-primary',
+                 'format' => 'number',
+             ],
             [
                 'title' => 'Pending Bills',
                 'value' => $metrics['pending_bills']['current'],

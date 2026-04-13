@@ -72,6 +72,15 @@
     .payment-grid input[type="number"] {
         text-align: right;
     }
+    /* Hide number input spinner arrows */
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    input[type="number"] {
+        -moz-appearance: textfield;
+    }
     .payment-grid tfoot td {
         background: #f9fafb;
         font-weight: 700;
@@ -114,6 +123,20 @@
         background: #f3f4f6;
         color: #374151;
         border: 1px solid #e5e7eb;
+    }
+    .sc-discount-ledger-text {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #dc3545;
+        color: #dc3545;
+        background: transparent;
+        border-radius: 0.2rem;
+        padding: 0.24rem 0.5rem;
+        margin-left: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        line-height: 1.4;
+        white-space: nowrap;
     }
     .signature-box {
         height: 70px;
@@ -258,6 +281,41 @@
         box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
         transform: translateX(2px);
     }
+    
+    
+    /* Account address styling (below name, same look as name) */
+    #currentBalanceAccountAddress {
+        display: flex;
+        align-items: center;
+        padding: 0.6rem 0.9rem;
+        background: linear-gradient(135deg, rgba(78, 115, 223, 0.12), rgba(63, 103, 199, 0.18));
+        border-left: 4px solid #4e73df;
+        border-radius: 0.5rem;
+        font-weight: 600;
+        color: #1f2937;
+        font-size: 0.95rem;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.75rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        transition: all 0.3s ease;
+    }
+    #currentBalanceAccountAddress:empty {
+        display: none;
+    }
+    #currentBalanceAccountAddress::before {
+        content: '\f3c5';
+        font-family: 'Font Awesome 5 Free';
+        font-weight: 900;
+        color: #4e73df;
+        margin-right: 0.65rem;
+        font-size: 1rem;
+        opacity: 0.9;
+    }
+    #currentBalanceAccountAddress:hover {
+        background: linear-gradient(135deg, rgba(78, 115, 223, 0.15), rgba(63, 103, 199, 0.22));
+        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+        transform: translateX(2px);
+    }
 </style>
 
 <body id="page-top">
@@ -312,23 +370,29 @@
                                                 </div>
                                                 <div id="accountSuggestions" class="list-group" style="position: absolute; z-index: 1000; width: 100%; max-height: 300px; overflow-y: auto; display: none;">
                                                 </div>
-                                                <small id="accountLookupStatus" class="d-block mt-2 small text-muted">
+                                                <small id="accountLookupStatus" class="d-block mt-2 small text-muted d-none" aria-hidden="true">
                                                     <i class="fas fa-info-circle mr-1"></i>
                                                     Enter account number or account name to load billing data.
                                                 </small>
                                             </div>
                                         
                                             <div class="form-group">
-                                                <div id="currentBalanceAccountLabel" style="display: none;"></div>
+                                                <div id="currentBalanceAccountRow" style="display: none;">
+                                                    <div id="currentBalanceAccountLabel" class="current-balance-account-label"></div>
+                                                    <div id="currentBalanceAccountAddress" class="current-balance-account-address"></div>
+                                                </div>
                                                 <small class="text-muted d-block mb-2">Current Balance: <span class="font-weight-bold text-danger" id="currentBalanceDisplay">₱ 0.00</span></small>
                                                 <div class="d-flex gap-2">
                                                     <button type="button" class="btn btn-outline-primary btn-sm" id="viewLedgerBtn" title="View Account Ledger" disabled>
                                                         <i class="fas fa-file-invoice mr-1"></i>View Ledger
                                                     </button>
-                                                    
+                                                    <span id="scDiscountLedgerText" class="sc-discount-ledger-text d-none"></span>
                                                 </div>
                                                 <input type="hidden" id="currentBalance" value="₱ 0.00">
                                             </div>
+                                            
+                            
+
                                             <div class="divider-label">Payment Details</div>
                                             <div class="form-group">
                                                 <label class="text-muted small mb-1" for="paymentType">Type <span class="text-danger">*</span></label>
@@ -367,11 +431,11 @@
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldCurrentBill" data-charge value="216.60"></td>
                                                     </tr>
                                                     <tr>
-                                                        <td>Arrears — CY</td>
+                                                        <td>Arrears — Current Year</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldArrearsCurrent" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
-                                                        <td>Arrears — PY</td>
+                                                        <td>Arrears — Previous Year</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldArrearsPrevious" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
@@ -542,9 +606,15 @@
                                     <i class="fas fa-info-circle mr-1 text-primary"></i>
                                     <span id="formStatusText">Review all fields before saving. Totals are computed automatically.</span>
                                 </div>
-                                <div class="d-flex gap-2">
+                                <div class="d-flex gap-2 align-items-center">
+                                    <button type="button" class="btn btn-outline-primary btn-soft mr-2" id="openBamSearchModalBtn" title="Search BAM No. in Sundries table">
+                                        <i class="fas fa-search mr-1"></i>Search BAM No.
+                                    </button>
                                     <button type="button" class="btn btn-soft-secondary mr-2" id="resetFormBtn">
-                                        <i class="fas fa-undo mr-1"></i>Clear Form
+                                        <i class="fas fa-trash mr-1"></i>Cancelled OR#
+                                    </button>
+                                    <button type="button" class="btn btn-danger btn-soft mr-2" id="deletePaymentBtn" disabled title="Delete payment by OR #">
+                                        <i class="fas fa-trash mr-1"></i>Delete Payment
                                     </button>
                                     <button type="button" class="btn btn-warning btn-soft mr-2" id="updatePaymentBtn" disabled title="Load a record by OR # or account to update existing payment">
                                         <i class="fas fa-edit mr-1"></i>Update Payment
@@ -592,6 +662,51 @@
         </div>
     </div>
 
+    <!-- PIN Modal for Delete Payment -->
+    <div class="modal fade" id="paymentDeletePinModal" tabindex="-1" aria-labelledby="paymentDeletePinModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="paymentDeletePinModalLabel">
+                        <i class="fas fa-lock me-2"></i>Enter PIN
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-2">Enter the edit PIN to delete payment.</p>
+                    <input type="password" class="form-control" id="paymentDeletePinInput" placeholder="PIN" autocomplete="off" maxlength="20">
+                    <div class="invalid-feedback" id="paymentDeletePinError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="paymentDeletePinVerifyBtn"><i class="fas fa-check me-1"></i>Verify</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal for Search BAM No -->
+    <div class="modal fade" id="bamSearchModal" tabindex="-1" aria-labelledby="bamSearchModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="bamSearchModalLabel">
+                        <i class="fas fa-search me-2"></i>Search BAM No.
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-2">Enter BAM No. to search in the Sundries table.</p>
+                    <input type="text" class="form-control" id="bamSearchInput" placeholder="BAM No." autocomplete="off" maxlength="50">
+                    <div class="invalid-feedback" id="bamSearchError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="bamSearchVerifyBtn"><i class="fas fa-search me-1"></i>Search</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <a class="scroll-to-top rounded" href="#page-top">
         <i class="fas fa-angle-up"></i>
@@ -618,34 +733,285 @@
             const lookupStatus = document.getElementById('accountLookupStatus');
             const lookupEndpoint = @json(route('billing-payment.lookup'));
             const accountSuggestionsEndpoint = @json(route('billing-payment.account-suggestions'));
+            const bamLookupEndpoint = @json(route('billing-payment.bam-search'));
             const savePaymentEndpoint = @json(route('billing-processes.mark-paid'));
+            const cancelledOrEndpoint = @json(route('billing-payment.cancelled-or'));
+            const deletePaymentEndpoint = @json(route('billing-payment.delete'));
             const ledgerRoute = @json(route('ledger'));
-            const payOutstandingEndpoint = @json(route('ledger.pay-outstanding'));
             let currentLookupController = null;
             let lastLookupKey = null;
             let currentDownloadedId = null;
             let currentBalanceValue = 0;
-            let payOutstandingOnly = false;
             let latestBillMonth = null; // Store the latest/current bill month
             let isLoadingFromMonthSelector = false; // Flag to prevent populateFromLookup from overwriting penalty
             let arrearsPreviousManuallyEdited = false; // Flag to track if user manually edited Arrears — Previous Month
             const viewLedgerBtn = document.getElementById('viewLedgerBtn');
-            const payOutstandingBtn = document.getElementById('payOutstandingBtn');
             const ledgerModal = $('#ledgerModal');
             const ledgerIframe = document.getElementById('ledgerIframe');
             const ledgerLoading = document.getElementById('ledgerLoading');
             const openLedgerNewTab = document.getElementById('openLedgerNewTab');
-            const payOutstandingModal = $('#payOutstandingModal');
-            const outstandingDisplay = document.getElementById('outstandingDisplay');
-            const outstandingAmount = document.getElementById('outstandingAmount');
-            const outstandingOrNumber = document.getElementById('outstandingOrNumber');
-            const outstandingPaymentType = document.getElementById('outstandingPaymentType');
-            const outstandingRemarks = document.getElementById('outstandingRemarks');
-            const outstandingEnableSeniorDiscount = document.getElementById('outstandingEnableSeniorDiscount');
-            const outstandingSeniorDiscountGroup = document.getElementById('outstandingSeniorDiscountGroup');
-            const outstandingSeniorDiscountAmount = document.getElementById('outstandingSeniorDiscountAmount');
-            const confirmPayOutstandingBtn = document.getElementById('confirmPayOutstandingBtn');
             const formStatusText = document.getElementById('formStatusText');
+            const scDiscountLedgerText = document.getElementById('scDiscountLedgerText');
+            
+            // Search BAM No. inside SUNDRIES table (sundryBamNo1..4)
+            const openBamSearchModalBtn = document.getElementById('openBamSearchModalBtn');
+            const bamSearchModal = $('#bamSearchModal');
+            const bamSearchInput = document.getElementById('bamSearchInput');
+            const bamSearchVerifyBtn = document.getElementById('bamSearchVerifyBtn');
+            const bamSearchError = document.getElementById('bamSearchError');
+            let bamSearchAccountName = null; // Stores the name from BAM "Others" search (no real consumer)
+
+            const clearBamHits = () => {
+                for (let i = 1; i <= 4; i++) {
+                    const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + i);
+                    const row = acctDisplay ? acctDisplay.closest('tr') : null;
+                    if (row) row.classList.remove('bam-search-hit');
+                }
+            };
+
+            const searchBamNoInTable = (query) => {
+                const q = String(query || '').trim();
+                clearBamHits();
+                if (!q) {
+                    if (formStatusText) formStatusText.textContent = 'Enter a BAM No. to search in the Sundries table.';
+                    return;
+                }
+
+                let firstHitRow = null;
+                let hitCount = 0;
+                for (let i = 1; i <= 4; i++) {
+                    const bamHidden = document.getElementById('sundryBamNo' + i);
+                    const bamVal = bamHidden ? String(bamHidden.value || '').trim() : '';
+                    if (!bamVal) continue;
+
+                    if (bamVal.toLowerCase().includes(q.toLowerCase())) {
+                        const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + i);
+                        const row = acctDisplay ? acctDisplay.closest('tr') : null;
+                        if (row) {
+                            if (!firstHitRow) firstHitRow = row;
+                            hitCount++;
+                        }
+                    }
+                }
+
+                if (firstHitRow) {
+                    firstHitRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    if (formStatusText) formStatusText.textContent = `Found ${hitCount} Sundries row(s) matching BAM No. "${q}".`;
+                } else {
+                    if (formStatusText) formStatusText.textContent = `No Sundries rows found matching BAM No. "${q}".`;
+                }
+            };
+
+            const setBamSearchError = (msg) => {
+                if (!bamSearchError || !bamSearchInput) return;
+                bamSearchError.textContent = msg || '';
+                if (msg) {
+                    bamSearchError.classList.add('d-block');
+                    bamSearchInput.classList.add('is-invalid');
+                } else {
+                    bamSearchError.classList.remove('d-block');
+                    bamSearchInput.classList.remove('is-invalid');
+                }
+            };
+            
+            const formatLongDate = (raw) => {
+                if (!raw) return '';
+                const d = new Date(raw);
+                if (Number.isNaN(d.getTime())) return '';
+                return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+            };
+
+            const renderScDiscountLedgerText = (account) => {
+                if (!scDiscountLedgerText) return;
+                const rawPercent = String(account?.bill_disc_percent ?? '').trim();
+                const normalizedPercent = rawPercent.toUpperCase();
+                const percentNum = parseFloat(rawPercent);
+                const isSc = normalizedPercent === 'SC DISCOUNT'
+                    || (Number.isFinite(percentNum) && Math.abs(percentNum - 5) < 0.001);
+                const oscaId = String(account?.osca_id_no ?? account?.osca_id ?? '').trim();
+                if (!isSc || !oscaId) {
+                    scDiscountLedgerText.textContent = '';
+                    scDiscountLedgerText.classList.add('d-none');
+                    return;
+                }
+                const dateDisplay = formatLongDate(account?.bill_disc_updated_at);
+                scDiscountLedgerText.textContent = dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
+                scDiscountLedgerText.classList.remove('d-none');
+            };
+
+            if (openBamSearchModalBtn) {
+                openBamSearchModalBtn.addEventListener('click', function() {
+                    setBamSearchError('');
+                    if (bamSearchInput) bamSearchInput.value = '';
+                    bamSearchModal.modal('show');
+                    setTimeout(() => { if (bamSearchInput) bamSearchInput.focus(); }, 150);
+                });
+            }
+            if (bamSearchInput) {
+                bamSearchInput.addEventListener('input', () => setBamSearchError(''));
+                bamSearchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (bamSearchVerifyBtn) bamSearchVerifyBtn.click();
+                    }
+                });
+            }
+            if (bamSearchVerifyBtn) {
+                bamSearchVerifyBtn.addEventListener('click', function() {
+                    const q = bamSearchInput ? String(bamSearchInput.value || '').trim() : '';
+                    if (!q) {
+                        setBamSearchError('Enter BAM No.');
+                        return;
+                    }
+                    // Fetch from LRO Ledger (lro_ledger) by BAM No and populate account + sundries
+                    fetch(bamLookupEndpoint + '?bam_no=' + encodeURIComponent(q), {
+                        method: 'GET',
+                        credentials: 'include',
+                        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                    })
+                    .then(r => r.json().then(data => ({ ok: r.ok, data })))
+                    .then(result => {
+                        if (!result.ok || !result.data || !result.data.success) {
+                            const msg = (result.data && result.data.message) ? result.data.message : 'Unable to fetch BAM No.';
+                            setBamSearchError(msg);
+                            bamSearchModal.modal('show');
+                            return;
+                        }
+
+                        const payload = result.data.data || {};
+                        const account = payload.account || {};
+                        const paymentInfo = payload.payment || {};
+                        const sundries = Array.isArray(payload.sundries) ? payload.sundries : [];
+
+                        // Hard-refresh payment context for BAM mode so stale account/OR lookup state is cleared.
+                        if (currentLookupController) {
+                            currentLookupController.abort();
+                            currentLookupController = null;
+                        }
+                        lastLookupKey = null;
+                        currentDownloadedId = null;
+                        latestBillMonth = null;
+                        isLoadingFromMonthSelector = false;
+                        arrearsPreviousManuallyEdited = false;
+                        if (updatePaymentBtn) updatePaymentBtn.disabled = true;
+                        if (viewLedgerBtn) viewLedgerBtn.disabled = true;
+
+                        // Reset non-sundry payment fields before applying BAM payload.
+                        if (typeof clearPaymentBreakdown === 'function') clearPaymentBreakdown();
+                        const billMonthSelectorGroup = document.getElementById('billMonthSelectorGroup');
+                        if (billMonthSelectorGroup) billMonthSelectorGroup.style.display = 'none';
+
+                        // Reset current balance display/label for BAM search.
+                        const currentBalanceField = document.getElementById('currentBalance');
+                        const currentBalanceDisplay = document.getElementById('currentBalanceDisplay');
+                        const currentBalanceAccountRow = document.getElementById('currentBalanceAccountRow');
+                        const currentBalanceAccountLabel = document.getElementById('currentBalanceAccountLabel');
+                        const currentBalanceAccountAddress = document.getElementById('currentBalanceAccountAddress');
+                        currentBalanceValue = 0;
+                        if (currentBalanceField) currentBalanceField.value = formatCurrency(0);
+                        if (currentBalanceDisplay) currentBalanceDisplay.textContent = formatCurrency(0);
+                        if (currentBalanceAccountLabel) {
+                            currentBalanceAccountLabel.textContent = '';
+                            currentBalanceAccountLabel.style.display = 'none';
+                        }
+                        if (currentBalanceAccountAddress) {
+                            currentBalanceAccountAddress.textContent = '';
+                            currentBalanceAccountAddress.style.display = 'none';
+                        }
+                        if (currentBalanceAccountRow) currentBalanceAccountRow.style.display = 'none';
+                        renderScDiscountLedgerText(null);
+
+                        // Set account field (for Others use `name` instead of `account`)
+                        bamSearchAccountName = (account && account.name != null && String(account.name).trim() !== '')
+                            ? String(account.name).trim()
+                            : null;
+                        if (accountNumberField) {
+                            accountNumberField.value = (account && account.number != null && String(account.number).trim() !== '')
+                                ? String(account.number).trim()
+                                : (bamSearchAccountName || '');
+                        }
+                        if (accountNameField) accountNameField.value = bamSearchAccountName || '';
+
+                        // Set Date + Bill Month from LRO date; reset OR# and status (BAM search is not OR lookup)
+                        const lroDateRaw = (account && account.date != null) ? String(account.date || '').trim() : '';
+                        if (lroDateRaw && transactionDateField) {
+                            // Accept "YYYY-MM-DD" or full datetime; keep the date part
+                            const datePart = lroDateRaw.substring(0, 10);
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+                                transactionDateField.value = datePart;
+                                if (billMonthField) {
+                                    const y = datePart.substring(0, 4);
+                                    const m = datePart.substring(5, 7);
+                                    billMonthField.value = `${m}-${y}`;
+                                }
+                            }
+                        }
+                        // If BAM is already paid, auto-fill OR # and set status to Paid.
+                        // If not paid, keep current OR as-is and show neutral status.
+                        const officialReceiptField = document.getElementById('officialReceipt');
+                        const paidOr = paymentInfo && paymentInfo.or_number != null ? String(paymentInfo.or_number || '').trim() : '';
+                        const isPaid = !!(paymentInfo && paymentInfo.is_paid && paidOr);
+                        if (isPaid && officialReceiptField) {
+                            officialReceiptField.value = paidOr;
+                            officialReceiptField.dispatchEvent(new Event('input', { bubbles: true }));
+                            officialReceiptField.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        if (typeof setPaymentStatusForMonth === 'function') {
+                            setPaymentStatusForMonth(isPaid ? 'paid' : null);
+                        }
+
+                        // Clear and populate sundries slots
+                        clearBamHits();
+                        for (let i = 1; i <= 4; i++) {
+                            const acctHidden = document.getElementById('sundryAcctCode' + i);
+                            const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + i);
+                            const bamHidden = document.getElementById('sundryBamNo' + i);
+                            const amountField = document.getElementById('sundryAmount' + i);
+
+                            if (acctHidden) acctHidden.value = '';
+                            if (acctDisplay) {
+                                acctDisplay.value = '';
+                                acctDisplay.placeholder = '— Select Acct Code —';
+                            }
+                            if (bamHidden) bamHidden.value = '';
+                            if (amountField) setNumberFieldValue(amountField, 0);
+
+                            const entry = sundries[i - 1] || null;
+                            if (entry && (entry.acct_code || entry.amount)) {
+                                const code = String(entry.acct_code || '').trim();
+                                const bamNo = String(entry.bam_no || q).trim();
+                                const amount = entry.amount ?? 0;
+
+                                if (acctHidden) acctHidden.value = code;
+                                if (bamHidden) bamHidden.value = bamNo;
+                                if (amountField) setNumberFieldValue(amountField, amount);
+
+                                // Display title from dropdown (data-desc) when possible
+                                if (acctDisplay) {
+                                    const opt = code ? document.querySelector('.bam-acct-option[data-code="' + code.replace(/"/g, '&quot;') + '"]') : null;
+                                    const desc = opt && opt.getAttribute('data-desc') ? String(opt.getAttribute('data-desc') || '').trim() : '';
+                                    const displayText = desc ? desc : code;
+                                    acctDisplay.value = displayText;
+                                    acctDisplay.placeholder = displayText ? '' : '— Select Acct Code —';
+
+                                    const row = acctDisplay.closest('tr');
+                                    
+                                }
+                            }
+                        }
+
+                        if (typeof updateSundryTotals === 'function') updateSundryTotals();
+                        if (typeof updateTotals === 'function') updateTotals();
+
+                        bamSearchModal.modal('hide');
+                        if (formStatusText) formStatusText.textContent = result.data.message || `BAM No. "${q}" loaded.`;
+                    })
+                    .catch(() => {
+                        setBamSearchError('Search failed. Please try again.');
+                        bamSearchModal.modal('show');
+                    });
+                });
+            }
             const updatePaymentBtn = document.getElementById('updatePaymentBtn');
 
             const formatCurrency = value => {
@@ -678,7 +1044,7 @@
                     return;
                 }
                 lookupStatus.textContent = message;
-                lookupStatus.className = `d-block mt-2 small text-${tone}`;
+                lookupStatus.className = `d-none mt-2 small text-${tone}`;
             };
 
             // Update "Payment status (this month)" badge: 'paid' | 'unpaid' | null (show —)
@@ -734,8 +1100,56 @@
                 const numeric = parseNumeric(value);
                 field.value = numeric.toFixed(2);
             };
-
             
+            // ArrowUp / ArrowDown navigation between amount fields (e.g. Penalty -> Maintenance).
+            const arrowNavigationFieldIds = [
+                'fieldCurrentBill',
+                'fieldArrearsCurrent',
+                'fieldArrearsPrevious',
+                'fieldPenalty',
+                'fieldMaintenance',
+                'fieldAdvances',
+                'sundryAmount1',
+                'sundryAmount2',
+                'sundryAmount3',
+                'sundryAmount4',
+                'cashTendered'
+            ];
+            const isArrowNavigableField = (element) =>
+                !!(element && arrowNavigationFieldIds.includes(element.id));
+            const getArrowNavigableInputs = () =>
+                arrowNavigationFieldIds
+                    .map(id => document.getElementById(id))
+                    .filter(input =>
+                        input &&
+                        !input.disabled &&
+                        !input.readOnly &&
+                        input.offsetParent !== null
+                    );
+            if (form) {
+                form.addEventListener('keydown', (event) => {
+                    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+                    if (event.altKey || event.ctrlKey || event.metaKey) return;
+                    const target = event.target;
+                    if (!isArrowNavigableField(target)) return;
+                    // Always block native number-input increment/decrement.
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+
+                    const inputs = getArrowNavigableInputs();
+                    const currentIndex = inputs.indexOf(target);
+                    if (currentIndex === -1) return;
+
+                    const direction = event.key === 'ArrowDown' ? 1 : -1;
+                    const nextInput = inputs[currentIndex + direction];
+                    if (!nextInput) return;
+
+                    nextInput.focus();
+                    if (typeof nextInput.select === 'function') {
+                        nextInput.select();
+                    }
+                }, true);
+            }
 
             const updateTotals = () => {
                 // Subtotal = Current Bill + Arrears Current Year + Arrears Previous Year + Penalty + Water Maintenance Charge + Advances − Sr. Citizen Discount
@@ -790,7 +1204,8 @@
                 if (cashChangeField) {
                     cashChangeField.value = '0.00';
                 }
-
+                
+                bamSearchAccountName = null;
                 updateTotals();
             };
 
@@ -977,10 +1392,14 @@
                             currentDownloadedId = data.downloaded_id;
                             if (updatePaymentBtn) updatePaymentBtn.disabled = false;
                         }
+                        // Enable Delete Payment if OR number is present
+                        const deletePaymentBtn = document.getElementById('deletePaymentBtn');
+                        if (deletePaymentBtn) {
+                            const orNumber = (document.getElementById('officialReceipt') || {}).value?.trim();
+                            deletePaymentBtn.disabled = !orNumber;
+                        }
                         if (typeof setPaymentStatusForMonth === 'function') {
-                            const orFieldCheck = document.getElementById('officialReceipt');
-                            const hasOrValue = orFieldCheck && String(orFieldCheck.value || '').trim() !== '';
-                            setPaymentStatusForMonth((data.payment_status === 'paid' || hasOrValue) ? 'paid' : 'unpaid');
+                            setPaymentStatusForMonth((orValueForDetails && data.payment_status === 'paid') ? 'paid' : 'unpaid');
                         }
                         setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_bill || 0);
                         const penaltyField = document.getElementById('fieldPenalty');
@@ -1023,14 +1442,21 @@
                     return;
                 }
 
-                const { account = {}, billing = {}, payment = {}, downloaded_reading = {}, sundries = [] } = data;
+                const { account = {}, billing = {}, payment = {}, downloaded_reading = {}, sundries = [], lro_entries_by_or = [] } = data;
                 
                 // Store downloaded_id for payment submission
                 currentDownloadedId = downloaded_reading.id || data.downloaded_id || null;
-
-                // Enable Update Payment when a billing record is loaded (by account or OR #)
+                
+                // Enable Update Payment when a billing record is loaded (by account or OR #), or when loaded by OR # without linked reading (account + OR present)
                 if (updatePaymentBtn) {
-                    updatePaymentBtn.disabled = !currentDownloadedId;
+                    const hasAccountAndOr = !!(account && account.number && (document.getElementById('officialReceipt') || {}).value);
+                    updatePaymentBtn.disabled = !currentDownloadedId && !hasAccountAndOr;
+                }
+                // Enable Delete Payment when OR number is present
+                const deletePaymentBtn = document.getElementById('deletePaymentBtn');
+                if (deletePaymentBtn) {
+                    const orNumber = (document.getElementById('officialReceipt') || {}).value?.trim();
+                    deletePaymentBtn.disabled = !orNumber;
                 }
 
                 // Populate account information
@@ -1093,11 +1519,14 @@
                     currentBalanceValue = 0;
                 }
 
-                // Show either Account Name or Account Number above Current Balance, depending on what is available
+                // Show either Account Name or Account Number above Current Balance; show Address below when available
+                const currentBalanceAccountRow = document.getElementById('currentBalanceAccountRow');
+                const currentBalanceAccountAddress = document.getElementById('currentBalanceAccountAddress');
+                const labelSource = (account.name && account.name.trim())
+                    ? account.name.trim()
+                    : (account.number || '').trim();
+                const addressSource = (account.address && typeof account.address === 'string') ? account.address.trim() : '';
                 if (currentBalanceAccountLabel) {
-                    const labelSource = (account.name && account.name.trim())
-                        ? account.name.trim()
-                        : (account.number || '').trim();
                     if (labelSource) {
                         currentBalanceAccountLabel.textContent = labelSource;
                         currentBalanceAccountLabel.style.display = 'flex';
@@ -1106,6 +1535,19 @@
                         currentBalanceAccountLabel.style.display = 'none';
                     }
                 }
+                if (currentBalanceAccountAddress) {
+                    if (addressSource) {
+                        currentBalanceAccountAddress.textContent = addressSource;
+                        currentBalanceAccountAddress.style.display = 'flex';
+                    } else {
+                        currentBalanceAccountAddress.textContent = '';
+                        currentBalanceAccountAddress.style.display = 'none';
+                    }
+                }
+                if (currentBalanceAccountRow) {
+                    currentBalanceAccountRow.style.display = (labelSource || addressSource) ? 'block' : 'none';
+                }
+                renderScDiscountLedgerText(account);
                 
                 // Fetch unpaid bill months if there's a current balance
                 if (currentBalanceValue > 0.01 && account.number) {
@@ -1122,16 +1564,13 @@
                 if (viewLedgerBtn && account.number) {
                     viewLedgerBtn.disabled = false;
                 }
-                if (payOutstandingBtn) {
-                    payOutstandingBtn.disabled = !(account.number && currentBalanceValue > 0.009);
-                }
 
                 // Use current date (today) as the transaction date so it always reflects the updated date (e.g. 31/01/2026 today, 01/02/2026 tomorrow)
                 if (transactionDateField) {
                     const now = new Date();
                     const y = now.getFullYear();
                     const m = String(now.getMonth() + 1).padStart(2, '0');
-                    const d = String(now.getDate()).padStart(2, '0');
+                    const d = String(now.getDate()).padStart(2, '0');       
                     transactionDateField.value = `${y}-${m}-${d}`;
                     // Only set bill month from today's date if it wasn't already set from lookup
                     if (billMonthField && !billing.bill_month_input) {
@@ -1215,8 +1654,12 @@
                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
                 setNumberFieldValue(document.getElementById('fieldInspection'), 0);
 
-                // Populate SUNDRIES from lro_ledgers (acct_code, reference, amount)
-                const sundryList = Array.isArray(sundries) ? sundries : [];
+                // Populate SUNDRIES:
+                // 1) normal account lookup uses `sundries`
+                // 2) OR lookup for paid entries uses `lro_entries_by_or`
+                const sundryList = (Array.isArray(sundries) && sundries.length > 0)
+                    ? sundries
+                    : (Array.isArray(lro_entries_by_or) ? lro_entries_by_or : []);
                 // Resolve account title from dropdown by acct_code (API "name" can be consumer name, not account title)
                 const getAccountTitleByCode = function(acctCode) {
                     if (!acctCode) return '';
@@ -1499,6 +1942,23 @@
                 currentLookupController = new AbortController();
                 updateLookupStatus(`Looking up billing for ${searchValue}…`, 'info');
 
+                // Clear name and address so they refresh with the new account (avoid showing previous account's location)
+                const currentBalanceAccountLabel = document.getElementById('currentBalanceAccountLabel');
+                const currentBalanceAccountAddress = document.getElementById('currentBalanceAccountAddress');
+                const currentBalanceAccountRow = document.getElementById('currentBalanceAccountRow');
+                if (currentBalanceAccountLabel) {
+                    currentBalanceAccountLabel.textContent = '';
+                    currentBalanceAccountLabel.style.display = 'none';
+                }
+                if (currentBalanceAccountAddress) {
+                    currentBalanceAccountAddress.textContent = '';
+                    currentBalanceAccountAddress.style.display = 'none';
+                }
+                if (currentBalanceAccountRow) {
+                    currentBalanceAccountRow.style.display = 'none';
+                }
+                renderScDiscountLedgerText(null);
+
                 try {
                     let url = `${lookupEndpoint}?`;
                     // If Account Number field has value, search both account_number and account_name
@@ -1608,6 +2068,15 @@
                 }
                 currentLookupController = new AbortController();
                 updateLookupStatus(`Looking up by OR # ${orNumber}…`, 'info');
+
+                // Clear name and address so they refresh with the account for this OR
+                const rowEl = document.getElementById('currentBalanceAccountRow');
+                const labelEl = document.getElementById('currentBalanceAccountLabel');
+                const addrEl = document.getElementById('currentBalanceAccountAddress');
+                if (labelEl) { labelEl.textContent = ''; labelEl.style.display = 'none'; }
+                if (addrEl) { addrEl.textContent = ''; addrEl.style.display = 'none'; }
+                if (rowEl) rowEl.style.display = 'none';
+
                 try {
                     const url = `${lookupEndpoint}?or_number=${encodeURIComponent(orNumber)}`;
                     const response = await fetch(url, { signal: currentLookupController.signal });
@@ -1703,6 +2172,12 @@
                     updatePaymentBtn.disabled = true;
                 }
                 
+                // Disable Delete Payment when form is cleared
+                const deletePaymentBtn = document.getElementById('deletePaymentBtn');
+                if (deletePaymentBtn) {
+                    deletePaymentBtn.disabled = true;
+                }
+                
                 // Re-enable submit button on reset
                 const submitBtn = document.getElementById('savePaymentBtn');
                 if (submitBtn) {
@@ -1781,8 +2256,17 @@
                     currentBalanceAccountLabel.textContent = '';
                     currentBalanceAccountLabel.style.display = 'none';
                 }
+                const currentBalanceAccountAddress = document.getElementById('currentBalanceAccountAddress');
+                if (currentBalanceAccountAddress) {
+                    currentBalanceAccountAddress.textContent = '';
+                    currentBalanceAccountAddress.style.display = 'none';
+                }
+                const currentBalanceAccountRow = document.getElementById('currentBalanceAccountRow');
+                if (currentBalanceAccountRow) {
+                    currentBalanceAccountRow.style.display = 'none';
+                }
+                renderScDiscountLedgerText(null);
                 currentBalanceValue = 0;
-                payOutstandingOnly = false;
                 
                 // Hide and reset bill month selector
                 const billMonthSelectorGroup = document.getElementById('billMonthSelectorGroup');
@@ -1798,9 +2282,6 @@
                 // Disable View Ledger button when form is reset
                 if (viewLedgerBtn) {
                     viewLedgerBtn.disabled = true;
-                }
-                if (payOutstandingBtn) {
-                    payOutstandingBtn.disabled = true;
                 }
 
                 // Ensure Senior Citizen Discount field is readonly and reset
@@ -1827,9 +2308,47 @@
                 generateOrNumber();
             };
 
-            chargeInputs.forEach(input => input.addEventListener('input', updateTotals));
+            // Format charge inputs:
+            // - On focus: show/select 0 so user can type immediately.
+            // - On blur: always format to 2 decimals (e.g. 40 -> 40.00).
+            chargeInputs.forEach(input => {
+                input.addEventListener('input', updateTotals);
+
+                input.addEventListener('focus', () => {
+                    const raw = (input.value ?? '').toString().trim();
+                    const numeric = parseNumeric(raw);
+                    if (raw === '' || numeric === 0) {
+                        input.value = '0';
+                    }
+                    // Selecting makes typing replace the current value (fast entry).
+                    if (typeof input.select === 'function') {
+                        input.select();
+                    }
+                });
+
+                input.addEventListener('blur', () => {
+                    setNumberFieldValue(input, parseNumeric(input.value));
+                    updateTotals();
+                });
+            });
             discountInputs.forEach(input => input.addEventListener('input', updateTotals));
-            cashTenderedField.addEventListener('input', updateTotals);
+            if (cashTenderedField) {
+                cashTenderedField.addEventListener('input', updateTotals);
+                cashTenderedField.addEventListener('focus', () => {
+                    const raw = (cashTenderedField.value ?? '').toString().trim();
+                    const numeric = parseNumeric(raw);
+                    if (raw === '' || numeric === 0) {
+                        cashTenderedField.value = '0';
+                    }
+                    if (typeof cashTenderedField.select === 'function') {
+                        cashTenderedField.select();
+                    }
+                });
+                cashTenderedField.addEventListener('blur', () => {
+                    setNumberFieldValue(cashTenderedField, parseNumeric(cashTenderedField.value));
+                    updateTotals();
+                });
+            }
             
             // Track manual edits to Arrears — Previous Month field
             const arrearsPreviousField = document.getElementById('fieldArrearsPrevious');
@@ -2092,15 +2611,81 @@
                     clearTimeout(orSearchDebounce);
                     orSearchDebounce = setTimeout(() => performLookupByOr(), 600);
                 });
+                // Trigger lookup immediately when field value is committed (paste/select/date-entry behavior)
+                orReceiptField.addEventListener('change', () => {
+                    const val = orReceiptField.value != null ? String(orReceiptField.value).trim() : '';
+                    if (val !== '') performLookupByOr();
+                });
                 orReceiptField.addEventListener('blur', () => {
                     const val = orReceiptField.value != null ? String(orReceiptField.value).trim() : '';
                     if (val !== '') performLookupByOr();
                 });
+                // If OR is already present on load, fetch right away.
+                const initialOr = orReceiptField.value != null ? String(orReceiptField.value).trim() : '';
+                if (initialOr !== '') {
+                    setTimeout(() => performLookupByOr(), 100);
+                }
             }
 
-            resetButton.addEventListener('click', event => {
-                    event.preventDefault();
+            resetButton.addEventListener('click', async event => {
+                event.preventDefault();
+
+                const orNumberRaw = document.getElementById('officialReceipt')?.value ?? '';
+                const orNumber = String(orNumberRaw).trim().replace(/-SC$/i, '');
+                if (!orNumber) {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'OR Number Required',
+                        text: 'Enter an OR number first before marking it as cancelled.',
+                        confirmButtonColor: '#4e73df'
+                    });
+                    return;
+                }
+
+                const confirmResult = await Swal.fire({
+                    icon: 'warning',
+                    title: 'Mark OR as Cancelled?',
+                    html: `<p>This will add OR # <strong>${orNumber}</strong> to Collection Report as <strong>Cancelled</strong>.</p>`,
+                    showCancelButton: true,
+                    confirmButtonText: 'Yes, Mark Cancelled',
+                    cancelButtonText: 'No',
+                    confirmButtonColor: '#e74a3b'
+                });
+
+                if (!confirmResult.isConfirmed) return;
+
+                try {
+                    const response = await fetch(cancelledOrEndpoint, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('input[name="_token"]')?.value
+                        },
+                        body: JSON.stringify({ or_number: orNumber })
+                    });
+                    const result = await response.json();
+
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.message || 'Unable to save cancelled OR.');
+                    }
+
+                    await Swal.fire({
+                        icon: 'success',
+                        title: 'Cancelled OR Saved',
+                        html: `<p>OR # <strong>${orNumber}</strong> was saved in Collection Report as <strong>Cancelled</strong>.</p>`,
+                        confirmButtonColor: '#1cc88a'
+                    });
+
                     resetForm();
+                    generateOrNumber();
+                } catch (error) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Failed to Save Cancelled OR',
+                        text: error.message || 'Please try again.',
+                        confirmButtonColor: '#e74a3b'
+                    });
+                }
             });
 
             form.addEventListener('submit', async event => {
@@ -2219,6 +2804,7 @@
                     const payload = {
                         downloaded_id: currentDownloadedId || null,
                         account_number: currentDownloadedId ? undefined : accountNumberForPayment,
+                        account_name: bamSearchAccountName || undefined,
                         amount_due: amountDue,
                         amount_tendered: amountTendered,
                         payment_method: paymentMethod,
@@ -2301,8 +2887,11 @@
             // Update Payment button: update existing payment by OR # (no new ledger lines)
             if (updatePaymentBtn) {
                 updatePaymentBtn.addEventListener('click', async function() {
-                    if (!currentDownloadedId) {
-                        Swal.fire({
+                    const accountNumberForPayment = (accountNumberField && accountNumberField.value) ? accountNumberField.value.trim() : '';
+                    const orNumber = document.getElementById('officialReceipt')?.value?.trim();
+                    const canUpdateWithoutDownloaded = !!(accountNumberForPayment && orNumber);
+                    if (!currentDownloadedId && !canUpdateWithoutDownloaded) {
+                    Swal.fire({
                             icon: 'warning',
                             title: 'Load Record First',
                             text: 'Load a billing record by OR # or account number first, then use Update Payment to change existing payment data.',
@@ -2310,9 +2899,6 @@
                         });
                         return;
                     }
-                    updateTotals();
-                    const accountNumberForPayment = (accountNumberField && accountNumberField.value) ? accountNumberField.value.trim() : '';
-                    const orNumber = document.getElementById('officialReceipt')?.value?.trim();
                     if (!orNumber) {
                         Swal.fire({
                             icon: 'warning',
@@ -2322,6 +2908,7 @@
                         });
                         return;
                     }
+                    updateTotals();
                     const amountDue = parseNumeric(totalField.value.replace(/[₱,\s]/g, ''));
                     const amountTendered = parseNumeric(cashTenderedField.value);
                     if (!amountTendered || amountTendered <= 0) {
@@ -2371,8 +2958,9 @@
                         }
                     }
                     const payload = {
-                        downloaded_id: currentDownloadedId,
-                        account_number: undefined,
+                        downloaded_id: currentDownloadedId || null,
+                        account_number: currentDownloadedId ? undefined : accountNumberForPayment || undefined,
+                        account_name: bamSearchAccountName || undefined,
                         amount_due: amountDue,
                         amount_tendered: amountTendered,
                         payment_method: paymentMethod,
@@ -2444,8 +3032,15 @@
                             confirmButtonColor: '#e74a3b'
                         });
                     } finally {
-                        updatePaymentBtn.disabled = !currentDownloadedId;
+                        const hasAccountAndOr = !!(accountNumberField && accountNumberField.value && document.getElementById('officialReceipt') && document.getElementById('officialReceipt').value.trim());
+                        updatePaymentBtn.disabled = !currentDownloadedId && !hasAccountAndOr;
                         updatePaymentBtn.innerHTML = originalUpdateText;
+                        // Update Delete Payment button state
+                        const deletePaymentBtn = document.getElementById('deletePaymentBtn');
+                        if (deletePaymentBtn) {
+                            const orNumber = document.getElementById('officialReceipt')?.value?.trim();
+                            deletePaymentBtn.disabled = !orNumber;
+                        }
                     }
                 });
             }
@@ -2464,6 +3059,10 @@
                 viewLedgerBtn.addEventListener('click', function() {
                     const accountNumber = getAccountNumber();
                     const accountName = getAccountName();
+                    const currentBalanceAccountAddress = document.getElementById('currentBalanceAccountAddress');
+                    const accountAddress = (currentBalanceAccountAddress && currentBalanceAccountAddress.textContent)
+                        ? currentBalanceAccountAddress.textContent.trim()
+                        : '';
                     
                     if (!accountNumber && !accountName) {
                         Swal.fire({
@@ -2479,7 +3078,9 @@
                     const consumerData = {
                         account_no: accountNumber || accountName,
                         account_number: accountNumber || accountName,
-                        account_name: accountName || accountNumber
+                        account_name: accountName || accountNumber,
+                        address: accountAddress,
+                        address1: accountAddress
                     };
                     
                     sessionStorage.setItem('currentConsumer', JSON.stringify(consumerData));
@@ -2512,41 +3113,6 @@
                     }
                 });
             }
-
-            // Calculate Senior Citizen Discount for Outstanding Payment
-            const calculateOutstandingSeniorDiscount = () => {
-                if (!outstandingEnableSeniorDiscount || !outstandingAmount || !outstandingSeniorDiscountAmount) {
-                    return;
-                }
-                
-                const paymentAmount = parseNumeric(outstandingAmount.value || 0);
-                const outstandingBalance = parseNumeric(currentBalanceValue);
-                
-                if (outstandingEnableSeniorDiscount.checked && paymentAmount > 0) {
-                    // If paying the full outstanding balance, adjust payment amount to account for SC discount
-                    // so that payment + discount = outstanding balance (final balance = 0.00)
-                    const isPayingFullBalance = Math.abs(paymentAmount - outstandingBalance) < 0.01;
-                    
-                    if (isPayingFullBalance && outstandingBalance > 0) {
-                        // Calculate payment amount needed: outstandingBalance / 1.05
-                        // This ensures: payment + (payment * 0.05) = outstandingBalance
-                        const adjustedPaymentAmount = outstandingBalance / 1.05;
-                        const discountAmount = adjustedPaymentAmount * 0.05;
-                        
-                        // Update the payment amount field to the adjusted amount
-                        outstandingAmount.value = adjustedPaymentAmount.toFixed(2);
-                        outstandingSeniorDiscountAmount.value = discountAmount.toFixed(2);
-                    } else {
-                        // Partial payment: Calculate 5% discount of entered payment amount
-                        const discountAmount = paymentAmount * 0.05;
-                        outstandingSeniorDiscountAmount.value = discountAmount.toFixed(2);
-                    }
-                    outstandingSeniorDiscountGroup.style.display = 'block';
-                } else {
-                    outstandingSeniorDiscountAmount.value = '0.00';
-                    outstandingSeniorDiscountGroup.style.display = 'none';
-                }
-            };
 
             // Reset iframe when modal closes
             if (ledgerModal) {
@@ -2581,6 +3147,144 @@
             };
             if (unpaidBillMonth) {
                 unpaidBillMonth.addEventListener('change', handleBillMonthSelection);
+            }
+
+            // PIN required for Delete Payment
+            var pendingDeleteCallback = null;
+            function requestPinThenDelete(callback) {
+                pendingDeleteCallback = callback;
+                $('#paymentDeletePinInput').val('');
+                $('#paymentDeletePinError').text('').removeClass('d-block');
+                $('#paymentDeletePinInput').removeClass('is-invalid');
+                $('#paymentDeletePinModal').modal('show');
+                setTimeout(function() { document.getElementById('paymentDeletePinInput') && document.getElementById('paymentDeletePinInput').focus(); }, 300);
+            }
+            document.getElementById('paymentDeletePinVerifyBtn').addEventListener('click', function() {
+                var pinInput = document.getElementById('paymentDeletePinInput');
+                var errEl = document.getElementById('paymentDeletePinError');
+                var pin = (pinInput && pinInput.value) ? pinInput.value.trim() : '';
+                if (!pin) {
+                    if (errEl) { errEl.textContent = 'Enter PIN.'; errEl.classList.add('d-block'); }
+                    if (pinInput) pinInput.classList.add('is-invalid');
+                    return;
+                }
+                var btn = this;
+                btn.disabled = true;
+                fetch('{{ route("consumer.verify-edit-pin") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]') ? document.querySelector('meta[name="csrf-token"]').getAttribute('content') : '' },
+                    body: JSON.stringify({ pin: pin })
+                }).then(function(r) { return r.json(); }).then(function(data) {
+                    btn.disabled = false;
+                    if (data.success) {
+                        $('#paymentDeletePinModal').modal('hide');
+                        var cb = pendingDeleteCallback;
+                        pendingDeleteCallback = null;
+                        if (typeof cb === 'function') cb();
+                    } else {
+                        if (errEl) { errEl.textContent = data.message || 'Invalid PIN.'; errEl.classList.add('d-block'); }
+                        if (pinInput) pinInput.classList.add('is-invalid');
+                    }
+                }).catch(function() {
+                    btn.disabled = false;
+                    if (errEl) { errEl.textContent = 'Request failed.'; errEl.classList.add('d-block'); }
+                    if (pinInput) pinInput.classList.add('is-invalid');
+                });
+            });
+            $('#paymentDeletePinInput').on('keydown', function(e) {
+                if (e.which === 13) document.getElementById('paymentDeletePinVerifyBtn').click();
+            });
+
+            // Delete Payment Button - requires PIN first
+            const deletePaymentBtn = document.getElementById('deletePaymentBtn');
+            if (deletePaymentBtn) {
+                deletePaymentBtn.addEventListener('click', function() {
+                    const orNumber = document.getElementById('officialReceipt')?.value?.trim();
+                    if (!orNumber) {
+                        Swal.fire({
+                            icon: 'warning',
+                            title: 'OR Number Required',
+                            text: 'Please enter or load a record with an OR number to delete.',
+                            confirmButtonColor: '#4e73df'
+                        });
+                        return;
+                    }
+
+                    requestPinThenDelete(function() {
+                        Swal.fire({
+                            icon: 'warning',
+                            title: 'Are you sure?',
+                            html: `You are about to delete payment with OR #:<br><br><strong>${orNumber}</strong><br><br>This action cannot be undone!`,
+                            showCancelButton: true,
+                            confirmButtonColor: '#dc3545',
+                            cancelButtonColor: '#6c757d',
+                            confirmButtonText: '<i class="fas fa-trash me-1"></i>Yes, Delete!',
+                            cancelButtonText: '<i class="fas fa-times me-1"></i>Cancel'
+                        }).then((result) => {
+                            if (result.isConfirmed) {
+                                deletePayment(orNumber);
+                            }
+                        });
+                    });
+                });
+            }
+
+            // Delete payment function
+            async function deletePayment(orNumber) {
+                deletePaymentBtn.disabled = true;
+                const originalDeleteText = deletePaymentBtn.innerHTML;
+                deletePaymentBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Deleting...';
+                try {
+                    const response = await fetch(deletePaymentEndpoint, {
+                        method: 'DELETE',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('input[name="_token"]')?.value
+                        },
+                        body: JSON.stringify({ or_number: orNumber })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Payment Deleted!',
+                            text: result.message || 'Payment has been deleted successfully.',
+                            confirmButtonColor: '#28a745'
+                        }).then(() => {
+                            resetForm();
+                            generateOrNumber();
+                        });
+                    } else {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Delete Failed',
+                            text: result.message || 'Failed to delete payment.',
+                            confirmButtonColor: '#e74a3b'
+                        });
+                    }
+                } catch (error) {
+                    console.error('Delete payment error:', error);
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Error',
+                        text: error.message || 'Failed to delete payment. Please try again.',
+                        confirmButtonColor: '#e74a3b'
+                    });
+                } finally {
+                    deletePaymentBtn.disabled = !orNumber;
+                    deletePaymentBtn.innerHTML = originalDeleteText;
+                }
+            }
+
+            // Enable/disable delete button based on OR number
+            const officialReceiptField = document.getElementById('officialReceipt');
+            if (officialReceiptField && deletePaymentBtn) {
+                const updateDeleteButtonState = () => {
+                    const orNumber = officialReceiptField.value?.trim();
+                    deletePaymentBtn.disabled = !orNumber;
+                };
+                officialReceiptField.addEventListener('input', updateDeleteButtonState);
+                officialReceiptField.addEventListener('change', updateDeleteButtonState);
             }
 
             resetForm();

@@ -119,7 +119,7 @@
                                             <div class="col-3" style="padding: 0 12px; display: flex; flex-direction: column; justify-content: flex-start;">
                                                 <div style="margin-bottom: 10px; font-size: 0.95rem; min-height: 45px; display: flex; align-items: center; justify-content: center; font-weight: 500;">Others - A/R</div>
                                                 <div style="border-top: 3px solid #000; margin: 6px 0 12px 0; width: 100%;"></div>
-                                                <div class="font-weight-bold" style="font-size: 1.15rem; text-align: center; margin-top: auto; font-weight: 700;">₱0.00</div>
+                                                <div class="font-weight-bold" style="font-size: 1.15rem; text-align: center; margin-top: auto; font-weight: 700;">₱{{ number_format($consumer->others_ar ?? 0, 2) }}</div>
                                             </div>
                                             <div class="col-3" style="padding: 0 12px; display: flex; flex-direction: column; justify-content: flex-start;">
                                                 <div style="margin-bottom: 10px; font-size: 0.95rem; min-height: 45px; display: flex; align-items: center; justify-content: center; font-weight: 500;">Total Amount Due</div>
@@ -148,13 +148,19 @@
                                 <div class="row mt-5" style="margin-top: 60px;">
                                     <div class="col-md-6">
                                         <p class="mb-1" style="margin-bottom: 5px;">Prepared by:</p>
-                                        <div style="border-top: 1px solid #000; width: 200px; margin-top: 40px; margin-bottom: 5px;"></div>
+                                        {{-- Prepared by signature image --}}
+                                        <img src="{{ asset('images/signatures/marlo-sign.png') }}"
+                                             alt="Signature of Marlo B. Porras"
+                                             style="height: 60px; margin-top: 10px; margin-bottom: 0; display: block;">
                                         <p class="mb-0 font-weight-bold" style="text-decoration: underline; margin-top: 5px;">MARLO B. PORRAS</p>
                                         <p class="mb-0 small" style="font-size: 0.85rem; margin-top: 2px;">UCSA-E</p>
                                     </div>
                                     <div class="col-md-6 text-right">
                                         <p class="mb-1" style="margin-bottom: 5px;">Approved by:</p>
-                                        <div style="border-top: 1px solid #000; width: 200px; margin-left: auto; margin-top: 40px; margin-bottom: 5px;"></div>
+                                        {{-- Approved by signature image --}}
+                                        <img src="{{ asset('images/signatures/gm-sign.png') }}"
+                                             alt="Signature of Engr. Joemar G. Raut"
+                                             style="height: 60px; margin-top: 10px; margin-bottom: 0; display: block; margin-left: auto;">
                                         <p class="mb-0 font-weight-bold text-right" style="text-decoration: underline; margin-top: 5px;">Engr. JOEMAR G. RAUT</p>
                                         <p class="mb-0 small text-right" style="font-size: 0.85rem; margin-top: 2px;">General Manager</p>
                                     </div>

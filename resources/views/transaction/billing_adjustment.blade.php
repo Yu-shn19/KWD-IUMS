@@ -121,6 +121,7 @@
                                     <select class="form-control form-control-sm" name="type" id="bamType">
                                         <option value="DM" selected>DM</option>
                                         <option value="CM">CM</option>
+                                        <option value="Others">Others</option>
                                     </select>
                                 </div>
                                 <div class="bam-col">
@@ -271,7 +272,7 @@
                                                 <td>{{ $item->acct_code ?? '-' }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
                                                 <td><span class="badge badge-info">{{ $item->type ?? 'CM' }}</span></td>
-                                                <td>{{ $item->account ?? '' }}</td>
+                                                <td>{{ ($item->type ?? '') === 'Others' ? '' : ($item->account ?? '') }}</td>
                                                 <td>{{ $item->name ?? '-' }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount ?? 0, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
@@ -350,11 +351,64 @@
             var el = document.getElementById(id);
             if (el) el.value = (val !== null && val !== undefined) ? val : '';
         }
+        function bamFormatAmountValue(raw) {
+            var cleaned = String(raw === null || raw === undefined ? '' : raw).replace(/,/g, '').trim();
+            if (cleaned === '') return '0.00';
+            var n = parseFloat(cleaned);
+            if (!isFinite(n) || isNaN(n)) return '0.00';
+            return n.toFixed(2);
+        }
+        function bamNormalizeAmountForEdit(raw) {
+            var cleaned = String(raw === null || raw === undefined ? '' : raw).replace(/,/g, '').trim();
+            if (cleaned === '') return '0';
+            var n = parseFloat(cleaned);
+            if (!isFinite(n) || isNaN(n)) return '0';
+            // Show plain number while typing (e.g. 0 instead of 0.00)
+            return Number.isInteger(n) ? String(parseInt(n, 10)) : String(n);
+        }
         function bamSetSelected(id, val) {
             var el = document.getElementById(id);
             if (!el) return;
             for (var i = 0; i < el.options.length; i++) {
                 if (el.options[i].value === val) { el.selectedIndex = i; return; }
+            }
+        }
+        
+        // Apply Type-specific UI rules (e.g. Others)
+        var bamPrevLedger = null;
+        function bamApplyTypeRules() {
+            var typeEl    = document.getElementById('bamType');
+            var ledgerEl  = document.getElementById('bamAr');
+            var accountEl = document.getElementById('bamAccount');
+            var nameEl    = document.getElementById('bamAccountName');
+            var bamNoEl   = document.getElementById('bamNo');
+            if (!typeEl || !ledgerEl || !accountEl || !nameEl || !bamNoEl) return;
+
+            var isOthers = (typeEl.value === 'Others');
+
+            if (isOthers) {
+                if (bamPrevLedger === null) bamPrevLedger = ledgerEl.value || 'AR';
+                ledgerEl.value = 'LRO';
+                ledgerEl.disabled = true;
+
+                accountEl.value = '';
+                accountEl.disabled = true;
+
+                // Allow manual name input for Others
+                nameEl.readOnly = false;
+                nameEl.placeholder = 'Enter name...';
+                bamNoEl.readOnly = false;
+            } else {
+                ledgerEl.disabled = false;
+                if (bamPrevLedger !== null) ledgerEl.value = bamPrevLedger;
+                bamPrevLedger = null;
+
+                accountEl.disabled = false;
+
+                nameEl.readOnly = true;
+                nameEl.placeholder = 'Consumer name (from selection)';
+                bamNoEl.readOnly = true;
+                if ((nameEl.value || '').trim() && !accountEl.value) nameEl.value = '';
             }
         }
 
@@ -392,6 +446,7 @@
             // Clear edit-mode IDs so next save is treated as new
             bamSetVal('bamLroId', '');
             bamSetVal('bamArId', '');
+            bamApplyTypeRules();
         }
 
         // ─── Tab behavior ────────────────────────────────────────────────────────
@@ -421,8 +476,14 @@
         document.getElementById('bamSaveBtn').addEventListener('click', function() {
             var accountInput = document.getElementById('bamAccount');
             var accountValue = accountInput ? (accountInput.value || '').trim() : '';
+            var typeValue = (document.getElementById('bamType') || {}).value || '';
+            var amountEl = document.getElementById('bamAmount');
+            if (amountEl) {
+                amountEl.value = bamFormatAmountValue(amountEl.value);
+            }
 
-            if (!accountValue) {
+            // For Type=Others, account is disabled and auto-set to "Others"
+            if (!accountValue && typeValue !== 'Others') {
                 var modal = document.getElementById('bamSuccessModal');
                 var icon  = modal.querySelector('.bam-success-icon');
                 document.getElementById('bamSuccessTitle').textContent   = 'Validation Error';
@@ -570,6 +631,7 @@
             }
 
             accountInput.addEventListener('input', function() {
+                if (accountInput.disabled) { hideSuggestions(); return; }
                 var q = (this.value || '').trim();
                 clearTimeout(debounceTimer);
                 if (q.length < 2) { hideSuggestions(); return; }
@@ -616,6 +678,25 @@
                     }
                 });
             })();
+        })();
+        
+        // ─── Type change rules ──────────────────────────────────────────────────
+        (function() {
+            var typeEl = document.getElementById('bamType');
+            var amountEl = document.getElementById('bamAmount');
+            if (!typeEl) return;
+            typeEl.addEventListener('change', bamApplyTypeRules);
+            if (amountEl) {
+                amountEl.addEventListener('focus', function() {
+                    amountEl.value = bamNormalizeAmountForEdit(amountEl.value);
+                    amountEl.select();
+                });
+                amountEl.addEventListener('blur', function() {
+                    amountEl.value = bamFormatAmountValue(amountEl.value);
+                });
+            }
+            document.addEventListener('DOMContentLoaded', bamApplyTypeRules);
+            bamApplyTypeRules();
         })();
     </script>
 </body>

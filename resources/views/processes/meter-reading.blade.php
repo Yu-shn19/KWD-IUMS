@@ -49,10 +49,13 @@
                             <div class="row">
                                 <div class="col-lg-9">
                                     <div class="card shadow-sm mb-4">
-                                        <div class="card-header bg-primary text-white py-2">
+                                        <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center">
                                             <h6 class="mb-0">
                                                 <i class="fas fa-users mr-2"></i>Meter Reader Schedules
                                             </h6>
+                                                <button type="button" class="btn btn-sm btn-light" data-toggle="modal" data-target="#uploadPreviousReadingModal" title="Bulk update previous reading from Excel">
+                                                <i class="fas fa-file-excel mr-1"></i>Upload Previous Reading
+                                            </button>
                                         </div>
                                         <div class="card-body p-0">
                                             <div class="table-responsive" style="max-height: 600px; overflow: auto;">
@@ -482,6 +485,39 @@
                     </button>
                     <button type="button" id="confirmDownloadBtn" class="btn btn-primary" disabled>
                         <i class="fas fa-download mr-1"></i>Generate Download Data
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Previous Reading Modal -->
+    <div class="modal fade" id="uploadPreviousReadingModal" tabindex="-1" role="dialog" aria-labelledby="uploadPreviousReadingModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title" id="uploadPreviousReadingModalLabel">
+                        <i class="fas fa-file-excel mr-2"></i>Upload Previous Reading (Excel)
+                    </h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="small text-muted mb-3">Upload an Excel file with columns: <strong>account_no</strong>, <strong>account_name</strong>, <strong>previous_reading</strong>. Each account_no may appear only once (no duplicates).</p>
+                    <form id="uploadPreviousReadingForm">
+                        @csrf
+                        <div class="form-group">
+                            <label for="previousReadingFile">Select file (xlsx, xls, csv)</label>
+                            <input type="file" class="form-control-file" id="previousReadingFile" name="file" accept=".xlsx,.xls,.csv" required>
+                        </div>
+                    </form>
+                    <div id="uploadPreviousReadingResult" class="mt-3" style="display: none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" id="submitPreviousReadingUpload" class="btn btn-info">
+                        <i class="fas fa-upload mr-1"></i>Upload
                     </button>
                 </div>
             </div>
@@ -1228,6 +1264,57 @@
         // Refresh button
         document.querySelector('.btn-info.btn-block')?.addEventListener('click', function() {
             location.reload();
+        });
+
+        // Upload Previous Reading: submit file via AJAX
+        document.getElementById('submitPreviousReadingUpload')?.addEventListener('click', function() {
+            const fileInput = document.getElementById('previousReadingFile');
+            const resultEl = document.getElementById('uploadPreviousReadingResult');
+            if (!fileInput || !fileInput.files.length) {
+                alert('Please select a file.');
+                return;
+            }
+            resultEl.style.display = 'block';
+            resultEl.innerHTML = '<div class="text-center py-2"><i class="fas fa-spinner fa-spin"></i> Uploading...</div>';
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('_token', csrfToken);
+
+            fetch('{{ route("meter-reading.upload-previous-reading") }}', {
+                method: 'POST',
+                body: formData,
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            })
+            .then(r => r.json())
+            .then(data => {
+                let html = '';
+                if (data.success) {
+                    html = `<div class="alert alert-success"><i class="fas fa-check-circle mr-2"></i>${data.message}<br><strong>Updated:</strong> ${data.imported} | <strong>Failed:</strong> ${data.failed}</div>`;
+                    if (data.errors && data.errors.length) {
+                        html += '<div class="small text-left mt-2"><strong>Errors:</strong><ul class="mb-0 pl-3">';
+                        data.errors.slice(0, 15).forEach(e => { html += `<li>${e}</li>`; });
+                        if (data.errors.length > 15) html += `<li>... and ${data.errors.length - 15} more</li>`;
+                        html += '</ul></div>';
+                    }
+                    fileInput.value = '';
+                } else {
+                    html = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle mr-2"></i>${data.message}</div>`;
+                    if (data.errors && data.errors.length) {
+                        html += '<ul class="mb-0 pl-3 small">';
+                        data.errors.slice(0, 15).forEach(e => { html += `<li>${e}</li>`; });
+                        if (data.errors.length > 15) html += `<li>... and ${data.errors.length - 15} more</li>`;
+                        html += '</ul>';
+                    }
+                }
+                resultEl.innerHTML = html;
+            })
+            .catch(err => {
+                resultEl.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle mr-2"></i>Request failed: ${err.message}</div>`;
+            });
+        });
+        $('#uploadPreviousReadingModal').on('hidden.bs.modal', function() {
+            document.getElementById('uploadPreviousReadingResult').style.display = 'none';
+            document.getElementById('uploadPreviousReadingResult').innerHTML = '';
         });
 
         // Show database storage status on page load

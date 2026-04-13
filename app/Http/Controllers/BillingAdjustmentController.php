@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\BillingAdjustment;
 use App\Models\ConsumerLedger;
+use App\Models\ConsumerPayment;
 use App\Models\ConsumerZoneOne;
 use App\Models\LROLedger;
 use Illuminate\Http\Request;
@@ -24,9 +25,8 @@ class BillingAdjustmentController extends Controller
             ->get();
 
         // LRO-only BAM entries stored in legacy lro_ledger table
-        $lroEntries = LROLedger::orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
-            ->get();
+        // Hide orphan payment CM rows when their OR no longer exists in consumer_payments.
+        $lroEntries = $this->getVisibleLroEntries();
 
         $previewBamNo = $this->generateBamNumber();
 
@@ -43,9 +43,7 @@ class BillingAdjustmentController extends Controller
             ->orderBy('date', 'desc')
             ->orderBy('id', 'desc')
             ->get();
-        $lroEntries = LROLedger::orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
-            ->get();
+        $lroEntries = $this->getVisibleLroEntries();
         $previewBamNo = $this->generateBamNumber();
         return view('transaction.billing_adjustment', compact('billingAdjustment', 'billingAdjustments', 'lroEntries', 'previewBamNo'));
     }
@@ -309,11 +307,90 @@ class BillingAdjustmentController extends Controller
             ->orderBy('date', 'desc')
             ->orderBy('id', 'desc')
             ->get();
-        $lroEntries = LROLedger::orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
-            ->get();
+        $lroEntries = $this->getVisibleLroEntries();
         $previewBamNo = $lroEntry->bam_no ?? $this->generateBamNumber();
         return view('transaction.billing_adjustment', compact('lroEntry', 'billingAdjustments', 'lroEntries', 'previewBamNo'));
+    }
+
+    /**
+     * Load LRO entries for list display, excluding orphan payment CM rows.
+     * A payment CM row is considered orphan when remarks = "Payment OR#..." but OR no longer exists in consumer_payments.
+     */
+    private function getVisibleLroEntries()
+    {
+        $entries = LROLedger::orderBy('date', 'desc')
+            ->orderBy('id', 'desc')
+            ->get();
+
+        // Hard-clean duplicate posted CM payment rows in lro_ledger.
+        // Keep only the newest row per payment signature; delete older duplicates.
+        $paymentCmRows = $entries->filter(function ($row) {
+            $type = strtoupper((string) ($row->type ?? ''));
+            $status = strtoupper((string) ($row->status ?? ''));
+            $remarks = trim((string) ($row->remarks ?? ''));
+            return $type === 'CM' && $status === 'POSTED' && str_starts_with($remarks, 'Payment OR#');
+        });
+
+        $duplicateIdsToDelete = collect();
+        $grouped = $paymentCmRows->groupBy(function ($row) {
+            return implode('|', [
+                trim((string) ($row->remarks ?? '')),
+                trim((string) ($row->bam_no ?? '')),
+                trim((string) ($row->acct_code ?? '')),
+                trim((string) ($row->account ?? '')),
+                trim((string) ($row->name ?? '')),
+                number_format((float) ($row->amount ?? 0), 2, '.', ''),
+            ]);
+        });
+
+        foreach ($grouped as $rows) {
+            if ($rows->count() <= 1) {
+                continue;
+            }
+
+            // Keep latest id, delete the rest.
+            $ids = $rows->pluck('id')->sortDesc()->values();
+            $idsToDelete = $ids->slice(1);
+            if ($idsToDelete->isNotEmpty()) {
+                $duplicateIdsToDelete = $duplicateIdsToDelete->merge($idsToDelete);
+            }
+        }
+
+        if ($duplicateIdsToDelete->isNotEmpty()) {
+            LROLedger::whereIn('id', $duplicateIdsToDelete->unique()->values()->all())->delete();
+            $entries = $entries->reject(function ($row) use ($duplicateIdsToDelete) {
+                return $duplicateIdsToDelete->contains($row->id);
+            })->values();
+        }
+
+        $existingOrSet = ConsumerPayment::whereNotNull('or_number')
+            ->pluck('or_number')
+            ->map(function ($or) {
+                return trim((string) $or);
+            })
+            ->filter()
+            ->flip();
+
+        return $entries->filter(function ($row) use ($existingOrSet) {
+            $type = strtoupper((string) ($row->type ?? ''));
+            $status = strtoupper((string) ($row->status ?? ''));
+            $remarks = trim((string) ($row->remarks ?? ''));
+
+            // Only inspect posted CM payment rows generated from payment flow.
+            if ($type !== 'CM' || $status !== 'POSTED') {
+                return true;
+            }
+            if (!str_starts_with($remarks, 'Payment OR#')) {
+                return true;
+            }
+
+            $orNumber = trim((string) preg_replace('/^Payment OR#/', '', $remarks));
+            if ($orNumber === '') {
+                return false;
+            }
+
+            return $existingOrSet->has($orNumber);
+        })->values();
     }
 
     /**

@@ -45,7 +45,7 @@
                             <div class="tab-pane fade show active" id="pane-billing-processes" role="tabpanel" aria-labelledby="tab-billing-processes">
     <!-- Data Table Section -->
     <div class="row mb-4">
-                            {{-- <div class="col-lg-12">
+                            <div class="col-lg-12">
                                 <div class="card border-0 shadow-sm">
                                     <div class="card-body">
                                         <div class="d-flex align-items-center mb-3">
@@ -91,7 +91,7 @@
                                         </form>
                                     </div>
                                 </div>
-                            </div> --}}
+                            </div>
                         </div>
                         <!-- Control Panel Container -->
                         <div class="row">
@@ -129,6 +129,7 @@
                                                                 <option>Meter Reading Preparation (Multiple Consumers)</option>
                                                                 <option>Bill Printing</option>
                                                                 <option>Generate Surcharge</option>
+                                                                <option>Generate Penalty (Single Consumer)</option>
                                                             </select>
                                                         </div>
 
@@ -333,14 +334,14 @@
                                                     <tr class="text-center border-bottom">
                                                         <th id="thIncludeSurcharge" class="py-3 px-3 font-weight-bold text-dark align-middle" style="min-width: 50px; display: none;">Include</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 70px;">SEDR</th>
-                                                        <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px;">Account #</th>
+                                                        <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 200px;">Account #</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark text-left" style="min-width: 180px;">Account Name</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark text-left" style="min-width: 200px;">Address</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 70px;">Zone</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 90px;">Category</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 120px;">Meter No.</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px;">Prev. Date</th>
-                                                        <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px;">Prev. Read</th>
+                                                        <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 130px;">Prev. Read</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px;">Pres. Read</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 90px;">Volume</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px;">Current Bill</th>
@@ -736,6 +737,14 @@
                         if (singleConsumerAccountGroup) singleConsumerAccountGroup.style.display = 'none';
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = '';
+                    } else if (selectedProcess === 'Generate Penalty (Single Consumer)') {
+                        if (billMonthGroup) billMonthGroup.style.display = 'none';
+                        if (readingDateGroup) readingDateGroup.style.display = 'none';
+                        if (surchargeDateGroup) surchargeDateGroup.style.display = 'block';
+                        if (billingDatesSection) billingDatesSection.style.display = 'none';
+                        if (singleConsumerAccountGroup) singleConsumerAccountGroup.style.display = 'block';
+                        if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
+                        if (zoneGroup) zoneGroup.style.display = 'none';
                     } else if (selectedProcess === 'Meter Reading Preparation (Single Consumer)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'block';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -772,6 +781,8 @@
             let canSaveSchedules = false;
             let isSingleConsumerPreparation = false;
             let isMultipleConsumerPreparation = false;
+            // Schedule IDs just saved (Single/Multiple) — used by "Assign to reader" after save
+            let lastSavedScheduleIds = [];
 
             // Store current billing data for printing
             let currentBillingData = [];
@@ -781,6 +792,33 @@
             // Store surcharge candidates for Apply Surcharge (with Include checkboxes)
             let currentSurchargeData = [];
             let currentDataType = ''; // 'surcharge' | 'downloaded' | 'prepared' | ''
+
+            /** Ascending sort by the segment after the last "-" in Account # (e.g. 081-32-625 → 625); used for Meter Reading Preparation + search */
+            function sortRowsByAccountNumber(rows) {
+                if (!Array.isArray(rows)) return [];
+                const tailAfterLastHyphen = (accountNumber) => {
+                    const s = (accountNumber || '').toString().trim();
+                    const i = s.lastIndexOf('-');
+                    return i === -1 ? s : s.slice(i + 1).trim();
+                };
+                const tailNumeric = (accountNumber) => {
+                    const tail = tailAfterLastHyphen(accountNumber);
+                    const n = parseInt(tail, 10);
+                    return Number.isNaN(n) ? null : n;
+                };
+                return [...rows].sort((a, b) => {
+                    const na = tailNumeric(a.account_number);
+                    const nb = tailNumeric(b.account_number);
+                    if (na !== null && nb !== null && na !== nb) return na - nb;
+                    if (na !== null && nb === null) return -1;
+                    if (na === null && nb !== null) return 1;
+                    const ta = tailAfterLastHyphen(a.account_number);
+                    const tb = tailAfterLastHyphen(b.account_number);
+                    let c = ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
+                    if (c !== 0) return c;
+                    return (a.account_number || '').toString().localeCompare((b.account_number || '').toString(), undefined, { numeric: true, sensitivity: 'base' });
+                });
+            }
 
             // Quick lookup elements
             const quickLookupEndpoint = @json(route('billing-processes.account-lookup'));
@@ -841,6 +879,8 @@
                         executeBillPrinting();
                     } else if (processType === 'Generate Surcharge') {
                         executeGenerateSurcharge();
+                    } else if (processType === 'Generate Penalty (Single Consumer)') {
+                        executeGenerateSingleConsumerPenalty();
                     } else {
                         showAlert('info', 'Process "' + processType + '" is not yet implemented');
                     }
@@ -889,17 +929,18 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        // Store prepared schedules for later saving
-                        preparedSchedules = data.data;
+                        const rows = sortRowsByAccountNumber(data.data);
+                        // Store prepared schedules for later saving (same order as table rows / data-index)
+                        preparedSchedules = rows;
                         canSaveSchedules = data.can_save;
                         
                         // Store data for printing
-                        currentBillingData = data.data;
+                        currentBillingData = rows;
                         currentBillingZone = data.summary.zone;
                         currentBillingMonth = data.summary.bill_month;
                         
                         showAlert('success', data.message);
-                        populateTable(data.data);
+                        populateTable(rows);
                         updateFooter(data.summary);
                         
                         // Show/hide Save button based on whether schedules already exist
@@ -973,14 +1014,15 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        preparedSchedules = data.data;
+                        const rows = sortRowsByAccountNumber(data.data);
+                        preparedSchedules = rows;
                         canSaveSchedules = data.can_save;
-                        currentBillingData = data.data;
+                        currentBillingData = rows;
                         currentBillingZone = data.summary.zone;
                         currentBillingMonth = data.summary.bill_month;
                         isSingleConsumerPreparation = true;
                         showAlert('success', data.message);
-                        populateTable(data.data);
+                        populateTable(rows);
                         updateFooter(data.summary);
                         const saveBtn = document.getElementById('saveSchedulesBtn');
                         if (canSaveSchedules && preparedSchedules.length > 0) {
@@ -1054,14 +1096,15 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        preparedSchedules = data.data;
+                        const rows = sortRowsByAccountNumber(data.data);
+                        preparedSchedules = rows;
                         canSaveSchedules = data.can_save;
-                        currentBillingData = data.data;
+                        currentBillingData = rows;
                         currentBillingZone = data.summary.zone;
                         currentBillingMonth = data.summary.bill_month;
                         isMultipleConsumerPreparation = true;
                         showAlert('success', data.message);
-                        populateTable(data.data);
+                        populateTable(rows);
                         updateFooter(data.summary);
                         const saveBtn = document.getElementById('saveSchedulesBtn');
                         if (canSaveSchedules && preparedSchedules.length > 0) {
@@ -1098,6 +1141,13 @@
                 const select = document.getElementById('assignReaderSelect');
                 if (!select) return;
                 if (select.options.length > 1) return; // already loaded
+                loadReadersIntoSelect('assignReaderSelect');
+            }
+
+            // Load readers into a specific select by id (e.g. assignAfterSaveReaderSelect after save)
+            function loadReadersIntoSelect(selectId) {
+                const select = document.getElementById(selectId);
+                if (!select) return;
                 fetch('{{ route("meter-reading.available-readers") }}')
                     .then(response => response.json())
                     .then(data => {
@@ -1241,6 +1291,68 @@
                 });
             }
 
+            // Generate Penalty (Single Consumer) - Load one past-due consumer by account and bill date
+            function executeGenerateSingleConsumerPenalty() {
+                const accountNumber = (document.getElementById('singleConsumerAccount').value || '').trim();
+                const billDate = document.getElementById('surchargeBillDate').value;
+
+                if (!accountNumber) {
+                    showAlert('error', 'Please enter an Account Number');
+                    return;
+                }
+                if (!billDate) {
+                    showAlert('error', 'Please select a Bill Date');
+                    return;
+                }
+
+                const executeBtn = document.querySelector('.btn-success');
+                const originalText = executeBtn.innerHTML;
+                executeBtn.disabled = true;
+                executeBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Loading...';
+
+                fetch('{{ route("billing-processes.single-penalty-candidate") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrfToken
+                    },
+                    body: JSON.stringify({
+                        account_number: accountNumber,
+                        bill_date: billDate
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        currentDataType = 'surcharge';
+                        currentSurchargeData = data.data || [];
+                        populateSurchargeTable(currentSurchargeData);
+                        updateFooter(data.summary || {});
+                        document.getElementById('saveSchedulesBtn').style.display = 'none';
+                        document.getElementById('applySurchargeBtn').style.display = 'inline-block';
+                        showAlert('success', data.message || 'Penalty candidate loaded successfully');
+                    } else {
+                        showAlert('error', data.message || 'Failed to load penalty candidate');
+                        clearTable();
+                        currentSurchargeData = [];
+                        currentDataType = '';
+                        document.getElementById('applySurchargeBtn').style.display = 'none';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showAlert('error', 'An error occurred while loading single consumer penalty candidate');
+                    clearTable();
+                    currentSurchargeData = [];
+                    currentDataType = '';
+                    document.getElementById('applySurchargeBtn').style.display = 'none';
+                })
+                .finally(() => {
+                    executeBtn.disabled = false;
+                    executeBtn.innerHTML = originalText;
+                });
+            }
+
             // Populate table with surcharge candidates (with Include checkbox per row)
             function populateSurchargeTable(data) {
                 const tbody = document.querySelector('table tbody');
@@ -1340,6 +1452,15 @@
                     return;
                 }
 
+                // Sort data by last digit of account_number (e.g., 020 from 011-12-020) in ascending order
+                data.sort((a, b) => {
+                    const accA = (a.account_number || '').toString().trim();
+                    const accB = (b.account_number || '').toString().trim();
+                    const lastDigitA = parseInt(accA.split('-').pop() || '0', 10);
+                    const lastDigitB = parseInt(accB.split('-').pop() || '0', 10);
+                    return lastDigitA - lastDigitB;
+                });
+
                 data.forEach((record, index) => {
                     const accNum = (record.account_number || '').toString().trim();
                     const accName = (record.account_name || '').toString().trim();
@@ -1420,10 +1541,11 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            populateTable(data.data);
+                            const rows = sortRowsByAccountNumber(data.data);
+                            populateTable(rows);
                             
                             // Store data for printing
-                            currentBillingData = data.data;
+                            currentBillingData = rows;
                             currentBillingZone = zone || 'All Zones';
                             currentBillingMonth = 'Search Results';
                             
@@ -1456,6 +1578,19 @@
                         return;
                     }
 
+                    // Sync edited Prev. Read values from table back into preparedSchedules before saving
+                    const tbody = document.querySelector('.table-responsive table tbody');
+                    if (tbody && preparedSchedules && preparedSchedules.length > 0) {
+                        const inputs = tbody.querySelectorAll('input.prev-read-input');
+                        inputs.forEach(function(input) {
+                            const idx = parseInt(input.getAttribute('data-index'), 10);
+                            if (!isNaN(idx) && preparedSchedules[idx]) {
+                                const val = input.value.trim();
+                                preparedSchedules[idx].prev_read = (val === '' || isNaN(parseFloat(val))) ? 0 : parseFloat(val);
+                            }
+                        });
+                    }
+
                     const originalText = this.innerHTML;
                     this.disabled = true;
                     this.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Saving...';
@@ -1475,9 +1610,9 @@
                     .then(data => {
                         if (data.success) {
                             showAlert('success', data.message);
-                            const readerId = document.getElementById('assignReaderSelect') && document.getElementById('assignReaderSelect').value;
                             const scheduleIds = data.schedule_ids || [];
-                            if ((isSingleConsumerPreparation || isMultipleConsumerPreparation) && scheduleIds.length > 0 && readerId) {
+                            const readerIdPreSelected = document.getElementById('assignReaderSelect') && document.getElementById('assignReaderSelect').value;
+                            if ((isSingleConsumerPreparation || isMultipleConsumerPreparation) && scheduleIds.length > 0 && readerIdPreSelected) {
                                 fetch('{{ route("billing-processes.assign-to-reader") }}', {
                                     method: 'POST',
                                     headers: {
@@ -1486,7 +1621,7 @@
                                     },
                                     body: JSON.stringify({
                                         schedule_ids: scheduleIds,
-                                        reader_id: parseInt(readerId, 10)
+                                        reader_id: parseInt(readerIdPreSelected, 10)
                                     })
                                 })
                                 .then(function(r) { return r.json(); })
@@ -1500,6 +1635,13 @@
                                 .catch(function() {
                                     showAlert('warning', 'Schedule saved but could not assign to reader.');
                                 });
+                            } else if ((isSingleConsumerPreparation || isMultipleConsumerPreparation) && scheduleIds.length > 0) {
+                                lastSavedScheduleIds = scheduleIds;
+                                const assignAfterSaveGroup = document.getElementById('assignAfterSaveGroup');
+                                if (assignAfterSaveGroup) {
+                                    assignAfterSaveGroup.style.display = 'inline-block';
+                                    loadReadersIntoSelect('assignAfterSaveReaderSelect');
+                                }
                             }
                             this.style.display = 'none';
                             const assignReaderGroup = document.getElementById('assignReaderGroup');
@@ -1519,6 +1661,56 @@
                         showAlert('error', 'An error occurred while saving schedules');
                         this.disabled = false;
                         this.innerHTML = originalText;
+                    });
+                });
+            }
+
+            // Assign to reader (after save) — use saved schedule IDs and selected reader
+            const assignToReaderBtn = document.getElementById('assignToReaderBtn');
+            if (assignToReaderBtn) {
+                assignToReaderBtn.addEventListener('click', function() {
+                    const readerId = document.getElementById('assignAfterSaveReaderSelect') && document.getElementById('assignAfterSaveReaderSelect').value;
+                    if (!readerId) {
+                        showAlert('error', 'Please select a reader first.');
+                        return;
+                    }
+                    if (!lastSavedScheduleIds || lastSavedScheduleIds.length === 0) {
+                        showAlert('error', 'No saved schedules to assign. Save schedules first.');
+                        return;
+                    }
+                    const btn = this;
+                    const originalText = btn.innerHTML;
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Assigning...';
+                    fetch('{{ route("billing-processes.assign-to-reader") }}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': csrfToken
+                        },
+                        body: JSON.stringify({
+                            schedule_ids: lastSavedScheduleIds,
+                            reader_id: parseInt(readerId, 10)
+                        })
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            showAlert('success', data.message);
+                            lastSavedScheduleIds = [];
+                            const ag = document.getElementById('assignAfterSaveGroup');
+                            if (ag) ag.style.display = 'none';
+                        } else {
+                            showAlert('error', data.message || 'Failed to assign schedules.');
+                        }
+                    })
+                    .catch(function(err) {
+                        console.error(err);
+                        showAlert('error', 'Could not assign schedules to reader.');
+                    })
+                    .finally(function() {
+                        btn.disabled = false;
+                        btn.innerHTML = originalText;
                     });
                 });
             }
@@ -1563,6 +1755,9 @@
                         document.getElementById('saveSchedulesBtn').style.display = 'none';
                         const assignReaderGroupEl = document.getElementById('assignReaderGroup');
                         if (assignReaderGroupEl) assignReaderGroupEl.style.display = 'none';
+                        const assignAfterSaveGroupEl = document.getElementById('assignAfterSaveGroup');
+                        if (assignAfterSaveGroupEl) assignAfterSaveGroupEl.style.display = 'none';
+                        lastSavedScheduleIds = [];
                         document.getElementById('applySurchargeBtn').style.display = 'none';
                         showAlert('info', 'Form has been reset');
                     }
@@ -1670,7 +1865,9 @@
                             </td>
                             <td class="text-center py-3 px-3 text-muted">${record.meter_number}</td>
                             <td class="text-center py-3 px-3 text-muted">${record.prev_date}</td>
-                            <td class="text-right py-3 px-3">${record.prev_read}</td>
+                            <td class="text-right py-3 px-3">
+                                <input type="number" min="0" step="0.001" class="form-control form-control-sm prev-read-input text-right border" value="${record.prev_read != null && record.prev_read !== '' ? record.prev_read : '0'}" data-index="${index}" style="max-width: 100px; display: inline-block;" title="Edit previous reading before saving" />
+                            </td>
                             <td class="text-right py-3 px-3 font-weight-bold">${record.pres_read}</td>
                             <td class="text-right py-3 px-3">
                                 <span class="badge badge-light">${record.volume}</span>
@@ -2256,7 +2453,7 @@
             if (applySurchargeBtn) {
                 applySurchargeBtn.addEventListener('click', function() {
                     if (!currentSurchargeData || currentSurchargeData.length === 0) {
-                        showAlert('warning', 'No surcharge data. Execute Generate Surcharge first.');
+                        showAlert('warning', 'No surcharge data. Execute Generate Surcharge or Generate Penalty (Single Consumer) first.');
                         return;
                     }
                     const checkboxes = document.querySelectorAll('.surcharge-include-checkbox:checked');
@@ -2268,14 +2465,15 @@
                     checkboxes.forEach(cb => {
                         const index = parseInt(cb.getAttribute('data-index'), 10);
                         const record = currentSurchargeData[index];
-                        if (record && record.schedule_id && record.downloaded_id) {
+                        if (record && record.schedule_id) {
                             items.push({
                                 schedule_id: record.schedule_id,
-                                downloaded_id: record.downloaded_id,
+                                downloaded_id: record.downloaded_id || null,
                                 consumer_zone_id: record.consumer_zone_id || null,
                                 current_bill: record.current_bill || 0,
                                 due_date: record.due_date || '',
-                                account_number: record.account_number || ''
+                                account_number: record.account_number || '',
+                                calculated_penalty: record.calculated_penalty != null ? record.calculated_penalty : undefined
                             });
                         }
                     });

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -83,5 +84,35 @@ class MeterReadingSchedule extends Model
     public function ledgerEntries()
     {
         return $this->hasMany(ConsumerLedger::class, 'schedule_id');
+    }
+
+    /**
+     * MySQL/MariaDB: ORDER BY numeric segment after last "-" in account_number (e.g. 081-32-625 → 625).
+     * Pass table name when using DB::table() or joins (e.g. "meter_reading_schedules").
+     */
+    public static function accountTailNumericOrderExpression(?string $table = null): string
+    {
+        $col = $table
+            ? "`{$table}`.`account_number`"
+            : '`account_number`';
+
+        return "CAST(SUBSTRING_INDEX(TRIM(COALESCE({$col}, '')), '-', -1) AS UNSIGNED)";
+    }
+
+    /**
+     * Apply account-tail ordering (matches Meter Reading Preparation UI sort).
+     */
+    public function scopeOrderByAccountNumberTail(Builder $query): Builder
+    {
+        $driver = $query->getConnection()->getDriverName();
+        $table = $query->getModel()->getTable();
+
+        if (in_array($driver, ['mysql', 'mariadb'], true)) {
+            return $query
+                ->orderByRaw(static::accountTailNumericOrderExpression($table))
+                ->orderBy("{$table}.account_number");
+        }
+
+        return $query->orderBy("{$table}.account_number");
     }
 }

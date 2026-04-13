@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Http\Request;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConsumerController;
 use App\Http\Controllers\ConsumerLedgerController;
@@ -66,15 +67,13 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::delete('/consumer/{consumer}', [ConsumerController::class, 'destroy'])->name('consumer.destroy');
 
     // Ledger page route
-    Route::get('/ledger', function () {
-        $consumer = null;
-        return view('consumer.ledger', compact('consumer'));
-    })->name('ledger');
-
+   // Route::get('/ledger', [ConsumerController::class, 'ledger'])->name('ledger');
+     // Route::get('/ledger', function () { $consumer = null; return view('consumer.ledger', compact('consumer')); })->name('ledger');
+     Route::get('/ledger', function (Request $request) {$consumer = ConsumerController::resolveConsumerFromRequest($request, false);
+     return view('consumer.ledger', compact('consumer')); })->name('ledger');
+   
     // Get ledger data API
     Route::get('/ledger/data', [ConsumerLedgerController::class, 'getLedger'])->name('ledger.data');
-    // Pay outstanding balance (manual payment recorded in consumer_ledgers)
-    Route::post('/ledger/pay-outstanding', [ConsumerLedgerController::class, 'payOutstanding'])->name('ledger.pay-outstanding');
     // Get consumption data API
     Route::get('/consumption/data', [ConsumerLedgerController::class, 'getConsumption'])->name('consumption.data');
 
@@ -179,38 +178,43 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // LRO Ledger page route
-    Route::get('/lro-ledger', function () {
-        $consumer = null;
+ //   Route::get('/lro-ledger', [ConsumerController::class, 'lroLedger'])->name('lro-ledger');
+    Route::get('/lro-ledger', function (Request $request) {
+        $consumer = ConsumerController::resolveConsumerFromRequest($request, false);
+
         return view('consumer.lro-ledger', compact('consumer'));
     })->name('lro-ledger');
-
     // Get LRO Ledger data API
     Route::get('/lro-ledger/data', [LRO_ConsumerLedgerController::class, 'getLROLedger'])->name('lro-ledger.data');
 
     // Service History page route
-    Route::get('/service', function () {
-        $consumer = null;
+  //  Route::get('/service', [ConsumerController::class, 'service'])->name('service');
+     Route::get('/service', function (Request $request) {
+        $consumer = ConsumerController::resolveConsumerFromRequest($request, false);
+
         return view('consumer.service', compact('consumer'));
     })->name('service');
-
     // Meter Reading History page route
-    Route::get('/meter', function () {
-        $consumer = null;
+   // Route::get('/meter', [ConsumerController::class, 'meter'])->name('meter');
+  Route::get('/meter', function (Request $request) {
+        $consumer = ConsumerController::resolveConsumerFromRequest($request, false);
+
         return view('consumer.meter', compact('consumer'));
     })->name('meter');
-
     // Location Map page route
-    Route::get('/location', function () {
-        $consumer = null;
+   // Route::get('/location', [ConsumerController::class, 'location'])->name('location');
+   Route::get('/location', function (Request $request) {
+        $consumer = ConsumerController::resolveConsumerFromRequest($request, false);
+
         return view('consumer.location', compact('consumer'));
     })->name('location');
-
     // Consumption Graph page route
-    Route::get('/consumption', function () {
-        $consumer = null;
+  //  Route::get('/consumption', [ConsumerController::class, 'consumption'])->name('consumption');
+  Route::get('/consumption', function (Request $request) {
+        $consumer = ConsumerController::resolveConsumerFromRequest($request, false);
+
         return view('consumer.consumption', compact('consumer'));
     })->name('consumption');
-
     // System Reports page route
     Route::get('/systemreport', function () {
         return view('reports.system');
@@ -236,11 +240,18 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::post('/billing-processes/surcharge-candidates', [BillingProcessController::class, 'getSurchargeCandidates'])->name('billing-processes.surcharge-candidates');
     Route::post('/billing-processes/apply-surcharge', [BillingProcessController::class, 'applySurcharge'])->name('billing-processes.apply-surcharge');
     Route::post('/billing-processes/mark-paid', [BillingProcessController::class, 'markDownloadedReadingPaid'])->name('billing-processes.mark-paid');
+    Route::post('/billing-processes/single-penalty-candidate', [BillingProcessController::class, 'getSingleConsumerPenaltyCandidate'])->name('billing-processes.single-penalty-candidate');
     Route::get('/billing-processes/penalty-report', [BillingProcessController::class, 'penaltyReport'])->name('billing-processes.penalty-report');
     Route::get('/billing-processes/penalty-report/export', [BillingProcessController::class, 'exportPenaltyReport'])->name('billing-processes.penalty-report.export');
 
     // consumer-master-list page route
     Route::get('/consumer-master-list', [BillingProcessController::class, 'consumerMasterList'])->name('consumer-master-list');
+    // Route::post('/consumer-master-list/bulk-dm', [BillingProcessController::class, 'storeBulkDmLedger'])->name('consumer-master-list.bulk-dm');
+    // Route::post('/consumer-master-list/store-dm', [BillingProcessController::class, 'storeDmLedger'])->name('consumer-master-list.store-dm');
+     Route::post('/consumer-master-list/bulk-dm', [BillingProcessController::class, 'storeBulkDmLedger'])->name('consumer-master-list.bulk-dm');
+    Route::post('/consumer-master-list/store-dm', [BillingProcessController::class, 'storeDmLedger'])->name('consumer-master-list.store-dm');
+    Route::post('/consumer-master-list/import-dm', [BillingProcessController::class, 'storeDmLedgerImport'])->name('consumer-master-list.import-dm');
+
 
     // monthly-billing-report page route
     Route::get('/monthly-billing-report', [ReportController::class, 'monthlyBillingReport'])->name('monthly-billing-report');
@@ -275,6 +286,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/meter-reading/available-readers', [MeterReadingController::class, 'getAvailableReaders'])->name('meter-reading.available-readers');
     Route::get('/meter-reading/available-zones', [MeterReadingController::class, 'getAvailableZones'])->name('meter-reading.available-zones');
     Route::get('/meter-reading/download', [MeterReadingController::class, 'downloadSchedulesForMobile'])->name('meter-reading.download');
+     Route::post('/meter-reading/upload-previous-reading', [MeterReadingController::class, 'uploadPreviousReading'])->name('meter-reading.upload-previous-reading');
 
     // Billing Adjustment routes
     Route::get('/billing-adjustment', [BillingAdjustmentController::class, 'index'])->name('billing-adjustment');
@@ -293,6 +305,9 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/billing-payment/unpaid-months', [MeterReadingController::class, 'getUnpaidBillMonths'])->name('billing-payment.unpaid-months');
     Route::get('/billing-payment/bill-month-details', [MeterReadingController::class, 'getBillMonthDetails'])->name('billing-payment.bill-month-details');
     Route::get('/billing-payment/account-suggestions', [MeterReadingController::class, 'getAccountSuggestions'])->name('billing-payment.account-suggestions');
+    Route::get('/billing-payment/bam-search', [MeterReadingController::class, 'lookupBamNo'])->name('billing-payment.bam-search');
+    Route::post('/billing-payment/cancelled-or', [BillingProcessController::class, 'storeCancelledOr'])->name('billing-payment.cancelled-or');
+    Route::delete('/billing-payment/delete', [BillingProcessController::class, 'deletePayment'])->name('billing-payment.delete');
     // Update consumer meter readings (previous/current) for main consumer page
     Route::post('/consumer/update-meter-reading', [MeterReadingController::class, 'updateConsumerMeterReading'])->name('consumer.update-meter-reading');
     Route::post('/consumer/verify-edit-pin', [ConsumerController::class, 'verifyEditPin'])->name('consumer.verify-edit-pin');

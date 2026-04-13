@@ -72,15 +72,14 @@
                                             </div>
                                         </div>
 
-                                        <!-- Status -->
+                                          <!-- Status -->
                                         <div class="col-md-2">
                                             <label class="small font-weight-bold mb-1">Status</label>
                                             <select id="statusSelect" class="form-control form-control-sm">
                                                 <option value="">All Status</option>
                                                 <option value="A - Active" {{ ($status ?? '') == 'A - Active' ? 'selected' : '' }}>A - Active</option>
-                                                <option value="I - Inactive" {{ ($status ?? '') == 'I - Inactive' ? 'selected' : '' }}>I - Inactive</option>
-                                                <option value="S - Suspended" {{ ($status ?? '') == 'S - Suspended' ? 'selected' : '' }}>S - Suspended</option>
-                                                <option value="D - Disconnected" {{ ($status ?? '') == 'D - Disconnected' ? 'selected' : '' }}>D - Disconnected</option>
+                                                <option value="P - Pending" {{ ($status ?? '') == 'P - Pending' ? 'selected' : '' }}>P - Pending</option>
+                                                <option value="X - Disconnected" {{ ($status ?? '') == 'X - Disconnected' ? 'selected' : '' }}>X - Disconnected</option>
                                             </select>
                                         </div>
 

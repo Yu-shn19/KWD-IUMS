@@ -15,7 +15,7 @@
 @endif
 
 <body id="page-top" class="@if(request('embed')) ledger-embed @endif">
-    <div id="wrapper">
+    <div id="wrapper" class="ledger-no-print">
         <!-- Sidebar -->
         @include('partials.sidebar')
         <!-- Sidebar -->
@@ -25,46 +25,7 @@
                 <!-- Consumer Header -->
                 @include('consumer.header')
 
-                <!-- Navigation Tabs -->
-                <div class="card-body p-0">
-                    <ul class="nav nav-tabs">
-                        <li class="nav-item">
-                            <a href="{{ route('consumer') }}" class="nav-link">
-                                <i class="fas fa-user me-1"></i>Consumer Details
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('ledger') }}" class="nav-link active">
-                                <i class="fas fa-file-invoice me-1"></i>Account Ledger
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('lro-ledger') }}" class="nav-link">
-                                <i class="fas fa-list me-1"></i>LRO Ledger
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('service') }}" class="nav-link">
-                                <i class="fas fa-history me-1"></i>Service History
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('meter') }}" class="nav-link">
-                                <i class="fas fa-tachometer-alt me-1"></i>Meter Reading
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('location') }}" class="nav-link">
-                                <i class="fas fa-map-marker-alt me-1"></i>Location Map
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('consumption') }}" class="nav-link">
-                                <i class="fas fa-chart-line me-1"></i>Consumption Graph
-                            </a>
-                        </li>
-                    </ul>
-            </div>
+                @include('consumer.nav-tabs', ['activeTab' => 'ledger'])
 
                 <!-- Container Fluid-->
                 <div class="container-fluid" id="container-wrapper">
@@ -99,7 +60,7 @@
                                         </div>
                                         <div class="col-md-4 d-flex align-items-end">
                                             <button class="btn btn-primary btn-sm mr-2" id="printLedgerBtn">
-                                                <i class="fas fa-print mr-1"></i>F6 - Print
+                                                <i class="fas fa-print mr-1"></i>Print
       </button>
                                             <button class="btn btn-secondary btn-sm" id="refreshLedgerBtn">
                                                 <i class="fas fa-sync-alt mr-1"></i>Refresh
@@ -122,7 +83,7 @@
                                 <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 11px;">
                                     <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                         <tr>
-                                            <th class="text-center py-2 px-2" style="min-width: 80px;">TRANS</th>
+                                            <th class="text-center py-2 px-2" style="min-width: 90px;">TRANS</th>
                                             <th class="text-center py-2 px-2" style="min-width: 90px;">Date</th>
                                             <th class="text-center py-2 px-2" style="min-width: 90px;">Due Date</th>
                                             <th class="text-center py-2 px-2" style="min-width: 100px;">Reference</th>
@@ -173,9 +134,66 @@
     </div>
                                
     <!-- Scroll to top -->
-    <a class="scroll-to-top rounded" href="#page-top">
+    <a class="scroll-to-top rounded ledger-no-print" href="#page-top">
         <i class="fas fa-angle-up"></i>
     </a>
+
+    {{-- Official print layout (HWD consumer ledger) — filled by JS then window.print() --}}
+    <div id="ledgerPrintRoot" class="ledger-print-root" aria-hidden="true">
+        <div class="ledger-print-inner">
+            <div class="ledger-print-header text-center">
+                <div class="ledger-print-title">HAGONOY WATER DISTRICT</div>
+                <div class="ledger-print-sub">Guihing, Hagonoy</div>
+                <div class="ledger-print-heading">CONSUMER LEDGER</div>
+                <div class="ledger-print-year" id="printLedgerYear">{{ date('Y') }}</div>
+            </div>
+
+            <div class="ledger-print-meta row mt-3">
+                <div class="col-6">
+                    <div class="ledger-print-line"><span class="lbl">Acctno</span><span class="ledger-print-colon">:</span><span id="printAcctNo" class="val"></span></div>
+                    <div class="ledger-print-line"><span class="lbl">Name</span><span class="ledger-print-colon">:</span><span id="printName" class="val"></span></div>
+                    <div class="ledger-print-line"><span class="lbl">Address</span><span class="ledger-print-colon">:</span><span id="printAddress" class="val"></span></div>
+                </div>
+                <div class="col-6">
+                    <div class="ledger-print-line"><span class="lbl">Zone</span><span class="ledger-print-colon">:</span><span id="printZone" class="val"></span></div>
+                    <div class="ledger-print-line"><span class="lbl">Card No</span><span class="ledger-print-colon">:</span><span id="printCard" class="val"></span></div>
+                    <div class="ledger-print-line"><span class="lbl">Meter No</span><span class="ledger-print-colon">:</span><span id="printMeter" class="val"></span></div>
+                </div>
+            </div>
+
+            <hr class="ledger-print-rule" />
+
+            <table class="ledger-print-table" cellspacing="0" cellpadding="0">
+                <thead>
+                    <tr>
+                        <th class="c-date">DATE</th>
+                        <th class="c-trans">TRANS</th>
+                        <th class="c-ref">REFERENCE</th>
+                        <th class="c-num">READING</th>
+                        <th class="c-num">VOL</th>
+                        <th class="c-num">OTHERS</th>
+                        <th class="c-num">BILL AMT</th>
+                        <th class="c-num">DEBIT</th>
+                        <th class="c-num">CREDIT</th>
+                        <th class="c-num">BALANCE</th>
+                        <th class="c-user"></th>
+                    </tr>
+                </thead>
+                <tbody id="ledgerPrintRows"></tbody>
+            </table>
+
+            <div class="ledger-print-signatures row mt-4 pt-3">
+                <div class="col-6">
+                    <div class="ledger-print-sig-label">Prepared by:</div>
+                    <div class="ledger-print-sig-line"></div>
+                </div>
+                <div class="col-6">
+                    <div class="ledger-print-sig-label">Checked by:</div>
+                    <div class="ledger-print-sig-line"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     @include('consumer.shared-header-script')
 
@@ -197,11 +215,182 @@
         .bg-penalty {
             background-color: #fff3cd !important; /* Light yellow/warning color for penalties */
         }
+
+        /* Official ledger print (screen: hidden) — larger type, A4-safe */
+        .ledger-print-root {
+            display: none;
+        }
+        @page {
+            size: A4 portrait;
+            /* Page margins (used when the browser honors @page) */
+            margin: 12mm 11mm 14mm 11mm;
+        }
+        @media print {
+            .ledger-no-print {
+                display: none !important;
+            }
+            html, body {
+                margin: 0 !important;
+                padding: 0 !important;
+                background: #fff !important;
+            }
+            .ledger-print-root {
+                display: block !important;
+                visibility: visible !important;
+                position: static !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            /* Inner padding so content is never flush to paper edge if @page is ignored/minimized */
+            .ledger-print-inner {
+                font-size: 10.5pt !important;
+                padding: 6mm 9mm 8mm 9mm !important;
+                box-sizing: border-box !important;
+            }
+            .ledger-print-table {
+                font-size: 9.5pt !important;
+            }
+            .ledger-print-table th {
+                font-size: 8.5pt !important;
+            }
+        }
+        .ledger-print-inner {
+            font-family: 'Courier New', Courier, 'Liberation Mono', monospace;
+            font-size: 10.5pt;
+            line-height: 1.35;
+            color: #000;
+            max-width: 100%;
+            margin: 0 auto;
+            box-sizing: border-box;
+            /* Screen / forced print preview: visible inset (print uses mm above) */
+            padding: 1rem 1.25rem 1.25rem 1.25rem;
+        }
+        .ledger-print-title {
+            font-weight: 700;
+            font-size: 1.35rem;
+            letter-spacing: 0.02em;
+        }
+        .ledger-print-sub {
+            font-size: 1rem;
+            margin-top: 0.15rem;
+        }
+        .ledger-print-heading {
+            font-weight: 700;
+            margin-top: 0.35rem;
+            font-size: 1.08rem;
+        }
+        .ledger-print-year {
+            font-weight: 700;
+            margin-top: 0.2rem;
+            font-size: 1.08rem;
+        }
+        .ledger-print-meta .ledger-print-line {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 0.4rem;
+            line-height: 1.4;
+            font-size: 10pt;
+        }
+        .ledger-print-meta .lbl {
+            flex: 0 0 5.75rem;
+            font-weight: 700;
+            text-align: left;
+        }
+        .ledger-print-colon {
+            flex: 0 0 0.5rem;
+            margin-right: 0.35rem;
+        }
+        .ledger-print-meta .val {
+            flex: 1;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
+        .ledger-print-rule {
+            border: none;
+            border-top: 1px solid #000;
+            margin: 0.65rem 0 0.45rem;
+        }
+        .ledger-print-table {
+            width: 100%;
+            max-width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-size: 9.5pt;
+        }
+        .ledger-print-table thead {
+            display: table-header-group;
+        }
+        .ledger-print-table thead tr {
+            border-top: 1px solid #000;
+            border-bottom: 1px solid #000;
+        }
+        .ledger-print-table th,
+        .ledger-print-table td {
+            padding: 3px 4px;
+            vertical-align: top;
+            border: none;
+            overflow-wrap: anywhere;
+            word-wrap: break-word;
+        }
+        .ledger-print-table th {
+            font-weight: 700;
+            text-align: left;
+            font-size: 8.5pt;
+            line-height: 1.25;
+        }
+        .ledger-print-table th.c-num,
+        .ledger-print-table td.c-num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        /* DATE: room for MM/DD/YYYY on one line (print) */
+        .ledger-print-table th.c-date,
+        .ledger-print-table td.c-date {
+            width: 11%;
+            min-width: 5.25rem;
+            max-width: 6rem;
+            white-space: nowrap;
+            box-sizing: border-box;
+        }
+        .ledger-print-table th.c-trans {
+            width: 11%;
+        }
+        .ledger-print-table th.c-ref {
+            width: 13%;
+        }
+        .ledger-print-table td.c-trans,
+        .ledger-print-table td.c-ref {
+            text-align: left;
+        }
+        .ledger-print-table td.c-date {
+            text-align: left;
+        }
+        .ledger-print-table th.c-user {
+            width: 8%;
+        }
+        .ledger-print-table tbody tr {
+            border-bottom: 1px solid transparent;
+        }
+        .ledger-print-signatures .ledger-print-sig-label {
+            font-weight: 700;
+            margin-bottom: 0.35rem;
+            font-size: 10pt;
+        }
+        .ledger-print-sig-line {
+            border-bottom: 1px solid #000;
+            min-height: 1.85rem;
+            margin-top: 0.25rem;
+            max-width: 80%;
+        }
     </style>
 
     <script>
         $(document).ready(function() {
             let currentAccountNo = null;
+            /** Last successful ledger API payload (for official print layout) */
+            let lastLedgerPayload = null;
 
             // Format currency
             function formatCurrency(value) {
@@ -242,6 +431,7 @@
             // Load ledger data
             function loadLedgerData(accountNo, year) {
                 if (!accountNo) {
+                    lastLedgerPayload = null;
                     $('#ledgerTableBody').html(`
                         <tr>
                             <td colspan="14" class="text-center text-muted py-5">
@@ -277,8 +467,10 @@
                         console.log('Ledger response:', response);
                         if (response.success && response.ledgers) {
                             currentAccountNo = accountNo;
+                            lastLedgerPayload = response;
                             displayLedgerData(response);
                         } else {
+                            lastLedgerPayload = null;
                             $('#ledgerTableBody').html(`
                                 <tr>
                                     <td colspan="14" class="text-center text-muted py-5">
@@ -290,6 +482,7 @@
                         }
                     },
                     error: function(xhr) {
+                        lastLedgerPayload = null;
                         console.error('Error loading ledger:', xhr);
                         console.error('Response:', xhr.responseJSON);
                         $('#ledgerTableBody').html(`
@@ -304,6 +497,90 @@
                 });
             }
 
+            /** REFERENCE column only: strip leading TRANS when duplicate (e.g. "BILLING 31" → "31") */
+            function printReferenceOnly(trans, reference) {
+                const t = (trans || '').trim();
+                let r = (reference || '').trim();
+                if (!r) return '';
+                const ru = r.toUpperCase();
+                const tu = t.toUpperCase();
+                if (tu && ru.startsWith(tu + ' ')) {
+                    return r.substring(t.length).trim();
+                }
+                if (tu && ru === tu) return '';
+                return r;
+            }
+
+            function formatPrintNum(v, showZero) {
+                const n = parseFloat(v);
+                if (isNaN(n) || n === 0) return showZero ? '0.00' : '';
+                return formatCurrency(n);
+            }
+
+            /** Fill official print layout and trigger print dialog */
+            function printLedgerOfficial() {
+                if (!lastLedgerPayload || !lastLedgerPayload.ledgers || lastLedgerPayload.ledgers.length === 0) {
+                    alert('Please load a consumer ledger with transactions before printing.');
+                    return;
+                }
+                const data = lastLedgerPayload;
+                const ledgers = data.ledgers;
+                const summary = data.summary || {};
+                const consumer = data.consumer || {};
+                let sess = {};
+                try {
+                    const raw = sessionStorage.getItem('currentConsumer');
+                    if (raw) sess = JSON.parse(raw);
+                } catch (e) {}
+
+                const yearLabel = (summary.year !== undefined && summary.year !== null && String(summary.year).trim() !== '')
+                    ? String(summary.year)
+                    : ($('#ledgerYear').val() || new Date().getFullYear());
+                $('#printLedgerYear').text(yearLabel);
+
+                $('#printAcctNo').text(consumer.account_no || sess.account_no || '');
+                $('#printName').text(consumer.account_name || sess.account_name || '');
+                $('#printAddress').text(consumer.address1 || sess.address1 || '');
+                $('#printZone').text(consumer.zone_code || sess.zone_code || '');
+                const seq = consumer.sequence != null && consumer.sequence !== '' ? consumer.sequence : (sess.sequence != null && sess.sequence !== '' ? sess.sequence : '');
+                $('#printCard').text(seq !== '' ? String(seq) : '');
+                $('#printMeter').text(consumer.meter_number || sess.meter_number || '');
+
+                let rows = '';
+                ledgers.forEach(function(ledger) {
+                    const date = formatDate(ledger.date);
+                    const trans = (ledger.trans || '').trim();
+                    const ref = printReferenceOnly(ledger.trans, ledger.reference);
+                    const reading = ledger.reading !== null && ledger.reading !== undefined && String(ledger.reading).trim() !== ''
+                        ? String(ledger.reading) : '';
+                    const vol = ledger.volume !== null && ledger.volume !== undefined && String(ledger.volume).trim() !== ''
+                        ? String(ledger.volume) : '';
+                    const othersComb = (parseFloat(ledger.others) || 0) + (parseFloat(ledger.penalty) || 0);
+                    const billAmt = parseFloat(ledger.billamount) || 0;
+                    const debit = parseFloat(ledger.debit) || 0;
+                    const credit = parseFloat(ledger.credit) || 0;
+                    const balance = ledger.balance !== null && ledger.balance !== undefined ? parseFloat(ledger.balance) : 0;
+                    const uname = (ledger.username || '').toUpperCase();
+
+                    rows += '<tr>' +
+                        '<td class="c-date">' + date + '</td>' +
+                        '<td class="c-trans">' + $('<div>').text(trans).html() + '</td>' +
+                        '<td class="c-ref">' + $('<div>').text(ref).html() + '</td>' +
+                        '<td class="c-num">' + $('<div>').text(reading).html() + '</td>' +
+                        '<td class="c-num">' + $('<div>').text(vol).html() + '</td>' +
+                        '<td class="c-num">' + formatPrintNum(othersComb, false) + '</td>' +
+                        '<td class="c-num">' + formatPrintNum(billAmt, false) + '</td>' +
+                        '<td class="c-num">' + formatPrintNum(debit, false) + '</td>' +
+                        '<td class="c-num">' + formatPrintNum(credit, false) + '</td>' +
+                        '<td class="c-num">' + formatCurrency(balance) + '</td>' +
+                        '<td class="c-user">' + $('<div>').text(uname).html() + '</td>' +
+                        '</tr>';
+                });
+                $('#ledgerPrintRows').html(rows);
+
+                window.print();
+            }
+
             // Display ledger data
             function displayLedgerData(data) {
                 const ledgers = data.ledgers;
@@ -312,7 +589,12 @@
 
                 // Update account badge and keep header in sync with ledger (fix: header showing wrong consumer)
                 if (consumer) {
-                    $('#ledgerAccountBadge').text(`Account: ${consumer.account_no} - ${consumer.account_name}`);
+                    const accountNo = (consumer.account_no || consumer.account_number || '').toString().trim();
+                    const accountName = (consumer.account_name || consumer.name || '').toString().trim();
+                    const accountAddress = (consumer.address || consumer.address1 || '').toString().trim();
+                    const badgeParts = [accountNo, accountName];
+                    if (accountAddress) badgeParts.push(accountAddress);
+                    $('#ledgerAccountBadge').text(`Account: ${badgeParts.filter(Boolean).join(' - ')}`);
                     // Sync this consumer to sessionStorage and update header so header always matches ledger
                     try {
                         const stored = sessionStorage.getItem('currentConsumer');
@@ -443,9 +725,9 @@
                 }
             });
 
-            // Print button
+            // Print button — official HWD consumer ledger layout
             $('#printLedgerBtn').on('click', function() {
-                window.print();
+                printLedgerOfficial();
             });
 
             // Listen for consumer selection from other pages

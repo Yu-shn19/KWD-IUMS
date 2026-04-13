@@ -516,9 +516,10 @@ class ReportController extends Controller
     {
         $filterType = $request->input('filter_type', 'disconnection_date');
         
-        // If filter type is 3_consecutive, use DisconnectionController method
-        if ($filterType === '3_consecutive') {
+        // 2/3 consecutive unpaid months: reuse Disconnection screen logic
+        if (in_array($filterType, ['2_consecutive', '3_consecutive'], true)) {
             $disconnectionController = new \App\Http\Controllers\DisconnectionController();
+
             return $disconnectionController->index($request);
         }
         
@@ -579,9 +580,8 @@ class ReportController extends Controller
         if ($status && $status !== '') {
             $statusMap = [
                 'A - Active' => ['A', 'ACTIVE', 'Active', 'active'],
-                'I - Inactive' => ['I', 'INACTIVE', 'Inactive', 'inactive'],
-                'S - Suspended' => ['S', 'SUSPENDED', 'Suspended', 'suspended'],
-                'D - Disconnected' => ['D', 'DISCONNECTED', 'Disconnected', 'disconnected'],
+                'P - Pending' => ['P', 'PENDING', 'Pending', 'pending'],
+                'X - Disconnected' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
             ];
             if (isset($statusMap[$status])) {
                 $consumerQuery->whereIn('cz.status_code', $statusMap[$status]);
@@ -1022,13 +1022,16 @@ class ReportController extends Controller
             ->leftJoin('downloaded_readings as dr', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
             ->leftJoin('consumer_zone as cz', 'cp.consumer_id', '=', 'cz.id')
-            ->where('cp.payment_amount', '>', 0)
+            ->where(function ($q) {
+                $q->where('cp.payment_amount', '>', 0)
+                  ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
+            })
             ->select(
                 'cp.id',
                 'cp.or_number',
                 DB::raw('COALESCE(cp.paid_at, cp.created_at) as paid_date'),
                 DB::raw('COALESCE(dr.account_number, mrs.account_number, cz.account_no) as account_number'),
-                DB::raw('COALESCE(dr.account_name, mrs.account_name, cz.account_name) as account_name'),
+                DB::raw('COALESCE(dr.account_name, mrs.account_name, cz.account_name, cp.account_name) as account_name'),
                 DB::raw('COALESCE(dr.zone, mrs.zone, cz.zone_code) as zone'),
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
@@ -1040,7 +1043,8 @@ class ReportController extends Controller
                 'cp.arrears_py',
                 'cp.payment_method',
                 'cp.created_by as collector',
-                DB::raw('CASE 
+                DB::raw('CASE
+                    WHEN cp.remarks LIKE "Cancelled OR#%" THEN "cancelled"
                     WHEN cp.paid_at IS NOT NULL THEN "paid"
                     WHEN dr.status = "paid" THEN "paid"
                     ELSE "pending"
@@ -1095,12 +1099,19 @@ class ReportController extends Controller
                 });
             } elseif ($status === 'pending') {
                 $query->whereNull('cp.paid_at')
+                      ->where(function ($q) {
+                         $q->whereNull('cp.remarks')
+                           ->orWhere('cp.remarks', 'not like', 'Cancelled OR#%');
+                     })
                       ->where(function($q) {
                           $q->whereNull('dr.status')
                             ->orWhere('dr.status', '!=', 'paid');
                       });
             } elseif ($status === 'cancelled') {
-                $query->where('dr.status', 'cancelled');
+                $query->where(function ($q) {
+                    $q->where('dr.status', 'cancelled')
+                      ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
+                });
             }
         }
         // Get all records
@@ -1147,7 +1158,7 @@ class ReportController extends Controller
                 'zone' => $record->zone ?? '',
                 'bill_month' => $record->bill_month ?? 'N/A',
                 'amount' => '₱ ' . number_format((float)($record->payment_amount ?? 0), 2),
-                'payment_type' => ucfirst($record->payment_method ?? 'cash'),
+                'payment_type' => $record->payment_method ? ucfirst($record->payment_method) : '',
                 'collector' => $record->collector ?? 'N/A',
                 'status' => ucfirst($record->status ?? 'pending'),
             ];
@@ -1245,13 +1256,16 @@ class ReportController extends Controller
             ->leftJoin('downloaded_readings as dr', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
             ->leftJoin('consumer_zone as cz', 'cp.consumer_id', '=', 'cz.id')
-            ->where('cp.payment_amount', '>', 0)
+            ->where(function ($q) {
+                $q->where('cp.payment_amount', '>', 0)
+                  ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
+            })
             ->select(
                 'cp.id',
                 'cp.or_number',
                 DB::raw('COALESCE(cp.paid_at, cp.created_at) as paid_date'),
                 DB::raw('COALESCE(dr.account_number, mrs.account_number, cz.account_no) as account_number'),
-                DB::raw('COALESCE(dr.account_name, mrs.account_name, cz.account_name) as account_name'),
+                DB::raw('COALESCE(dr.account_name, mrs.account_name, cz.account_name, cp.account_name) as account_name'),
                 DB::raw('COALESCE(dr.zone, mrs.zone, cz.zone_code) as zone'),
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
@@ -1264,6 +1278,7 @@ class ReportController extends Controller
                 'cp.payment_method',
                 'cp.created_by as collector',
                 DB::raw('CASE 
+                    WHEN cp.remarks LIKE "Cancelled OR#%" THEN "cancelled"
                     WHEN cp.paid_at IS NOT NULL THEN "paid"
                     WHEN dr.status = "paid" THEN "paid"
                     ELSE "pending"
@@ -1319,11 +1334,18 @@ class ReportController extends Controller
             } elseif ($status === 'pending') {
                 $query->whereNull('cp.paid_at')
                       ->where(function ($q) {
+                          $q->whereNull('cp.remarks')
+                            ->orWhere('cp.remarks', 'not like', 'Cancelled OR#%');
+                      })
+                      ->where(function ($q) {
                           $q->whereNull('dr.status')
                             ->orWhere('dr.status', '!=', 'paid');
                       });
             } elseif ($status === 'cancelled') {
-                $query->where('dr.status', 'cancelled');
+                $query->where(function ($q) {
+                    $q->where('dr.status', 'cancelled')
+                      ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
+                });
             }
         }
 
@@ -1350,7 +1372,7 @@ class ReportController extends Controller
                 'Zone'          => $record->zone ?? '',
                 'Bill Month'    => $record->bill_month ?? 'N/A',
                 'Amount'        => round((float)($record->payment_amount ?? 0), 2),
-                'Payment Type'  => ucfirst($record->payment_method ?? 'cash'),
+                'Payment Type'  => $record->payment_method ? ucfirst($record->payment_method) : '',
                 'Collector'     => $record->collector ?? 'N/A',
                 'Status'        => ucfirst($record->status ?? 'pending'),
             ];
@@ -1527,6 +1549,8 @@ class ReportController extends Controller
                 'mrs.id as schedule_id',
                 'mrs.due_date as mrs_due_date',
                 'cl.due_date as cl_due_date',
+                'cl.trans',
+                'cl.id',
                 'cl.debit',
                 'cl.others',
                 'cl.credit',
@@ -1536,20 +1560,14 @@ class ReportController extends Controller
                 'mrs.bill_month',
                 'cl.consumer_zone_id'
             )
-            ->where('cl.balance', '>', 0)
-            ->where(function($q) {
-                $q->where('cl.trans', 'BILL')
-                  ->orWhere('cl.trans', 'like', '%BILL%');
-            })
             ->where('cl.date', '>=', $threeYearsAgo->format('Y-m-d')); // PERFORMANCE: Only last 3 years
 
         // Apply status filter
         if ($status && $status !== '' && $status !== 'All Status') {
             $statusMap = [
                 'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
-                'I - INACTIVE' => ['I', 'INACTIVE', 'Inactive', 'inactive'],
-                'S - SUSPENDED' => ['S', 'SUSPENDED', 'Suspended', 'suspended'],
-                'D - DISCONNECTED' => ['D', 'DISCONNECTED', 'Disconnected', 'disconnected'],
+                'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
+                'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
             ];
             if (isset($statusMap[$status])) {
                 $query->whereIn('cz.status_code', $statusMap[$status]);
@@ -1615,6 +1633,26 @@ class ReportController extends Controller
                     ORDER BY cl2.date DESC, cl2.id DESC 
                     LIMIT 1
                 )', [$prevYearEnd->format('Y-m-d')])
+                ->get()
+                ->pluck('balance', 'consumer_zone_id')
+                ->map(fn($balance) => (float) $balance);
+        }
+
+        // Latest ledger balance snapshot per consumer as of cutoff date (includes PAYMENT rows).
+        $asOfCutoffDate = ($billingCutOff ?? $asOf)->format('Y-m-d');
+        $latestAsOfBalances = collect();
+        if ($consumerZoneIds->isNotEmpty()) {
+            $latestAsOfBalances = DB::table('consumer_ledgers as cl1')
+                ->select('cl1.consumer_zone_id', 'cl1.balance')
+                ->whereIn('cl1.consumer_zone_id', $consumerZoneIds)
+                ->where('cl1.date', '<=', $asOfCutoffDate)
+                ->whereRaw('cl1.id = (
+                    SELECT cl2.id FROM consumer_ledgers cl2
+                    WHERE cl2.consumer_zone_id = cl1.consumer_zone_id
+                    AND cl2.date <= ?
+                    ORDER BY cl2.date DESC, cl2.id DESC
+                    LIMIT 1
+                )', [$asOfCutoffDate])
                 ->get()
                 ->pluck('balance', 'consumer_zone_id')
                 ->map(fn($balance) => (float) $balance);
@@ -1714,9 +1752,8 @@ class ReportController extends Controller
             if ($cz && $status && $status !== '' && $status !== 'All Status') {
                 $statusMap = [
                     'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
-                    'I - INACTIVE' => ['I', 'INACTIVE', 'Inactive', 'inactive'],
-                    'S - SUSPENDED' => ['S', 'SUSPENDED', 'Suspended', 'suspended'],
-                    'D - DISCONNECTED' => ['D', 'DISCONNECTED', 'Disconnected', 'disconnected'],
+                    'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
+                    'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
                 ];
                 $czStatus = $cz->status_code ?? '';
                 $shouldInclude = false;
@@ -1771,45 +1808,6 @@ class ReportController extends Controller
         // Use ALL records from consumer_ledgers only
         $allRecords = $records;
 
-        // Get latest downloaded_readings per account (MySQL 5.7/MariaDB compatible: no window functions)
-        $latestDownloadedSub = DB::table('downloaded_readings as dr')
-            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->where(function($q) {
-                $q->where(function($q2) {
-                    $q2->where('dr.status', '!=', 'paid')
-                       ->orWhereNull('dr.status')
-                       ->orWhereNull('dr.paid_at');
-                })
-                ->where(function($q3) {
-                    $q3->where('dr.current_bill', '>', 0)
-                       ->orWhere('mrs.current_bill', '>', 0);
-                });
-            })
-            ->select('dr.account_number', DB::raw('MAX(dr.id) as latest_dr_id'))
-            ->groupBy('dr.account_number');
-
-        $latestDownloadedReadings = DB::table('downloaded_readings as dr')
-            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->joinSub($latestDownloadedSub, 'latest_dr', function($join) {
-                $join->on('dr.id', '=', 'latest_dr.latest_dr_id');
-            })
-            ->select(
-                'dr.account_number',
-                'dr.current_bill as downloaded_current_bill',
-                'mrs.current_bill as schedule_current_bill',
-                'mrs.due_date',
-                'mrs.bill_month',
-                'mrs.id as schedule_id'
-            )
-            ->get()
-            ->keyBy('account_number');
-
-        // Also map normalized account numbers (without dashes) for lookup
-        $latestDownloadedReadingsNormalized = $latestDownloadedReadings->mapWithKeys(function ($item) {
-            $normalized = str_replace('-', '', $item->account_number ?? '');
-            return $normalized ? [$normalized => $item] : [];
-        });
-
         // Group by account and calculate aging buckets
         $accountGroups = $allRecords->groupBy('account_number');
         $detailRecords = [];
@@ -1825,6 +1823,18 @@ class ReportController extends Controller
         ];
 
         foreach ($accountGroups as $accountNumber => $accountBills) {
+            $accountBills = $accountBills->sortBy(function ($row) {
+                $ts = null;
+                if (! empty($row->transaction_date)) {
+                    try {
+                        $ts = Carbon::parse($row->transaction_date)->timestamp;
+                    } catch (\Exception $e) {
+                        $ts = null;
+                    }
+                }
+                return sprintf('%020d-%010d', (int) ($ts ?? 0), (int) ($row->id ?? 0));
+            })->values();
+
             $firstBill = $accountBills->first();
             $current = 0;
             $days_1_30 = 0;
@@ -1833,242 +1843,107 @@ class ReportController extends Controller
             $days_91_120 = 0;
             $over_120 = 0;
             $prev_house = 0;
-            $total_balance = 0; // Will be calculated as sum of all individually aged bills
+            $total_balance = 0;
 
-            // Get the latest downloaded_reading for this account from the pre-fetched collection
-            $latestDownloadedReading = $latestDownloadedReadings->get($accountNumber);
-            if (!$latestDownloadedReading) {
-                $normalizedAcc = str_replace('-', '', $accountNumber);
-                $latestDownloadedReading = $latestDownloadedReadingsNormalized->get($normalizedAcc);
+            $consumerZoneId = $firstBill->consumer_zone_id ?? null;
+            $latestLedger = $accountBills->last();
+            $accountOutstanding = max(0, (float) (
+                ($consumerZoneId !== null && $latestAsOfBalances->has($consumerZoneId))
+                    ? $latestAsOfBalances->get($consumerZoneId)
+                    : ($latestLedger->balance ?? 0)
+            ));
+            if ($accountOutstanding <= 0) {
+                continue;
             }
 
-            // Get current bill amount from latest downloaded_reading
-            $latestCurrentBill = 0;
-            $latestDueDate = null;
-            $latestBillMonth = null;
-            $latestScheduleId = null;
-            if ($latestDownloadedReading) {
-                $latestCurrentBill = (float)($latestDownloadedReading->downloaded_current_bill ?? $latestDownloadedReading->schedule_current_bill ?? 0);
-                $latestDueDate = $latestDownloadedReading->due_date ? Carbon::parse($latestDownloadedReading->due_date) : null;
-                $latestBillMonth = $latestDownloadedReading->bill_month ? Carbon::parse($latestDownloadedReading->bill_month) : null;
-                $latestScheduleId = $latestDownloadedReading->schedule_id;
-            }
-            
-            // Also try to find by matching account number variations
-            if (!$latestDownloadedReading && $accountNumber) {
-                $normalizedAccount = str_replace('-', '', $accountNumber);
-                $latestDownloadedReading = $latestDownloadedReadings->first(function($item) use ($accountNumber, $normalizedAccount) {
-                    $itemAccount = $item->account_number ?? '';
-                    $itemNormalized = str_replace('-', '', $itemAccount);
-                    return $itemAccount === $accountNumber || $itemNormalized === $normalizedAccount;
-                });
-                
-                if ($latestDownloadedReading) {
-                    $latestCurrentBill = (float)($latestDownloadedReading->downloaded_current_bill ?? $latestDownloadedReading->schedule_current_bill ?? 0);
-                    $latestDueDate = $latestDownloadedReading->due_date ? Carbon::parse($latestDownloadedReading->due_date) : null;
-                    $latestBillMonth = $latestDownloadedReading->bill_month ? Carbon::parse($latestDownloadedReading->bill_month) : null;
-                    $latestScheduleId = $latestDownloadedReading->schedule_id;
+            $parseDate = function ($value) {
+                if (empty($value)) {
+                    return null;
                 }
-            }
+                try {
+                    return Carbon::parse($value);
+                } catch (\Exception $e) {
+                    return null;
+                }
+            };
 
-            // Separate past bills (from consumer_ledgers) from current bill (from downloaded_readings)
-            // Past bills: Age based on consumer_ledgers due_date or transaction_date
-            // Current bill: Age based on meter_reading_schedules.due_date from downloaded_readings
-            // Separate bills by year: Previous year bills go to Prev_Year, current year bills go to aging buckets
-            
-            $currentBillProcessed = false;
-            
+            $billItems = [];
             foreach ($accountBills as $bill) {
-                // Check if this is from consumer_ledgers (past bills) or downloaded_readings (current bill)
-                $isFromLedger = isset($bill->debit);
-                $isFromDownloaded = !$isFromLedger && (isset($bill->downloaded_current_bill) || isset($bill->schedule_current_bill));
-                
-                // Determine the year of this bill
-                $billYear = null;
-                $billMonth = $bill->bill_month ? Carbon::parse($bill->bill_month) : null;
-                if ($billMonth) {
-                    $billYear = (int)$billMonth->format('Y');
-                } elseif (!empty($bill->transaction_date)) {
-                    try {
-                        $billYear = (int)Carbon::parse($bill->transaction_date)->format('Y');
-                    } catch (\Exception $e) {
-                        // Use current year as fallback
-                        $billYear = $currentYear;
-                    }
-                } else {
-                    // Use current year as fallback
-                    $billYear = $currentYear;
+                $trans = strtoupper(trim((string) ($bill->trans ?? '')));
+                $isBill = $trans === 'BILL' || str_contains($trans, 'BILL');
+                $debit = max(0, (float) ($bill->debit ?? 0));
+                $credit = max(0, (float) ($bill->credit ?? 0));
+                $dueDate = $parseDate($bill->mrs_due_date) ?? $parseDate($bill->cl_due_date) ?? $parseDate($bill->transaction_date);
+
+                if ($isBill && $debit > 0) {
+                    $billItems[] = [
+                        'remaining' => $debit,
+                        'due_date' => $dueDate,
+                    ];
                 }
-                
-                // Check if this is from previous year
-                $isPreviousYear = ($billYear < $currentYear);
-                
-                // Check if this matches the latest bill
-                $isLatestBill = false;
-                
-                if ($latestBillMonth && $billMonth) {
-                    $latestMonthStr = $latestBillMonth->format('Y-m');
-                    $billMonthStr = $billMonth->format('Y-m');
-                    $isLatestBill = ($latestMonthStr === $billMonthStr);
-                }
-                
-                if (!$isLatestBill && $latestScheduleId && isset($bill->schedule_id)) {
-                    $isLatestBill = ($bill->schedule_id == $latestScheduleId);
-                }
-                
-                // If this is the latest bill and it's from downloaded_readings, handle it separately
-                if ($isLatestBill && $isFromDownloaded && $latestCurrentBill > 0) {
-                    // This is the current/latest bill from downloaded_readings
-                    // Check if it's from previous year
-                    $latestBillYear = $latestBillMonth ? (int)$latestBillMonth->format('Y') : $currentYear;
-                    
-                    if ($latestBillYear < $currentYear) {
-                        // Latest bill is from previous year - skip (prev_house comes from prevYearBalances)
-                        // Do not add to prev_house here
-                    } else {
-                        // Latest bill is from current year - age it based on meter_reading_schedules.due_date
-                        $dueDate = $latestDueDate;
-                        
-                        if ($dueDate) {
-                            $daysPastDue = $asOf->diffInDays($dueDate, false);
-                            
-                            if ($daysPastDue < 0) {
-                                $current += $latestCurrentBill;
-                            } elseif ($daysPastDue <= 30) {
-                                $days_1_30 += $latestCurrentBill;
-                            } elseif ($daysPastDue <= 60) {
-                                $days_31_60 += $latestCurrentBill;
-                            } elseif ($daysPastDue <= 90) {
-                                $days_61_90 += $latestCurrentBill;
-                            } elseif ($daysPastDue <= 120) {
-                                $days_91_120 += $latestCurrentBill;
-                            } else {
-                                $over_120 += $latestCurrentBill;
-                            }
-                        } else {
-                            $current += $latestCurrentBill;
+
+                if ($credit > 0) {
+                    $remainingPayment = $credit;
+                    foreach ($billItems as &$item) {
+                        if ($remainingPayment <= 0) {
+                            break;
                         }
+                        if ($item['remaining'] <= 0) {
+                            continue;
+                        }
+                        $alloc = min($item['remaining'], $remainingPayment);
+                        $item['remaining'] -= $alloc;
+                        $remainingPayment -= $alloc;
                     }
-                    
-                    $currentBillProcessed = true;
-                    continue; // Skip this bill in the past bills processing
+                    unset($item);
                 }
-                
-                // Past bills from consumer_ledgers - only process current year bills
-                if ($isFromLedger) {
-                    // Skip previous year bills - they are handled by prevYearBalances
-                    if ($isPreviousYear) {
+            }
+
+            $openTotal = 0.0;
+            foreach ($billItems as $item) {
+                $openTotal += max(0, (float) ($item['remaining'] ?? 0));
+            }
+
+            if ($openTotal <= 0) {
+                $current += $accountOutstanding;
+            } else {
+                $factor = $accountOutstanding / $openTotal;
+                foreach ($billItems as $item) {
+                    $remaining = max(0, (float) ($item['remaining'] ?? 0)) * $factor;
+                    if ($remaining <= 0) {
                         continue;
                     }
-                    
-                    // Use the EXACT balance from consumer_ledgers table
-                    $billOutstandingBalance = (float)($bill->balance ?? 0);
-                    
-                    // Include meter rental (20 pesos from 'others' field) in the balance
-                    $meterRental = (float)($bill->others ?? 20.00);
-                    $totalBalanceWithRental = $billOutstandingBalance + $meterRental;
-                    
-                    if ($totalBalanceWithRental <= 0) {
-                        continue; // Skip if no balance
+                    $dueDate = $item['due_date'] ?? null;
+                    if (! $dueDate) {
+                        $current += $remaining;
+                        continue;
                     }
-                    
-                    // Bill is from current year - age it based on due_date
-                    $dueDate = null;
-                    if (!empty($bill->mrs_due_date)) {
-                        try {
-                            $dueDate = Carbon::parse($bill->mrs_due_date);
-                        } catch (\Exception $e) {
-                            $dueDate = null;
-                        }
+                    $ageYear = (int) $dueDate->format('Y');
+                    if ($ageYear < $currentYear) {
+                        $prev_house += $remaining;
+                        continue;
                     }
-                    
-                    if (!$dueDate && !empty($bill->cl_due_date)) {
-                        try {
-                            $dueDate = Carbon::parse($bill->cl_due_date);
-                        } catch (\Exception $e) {
-                            $dueDate = null;
-                        }
-                    }
-                    
-                    // If no due_date, use transaction_date from consumer_ledgers as fallback
-                    if (!$dueDate && !empty($bill->transaction_date)) {
-                        try {
-                            $dueDate = Carbon::parse($bill->transaction_date);
-                        } catch (\Exception $e) {
-                            $dueDate = null;
-                        }
-                    }
-                    
-                    // Age this current year bill (with meter rental included)
-                    if ($dueDate) {
-                        $daysPastDue = $asOf->diffInDays($dueDate, false);
-                        
-                        if ($daysPastDue < 0) {
-                            $current += $totalBalanceWithRental; // Includes 20 peso meter rental
-                        } elseif ($daysPastDue <= 30) {
-                            $days_1_30 += $totalBalanceWithRental;
-                        } elseif ($daysPastDue <= 60) {
-                            $days_31_60 += $totalBalanceWithRental;
-                        } elseif ($daysPastDue <= 90) {
-                            $days_61_90 += $totalBalanceWithRental;
-                        } elseif ($daysPastDue <= 120) {
-                            $days_91_120 += $totalBalanceWithRental;
-                        } else {
-                            $over_120 += $totalBalanceWithRental;
-                        }
-                    } else {
-                        // No due date - put in Current bucket (includes 20 peso meter rental)
-                        $current += $totalBalanceWithRental;
-                    }
-                }
-            }
-            
-            // Handle latest current bill from downloaded_readings if it wasn't already processed
-            // This handles cases where the latest bill exists in downloaded_readings but not in consumer_ledgers
-            if (!$currentBillProcessed && $latestCurrentBill > 0) {
-                // Check if latest bill is from previous year
-                $latestBillYear = $latestBillMonth ? (int)$latestBillMonth->format('Y') : $currentYear;
-                
-                if ($latestBillYear < $currentYear) {
-                    // Latest bill is from previous year - skip (prev_house comes from prevYearBalances)
-                    // Do not add to prev_house here
-                } elseif ($latestDueDate) {
-                    // Latest bill is from current year - age it based on meter_reading_schedules.due_date
-                    $daysPastDue = $asOf->diffInDays($latestDueDate, false);
-                    
+                    $daysPastDue = $asOf->diffInDays($dueDate, false);
                     if ($daysPastDue < 0) {
-                        $current += $latestCurrentBill;
+                        $current += $remaining;
                     } elseif ($daysPastDue <= 30) {
-                        $days_1_30 += $latestCurrentBill;
+                        $days_1_30 += $remaining;
                     } elseif ($daysPastDue <= 60) {
-                        $days_31_60 += $latestCurrentBill;
+                        $days_31_60 += $remaining;
                     } elseif ($daysPastDue <= 90) {
-                        $days_61_90 += $latestCurrentBill;
+                        $days_61_90 += $remaining;
                     } elseif ($daysPastDue <= 120) {
-                        $days_91_120 += $latestCurrentBill;
+                        $days_91_120 += $remaining;
                     } else {
-                        $over_120 += $latestCurrentBill;
+                        $over_120 += $remaining;
                     }
-                } else {
-                    // Latest bill has no due date - put in Current bucket
-                    $current += $latestCurrentBill;
                 }
             }
 
-            // Set Prev_Year from pre-computed ledger balances (balance as of end of previous year)
-            $consumerZoneId = $firstBill->consumer_zone_id ?? null;
-            if ($consumerZoneId !== null && $consumerZoneId !== '' && $prevYearBalances->has($consumerZoneId)) {
-                $prev_house = max(0, (float) $prevYearBalances->get($consumerZoneId));
-            }
-            
-            // Ensure prev_house is never negative (safeguard)
             $prev_house = max(0, $prev_house);
             
-            // Total balance = sum of aging buckets (EXCLUDING CURRENT)
-            // CURRENT is for display only, not included in balance calculation
-            // PREV YEAR is the balance as of December 31 of last year (pre-computed)
-            // Balance = 30 DAYS + 60 DAYS + 90 DAYS + 120 DAYS + OVER 120 + PREV YEAR
-            $total_balance = $days_1_30 + $days_31_60 + $days_61_90 + $days_91_120 + $over_120 + $prev_house;
+            // Total balance = sum of all buckets including CURRENT.
+            $total_balance = $current + $days_1_30 + $days_31_60 + $days_61_90 + $days_91_120 + $over_120 + $prev_house;
 
             // Get category - prioritize from meter_reading_schedules, fallback to consumer_zone.category_code
             $categoryCode = $firstBill->schedule_category ?? $firstBill->consumer_category ?? '';
@@ -2080,8 +1955,8 @@ class ReportController extends Controller
                 'account_name' => $firstBill->account_name ?? '',
                 'status_code' => $firstBill->status_code ?? '',
                 'category_code' => $categoryCode,
-                // Expose downloaded current bill explicitly for the view
-                'current_bill' => round($latestCurrentBill, 2),
+                // With ledger-only logic, current_bill reflects the computed current bucket.
+                'current_bill' => round($current, 2),
                 'current' => round($current, 2),
                 'days_1_30' => round($days_1_30, 2),
                 'days_31_60' => round($days_31_60, 2),
@@ -2278,6 +2153,8 @@ class ReportController extends Controller
                     'mrs.id as schedule_id',
                     'mrs.due_date as mrs_due_date',
                     'cl.due_date as cl_due_date',
+                    'cl.trans',
+                    'cl.id',
                     'cl.debit',
                     'cl.others',
                     'cl.credit',
@@ -2287,20 +2164,14 @@ class ReportController extends Controller
                     'mrs.bill_month',
                     'cl.consumer_zone_id'
                 )
-                ->where('cl.balance', '>', 0)
-                ->where(function($q) {
-                    $q->where('cl.trans', 'BILL')
-                      ->orWhere('cl.trans', 'like', '%BILL%');
-                })
                 ->where('cl.date', '>=', $threeYearsAgo->format('Y-m-d'));
 
             // Apply status filter
             if ($status && $status !== '' && $status !== 'All Status') {
                 $statusMap = [
                     'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
-                    'I - INACTIVE' => ['I', 'INACTIVE', 'Inactive', 'inactive'],
-                    'S - SUSPENDED' => ['S', 'SUSPENDED', 'Suspended', 'suspended'],
-                    'D - DISCONNECTED' => ['D', 'DISCONNECTED', 'Disconnected', 'disconnected'],
+                    'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
+                    'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
                 ];
                 if (isset($statusMap[$status])) {
                     $query->whereIn('cz.status_code', $statusMap[$status]);
@@ -2359,49 +2230,43 @@ class ReportController extends Controller
                     ->map(fn($balance) => (float) $balance);
             }
 
-            // Get latest downloaded_readings per account
-            $latestDownloadedSub = DB::table('downloaded_readings as dr')
-                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-                ->where(function($q) {
-                    $q->where(function($q2) {
-                        $q2->where('dr.status', '!=', 'paid')
-                           ->orWhereNull('dr.status')
-                           ->orWhereNull('dr.paid_at');
-                    })
-                    ->where(function($q3) {
-                        $q3->where('dr.current_bill', '>', 0)
-                           ->orWhere('mrs.current_bill', '>', 0);
-                    });
-                })
-                ->select('dr.account_number', DB::raw('MAX(dr.id) as latest_dr_id'))
-                ->groupBy('dr.account_number');
-
-            $latestDownloadedReadings = DB::table('downloaded_readings as dr')
-                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-                ->joinSub($latestDownloadedSub, 'latest_dr', function($join) {
-                    $join->on('dr.id', '=', 'latest_dr.latest_dr_id');
-                })
-                ->select(
-                    'dr.account_number',
-                    'dr.current_bill as downloaded_current_bill',
-                    'mrs.current_bill as schedule_current_bill',
-                    'mrs.due_date',
-                    'mrs.bill_month',
-                    'mrs.id as schedule_id'
-                )
-                ->get()
-                ->keyBy('account_number');
-
-            $latestDownloadedReadingsNormalized = $latestDownloadedReadings->mapWithKeys(function ($item) {
-                $normalized = str_replace('-', '', $item->account_number ?? '');
-                return $normalized ? [$normalized => $item] : [];
-            });
+            // Latest ledger balance snapshot per consumer as of cutoff date (includes PAYMENT rows).
+            $asOfCutoffDate = ($billingCutOff ?? $asOf)->format('Y-m-d');
+            $latestAsOfBalances = collect();
+            if ($consumerZoneIds->isNotEmpty()) {
+                $latestAsOfBalances = DB::table('consumer_ledgers as cl1')
+                    ->select('cl1.consumer_zone_id', 'cl1.balance')
+                    ->whereIn('cl1.consumer_zone_id', $consumerZoneIds)
+                    ->where('cl1.date', '<=', $asOfCutoffDate)
+                    ->whereRaw('cl1.id = (
+                        SELECT cl2.id FROM consumer_ledgers cl2
+                        WHERE cl2.consumer_zone_id = cl1.consumer_zone_id
+                        AND cl2.date <= ?
+                        ORDER BY cl2.date DESC, cl2.id DESC
+                        LIMIT 1
+                    )', [$asOfCutoffDate])
+                    ->get()
+                    ->pluck('balance', 'consumer_zone_id')
+                    ->map(fn($balance) => (float) $balance);
+            }
 
             // Group by account and calculate aging buckets (same logic as arAgingSummary)
             $accountGroups = $records->groupBy('account_number');
             $detailRecords = [];
 
             foreach ($accountGroups as $accountNumber => $accountBills) {
+                $accountBills = $accountBills->sortBy(function ($row) {
+                    $ts = null;
+                    if (! empty($row->transaction_date)) {
+                        try {
+                            $ts = Carbon::parse($row->transaction_date)->timestamp;
+                        } catch (\Exception $e) {
+                            $ts = null;
+                        }
+                    }
+                    return sprintf('%020d-%010d', (int) ($ts ?? 0), (int) ($row->id ?? 0));
+                })->values();
+
                 $firstBill = $accountBills->first();
                 $current = 0;
                 $days_1_30 = 0;
@@ -2410,142 +2275,118 @@ class ReportController extends Controller
                 $days_91_120 = 0;
                 $over_120 = 0;
                 $prev_house = 0;
-
-                $latestDownloadedReading = $latestDownloadedReadings->get($accountNumber);
-                if (!$latestDownloadedReading) {
-                    $normalizedAcc = str_replace('-', '', $accountNumber);
-                    $latestDownloadedReading = $latestDownloadedReadingsNormalized->get($normalizedAcc);
-                }
-
-                $latestCurrentBill = 0;
-                $latestDueDate = null;
-                $latestBillMonth = null;
-                $latestScheduleId = null;
-                if ($latestDownloadedReading) {
-                    $latestCurrentBill = (float)($latestDownloadedReading->downloaded_current_bill ?? $latestDownloadedReading->schedule_current_bill ?? 0);
-                    $latestDueDate = $latestDownloadedReading->due_date ? Carbon::parse($latestDownloadedReading->due_date) : null;
-                    $latestBillMonth = $latestDownloadedReading->bill_month ? Carbon::parse($latestDownloadedReading->bill_month) : null;
-                    $latestScheduleId = $latestDownloadedReading->schedule_id;
-                }
-
-                $currentBillProcessed = false;
-                
-                foreach ($accountBills as $bill) {
-                    $isFromLedger = isset($bill->debit);
-                    $billYear = $bill->bill_month ? (int)Carbon::parse($bill->bill_month)->format('Y') : (int)Carbon::parse($bill->transaction_date)->format('Y');
-                    
-                    if ($billYear < $currentYear) {
-                        // Previous year bill - add to prev_house
-                        $debit = (float)($bill->debit ?? 0);
-                        $credit = (float)($bill->credit ?? 0);
-                        $billBalance = max(0, $debit - $credit);
-                        $prev_house += $billBalance;
-                    } else {
-                        // Current year bill - age it
-                        $debit = (float)($bill->debit ?? 0);
-                        $others = (float)($bill->others ?? 20.00);
-                        $credit = (float)($bill->credit ?? 0);
-                        $baseBill = max(0, $debit - $others);
-                        $totalBalanceWithRental = max(0, $baseBill + $others - $credit);
-                        
-                        if ($latestScheduleId && $bill->schedule_id == $latestScheduleId) {
-                            $currentBillProcessed = true;
-                        }
-                        
-                        $dueDate = null;
-                        if ($bill->mrs_due_date) {
-                            try {
-                                $dueDate = Carbon::parse($bill->mrs_due_date);
-                            } catch (\Exception $e) {
-                                $dueDate = null;
-                            }
-                        }
-                        if (!$dueDate && $bill->cl_due_date) {
-                            try {
-                                $dueDate = Carbon::parse($bill->cl_due_date);
-                            } catch (\Exception $e) {
-                                $dueDate = null;
-                            }
-                        }
-                        if (!$dueDate && !empty($bill->transaction_date)) {
-                            try {
-                                $dueDate = Carbon::parse($bill->transaction_date);
-                            } catch (\Exception $e) {
-                                $dueDate = null;
-                            }
-                        }
-                        
-                        if ($dueDate) {
-                            $daysPastDue = $asOf->diffInDays($dueDate, false);
-                            
-                            if ($daysPastDue < 0) {
-                                $current += $totalBalanceWithRental;
-                            } elseif ($daysPastDue <= 30) {
-                                $days_1_30 += $totalBalanceWithRental;
-                            } elseif ($daysPastDue <= 60) {
-                                $days_31_60 += $totalBalanceWithRental;
-                            } elseif ($daysPastDue <= 90) {
-                                $days_61_90 += $totalBalanceWithRental;
-                            } elseif ($daysPastDue <= 120) {
-                                $days_91_120 += $totalBalanceWithRental;
-                            } else {
-                                $over_120 += $totalBalanceWithRental;
-                            }
-                        } else {
-                            $current += $totalBalanceWithRental;
-                        }
-                    }
-                }
-                
-                if (!$currentBillProcessed && $latestCurrentBill > 0) {
-                    $latestBillYear = $latestBillMonth ? (int)$latestBillMonth->format('Y') : $currentYear;
-                    
-                    if ($latestBillYear >= $currentYear && $latestDueDate) {
-                        $daysPastDue = $asOf->diffInDays($latestDueDate, false);
-                        
-                        if ($daysPastDue < 0) {
-                            $current += $latestCurrentBill;
-                        } elseif ($daysPastDue <= 30) {
-                            $days_1_30 += $latestCurrentBill;
-                        } elseif ($daysPastDue <= 60) {
-                            $days_31_60 += $latestCurrentBill;
-                        } elseif ($daysPastDue <= 90) {
-                            $days_61_90 += $latestCurrentBill;
-                        } elseif ($daysPastDue <= 120) {
-                            $days_91_120 += $latestCurrentBill;
-                        } else {
-                            $over_120 += $latestCurrentBill;
-                        }
-                    } elseif (!$latestDueDate) {
-                        $current += $latestCurrentBill;
-                    }
-                }
+                $total_balance = 0;
 
                 $consumerZoneId = $firstBill->consumer_zone_id ?? null;
-                if ($consumerZoneId !== null && $consumerZoneId !== '' && $prevYearBalances->has($consumerZoneId)) {
-                    $prev_house = max(0, (float) $prevYearBalances->get($consumerZoneId));
+                $latestLedger = $accountBills->last();
+                $accountOutstanding = max(0, (float) (
+                    ($consumerZoneId !== null && $latestAsOfBalances->has($consumerZoneId))
+                        ? $latestAsOfBalances->get($consumerZoneId)
+                        : ($latestLedger->balance ?? 0)
+                ));
+                if ($accountOutstanding <= 0) {
+                    continue;
                 }
-                
+
+                $parseDate = function ($value) {
+                    if (empty($value)) {
+                        return null;
+                    }
+                    try {
+                        return Carbon::parse($value);
+                    } catch (\Exception $e) {
+                        return null;
+                    }
+                };
+
+                $billItems = [];
+                foreach ($accountBills as $bill) {
+                    $trans = strtoupper(trim((string) ($bill->trans ?? '')));
+                    $isBill = $trans === 'BILL' || str_contains($trans, 'BILL');
+                    $debit = max(0, (float) ($bill->debit ?? 0));
+                    $credit = max(0, (float) ($bill->credit ?? 0));
+                    $dueDate = $parseDate($bill->mrs_due_date) ?? $parseDate($bill->cl_due_date) ?? $parseDate($bill->transaction_date);
+
+                    if ($isBill && $debit > 0) {
+                        $billItems[] = [
+                            'remaining' => $debit,
+                            'due_date' => $dueDate,
+                        ];
+                    }
+
+                    if ($credit > 0) {
+                        $remainingPayment = $credit;
+                        foreach ($billItems as &$item) {
+                            if ($remainingPayment <= 0) {
+                                break;
+                            }
+                            if ($item['remaining'] <= 0) {
+                                continue;
+                            }
+                            $alloc = min($item['remaining'], $remainingPayment);
+                            $item['remaining'] -= $alloc;
+                            $remainingPayment -= $alloc;
+                        }
+                        unset($item);
+                    }
+                }
+
+                $openTotal = 0.0;
+                foreach ($billItems as $item) {
+                    $openTotal += max(0, (float) ($item['remaining'] ?? 0));
+                }
+
+                if ($openTotal <= 0) {
+                    $current += $accountOutstanding;
+                } else {
+                    $factor = $accountOutstanding / $openTotal;
+                    foreach ($billItems as $item) {
+                        $remaining = max(0, (float) ($item['remaining'] ?? 0)) * $factor;
+                        if ($remaining <= 0) {
+                            continue;
+                        }
+                        $dueDate = $item['due_date'] ?? null;
+                        if (! $dueDate) {
+                            $current += $remaining;
+                            continue;
+                        }
+                        $ageYear = (int) $dueDate->format('Y');
+                        if ($ageYear < $currentYear) {
+                            $prev_house += $remaining;
+                            continue;
+                        }
+                        $daysPastDue = $asOf->diffInDays($dueDate, false);
+                        if ($daysPastDue < 0) {
+                            $current += $remaining;
+                        } elseif ($daysPastDue <= 30) {
+                            $days_1_30 += $remaining;
+                        } elseif ($daysPastDue <= 60) {
+                            $days_31_60 += $remaining;
+                        } elseif ($daysPastDue <= 90) {
+                            $days_61_90 += $remaining;
+                        } elseif ($daysPastDue <= 120) {
+                            $days_91_120 += $remaining;
+                        } else {
+                            $over_120 += $remaining;
+                        }
+                    }
+                }
+
                 $prev_house = max(0, $prev_house);
-                $total_balance = $days_1_30 + $days_31_60 + $days_61_90 + $days_91_120 + $over_120 + $prev_house;
+                $total_balance = $current + $days_1_30 + $days_31_60 + $days_61_90 + $days_91_120 + $over_120 + $prev_house;
 
                 $categoryCode = $firstBill->schedule_category ?? $firstBill->consumer_category ?? '';
 
                 $detailRecords[] = [
-                    'Zone_code' => $firstBill->zone ?? '',
-                    'Sequence' => $firstBill->sequence ?? 0,
                     'ACCOUNT NO' => $accountNumber,
                     'ACCOUNT NAME' => $firstBill->account_name ?? '',
-                    'STATUS' => $firstBill->status_code ?? '',
-                    'Category_code' => $categoryCode,
-                    'CURRENT' => round($current, 2),
-                    '30 DAYS' => round($days_1_30, 2),
-                    '60 DAYS' => round($days_31_60, 2),
-                    '90 DAYS' => round($days_61_90, 2),
-                    '120 DAYS' => round($days_91_120, 2),
-                    'OVER 120' => round($over_120, 2),
-                    'PREV YEAR' => round($prev_house, 2),
-                    'BALANCE' => round($total_balance, 2),
+                    'current' => round($current, 2),
+                    '_30' => round($days_1_30, 2),
+                    '_60' => round($days_31_60, 2),
+                    '_90' => round($days_61_90, 2),
+                    '_over90' => round($over_120, 2),
+                    'prev_year' => round($prev_house, 2),
+                    'balance' => round($total_balance, 2),
                 ];
             }
 

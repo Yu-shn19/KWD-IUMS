@@ -3,6 +3,59 @@
 @include('partials.header')
 
 <body id="page-top">
+    <style>
+        #readingGuidePrintSheet { display: none; }
+        @media print {
+            body.print-reading-guide #wrapper,
+            body.print-reading-guide .scroll-to-top,
+            body.print-reading-guide .modal,
+            body.print-reading-guide script { display: none !important; }
+            body.print-reading-guide #readingGuidePrintSheet {
+                display: block !important;
+                padding: 8mm;
+                font-family: Arial, Helvetica, sans-serif;
+                color: #111;
+            }
+            body.print-reading-guide #readingGuidePrintSheet .rg-title {
+                font-size: 22px;
+                font-weight: 700;
+                margin: 0;
+                line-height: 1.2;
+            }
+            body.print-reading-guide #readingGuidePrintSheet .rg-subtitle {
+                font-size: 18px;
+                margin: 0 0 8px 0;
+            }
+            body.print-reading-guide #readingGuidePrintSheet .rg-meta {
+                font-size: 15px;
+                margin: 0 0 10px 0;
+            }
+            body.print-reading-guide #readingGuidePrintSheet table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+                border: none;
+            }
+            body.print-reading-guide #readingGuidePrintSheet thead th {
+                border-top: 1px solid #333;
+                border-bottom: 1px solid #333;
+                border-left: none;
+                border-right: none;
+                padding: 3px 4px;
+                vertical-align: top;
+            }
+            body.print-reading-guide #readingGuidePrintSheet tbody td {
+                border: none;
+                padding: 3px 4px;
+                vertical-align: top;
+            }
+            /* Handwriting lines: PresRdg + Remarks */
+            body.print-reading-guide #readingGuidePrintSheet tbody tr td:nth-child(7),
+            body.print-reading-guide #readingGuidePrintSheet tbody tr td:nth-child(9) {
+                border-bottom: 1px solid #333;
+            }
+        }
+    </style>
     <div id="wrapper">
         <!-- Sidebar -->
         @include('partials.sidebar')
@@ -77,8 +130,8 @@
                                                 <select name="status" class="form-control form-control-sm">
                                                     <option value="">All Status</option>
                                                     <option value="Active" {{ ($filters['status'] ?? '') == 'Active' ? 'selected' : '' }}>Active</option>
-                                                    <option value="Inactive" {{ ($filters['status'] ?? '') == 'Inactive' ? 'selected' : '' }}>Inactive</option>
-                                                    <option value="Suspended" {{ ($filters['status'] ?? '') == 'Suspended' ? 'selected' : '' }}>Suspended</option>
+                                                    <option value="Pending" {{ ($filters['status'] ?? '') == 'Pending' ? 'selected' : '' }}>Pending</option>
+                    
                                                     <option value="Disconnected" {{ ($filters['status'] ?? '') == 'Disconnected' ? 'selected' : '' }}>Disconnected</option>
                                                 </select>
                                             </div>
@@ -120,8 +173,14 @@
                                                 <button type="submit" class="btn btn-primary btn-sm mr-2">
                                                     <i class="fas fa-sync-alt mr-1"></i>Generate
                                                 </button>
-                                                <button type="button" class="btn btn-danger btn-sm" onclick="window.print()">
+                                                <button type="button" class="btn btn-danger btn-sm mr-2" id="printReadingGuideBtn">
                                                     <i class="fas fa-file-pdf mr-1"></i>Print
+                                                </button>
+                                                <button type="button" class="btn btn-success btn-sm mr-2" id="exportReadingGuideExcelBtn">
+                                                    <i class="fas fa-file-excel mr-1"></i>Export Excel
+                                                </button>
+                                                <button type="button" class="btn btn-info btn-sm" data-toggle="modal" data-target="#importDmModal" title="Upload Excel to add DM for multiple consumers (date: 2026-02-27)">
+                                                    <i class="fas fa-file-excel mr-1"></i>Upload DM (Excel)
                                                 </button>
                                             </div>
                                         </div>
@@ -140,51 +199,22 @@
                             <h6 class="font-weight-bold text-primary">Summary by Zone</h6>
                         </div>
                     </div>
-                    <!-- Import Ledger Card -->
-                    <div class="row mb-3">
-                        <div class="col-lg-12">
-                            <div class="card shadow-sm border-primary">
-                                <div class="card-header bg-primary text-white py-2">
-                                    <h6 class="mb-0"><i class="fas fa-file-upload mr-2"></i>Import Consumer Ledger</h6>
-                                </div>
-                                <div class="card-body py-3">
-                                    <form action="{{ route('ledger.import') }}" method="POST" enctype="multipart/form-data" id="ledgerImportForm">
-                                        @csrf
-                                        <div class="row align-items-end">
-                                            <div class="col-md-4">
-                                                <label class="small font-weight-bold mb-1">Consumer Account <span class="text-danger">*</span></label>
-                                                <select name="account_no" class="form-control form-control-sm" id="importAccountSelect" required>
-                                                    <option value="">-- Select Account --</option>
-                                                </select>
-                                                <small class="text-muted">Required: Select account if Excel file has no account_no column</small>
-                                            </div>
-                                            <div class="col-md-4">
-                                                <label class="small font-weight-bold mb-1">Select Excel File <span class="text-danger">*</span></label>
-                                                <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx,.xls,.xltx,.csv" required>
-                                                <small class="text-muted">.xlsx, .xls, .xltx or .csv</small>
-                                            </div>
-                                            <div class="col-md-4 text-right">
-                                                <button type="submit" class="btn btn-primary btn-sm">
-                                                    <i class="fas fa-upload mr-1"></i>Import Ledger
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                   
                     
                     <!-- Main Data Table -->
                     <div class="row">
                         <div class="col-lg-9">
                             <div class="card shadow-sm mb-4">
                                 <div class="card-body p-0">
+                                    <div class="px-3 pt-3 pb-2 border-bottom bg-light">
+                                        <label class="small font-weight-bold mb-1 text-muted">Filter table</label>
+                                        <input type="text" id="consumerTableSearch" class="form-control form-control-sm" placeholder="Type to search by Account No or Customer name...">
+                                        <small class="text-muted" id="consumerTableSearchCount"></small>
+                                    </div>
                                     <div class="table-responsive" style="max-height: 600px; overflow-y: auto;">
-                                        <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 11px;">
+                                        <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 11px;" id="consumerMasterTable">
                                             <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                                 <tr>
-                                                    <th class="text-center py-2 px-2" style="min-width: 120px;">Action</th>
                                                     <th class="text-center py-2 px-2" style="min-width: 30px;">#</th>
                                                     <th class="py-2 px-2" style="min-width: 120px;">Account No</th>
                                                     <th class="py-2 px-2" style="min-width: 200px;">Customer</th>
@@ -198,25 +228,17 @@
                                                     <th class="text-center py-2 px-2" style="min-width: 130px;">Meter Location</th>
                                                 </tr>
                                             </thead>
-                                            <tbody>
+                                             <tbody id="consumerTableBody">
                                                 @forelse($consumers as $index => $consumer)
-                                                    <tr>
-                                                        <td class="text-center py-1">
-                                                    @php
-                                                        $hasLedgers = ($consumer->ledgers_count ?? 0) > 0;
-                                                    @endphp
-                                                    <button type="button" 
-                                                            class="btn btn-sm import-ledger-btn {{ $hasLedgers ? 'btn-secondary' : 'btn-outline-primary' }}" 
-                                                            data-toggle="modal" 
-                                                            data-target="#ledgerImportModal"
-                                                            data-consumer-account="{{ $consumer->account_no }}"
-                                                            data-consumer-name="{{ $consumer->account_name }}"
-                                                            data-account-no="{{ $consumer->account_no }}"
-                                                            @if($hasLedgers) disabled @endif>
-                                                        <i class="fas {{ $hasLedgers ? 'fa-check' : 'fa-file-upload' }} mr-1"></i>
-                                                        {{ $hasLedgers ? 'Imported' : 'Import Ledger' }}
-                                                    </button>
-                                                        </td>
+                                                    <tr class="consumer-row"
+                                                        data-account-no="{{ $consumer->account_no ?? '' }}"
+                                                        data-account-name="{{ $consumer->account_name ?? '' }}"
+                                                        data-card-no="{{ $consumer->sequence ?? '' }}"
+                                                        data-category="{{ $consumer->category_code ?? $consumer->category ?? '' }}"
+                                                        data-meter-number="{{ $consumer->meter_number ?? '' }}"
+                                                        data-prev-date="{{ $consumer->prev_bill_date ?? '' }}"
+                                                        data-pres-rdg="{{ $consumer->prev_pres_rdg ?? '' }}"
+                                                        data-prev-rdg="{{ $consumer->prev_prev_rdg ?? '' }}">
                                                         <td class="text-center py-1">{{ $index + 1 }}</td>
                                                         <td class="py-1 px-2">{{ $consumer->account_no }}</td>
                                                         <td class="py-1 px-2 text-uppercase">
@@ -234,8 +256,14 @@
                                                         <td class="text-center py-1">
                                                             @php
                                                                 $statusLabel = $consumer->status_label ?? ($consumer->status_code ?? $consumer->status ?? 'N/A');
+                                                                $statusBadge = match ($statusLabel) {
+                                                                    'Active' => 'success',
+                                                                    'Pending' => 'warning',
+                                                                    'Disconnected' => 'danger',
+                                                                    default => 'secondary',
+                                                                };
                                                             @endphp
-                                                            <span class="badge badge-pill badge-{{ strtolower($statusLabel) === 'active' ? 'success' : 'secondary' }}">
+                                                            <span class="badge badge-pill badge-{{ $statusBadge }}">
                                                                 {{ $statusLabel }}
                                                             </span>
                                                         </td>
@@ -244,8 +272,8 @@
                                                         <td class="py-1 px-2">{{ $consumer->meter_location ?? '--' }}</td>
                                                     </tr>
                                                 @empty
-                                                    <tr>
-                                                        <td colspan="12" class="text-center text-muted py-4">
+                                                    <tr id="consumerTableEmptyRow">
+                                                        <td colspan="11" class="text-center text-muted py-4">
                                                             <i class="fas fa-inbox fa-2x mb-2 d-block"></i>
                                                             No consumers found for the selected filters.
                                                         </td>
@@ -318,44 +346,113 @@
         </div>
     </div>
 
-    <!-- Import Ledger Modal -->
-    <div class="modal fade" id="ledgerImportModal" tabindex="-1" role="dialog" aria-labelledby="ledgerImportModalLabel" aria-hidden="true">
+    <div id="readingGuidePrintSheet" aria-hidden="true">
+        <h2 class="rg-title">HAGONOY WATER DISTRICT</h2>
+        <p class="rg-subtitle">Guihing, Hagonoy</p>
+        <h3 class="rg-subtitle">READING GUIDE</h3>
+        <p class="rg-meta">Zone No : <span id="rgZoneNo">{{ $filters['zone'] ?? 'ALL' }}</span></p>
+        <p class="rg-meta">Print Date : <span id="rgPrintDate"></span></p>
+        <table>
+            <thead>
+                <tr>
+                    <th>CardNo</th>
+                    <th>AccountNo</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Meter Number</th>
+                    <th>Prevdate</th>
+                    <th>PresRdg</th>
+                    <th>PrevRdg</th>
+                    <th>Remarks</th>
+                </tr>
+            </thead>
+            <tbody id="readingGuidePrintBody"></tbody>
+        </table>
+    </div>
+
+    <!-- Add DM Modal (single consumer) -->
+    <div class="modal fade" id="addDmModal" tabindex="-1" role="dialog" aria-labelledby="addDmModalLabel" aria-hidden="true">
         <div class="modal-dialog" role="document">
             <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title" id="ledgerImportModalLabel">
-                        <i class="fas fa-file-upload mr-2"></i>Import Consumer Ledger
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title" id="addDmModalLabel">
+                        <i class="fas fa-plus-circle mr-2"></i>Add DM for Consumer
                     </h5>
-                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                    <button type="button" class="close" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close">
                         <span aria-hidden="true">&times;</span>
                     </button>
                 </div>
                 <div class="modal-body">
-                    <div id="modalConsumerInfo" class="alert alert-info mb-3" style="display: none;">
-                        <strong>Consumer:</strong> <span id="modalConsumerName"></span><br>
-                        <strong>Account No:</strong> <span id="modalConsumerAccount"></span>
+                    <p class="text-muted small mb-3">Insert a DM (Debit Memo) for this consumer. The amount will be added to the consumer's balance.</p>
+                    <div class="alert alert-light border mb-3 py-2">
+                        <strong id="addDmConsumerAccount">--</strong><br>
+                        <span id="addDmConsumerName" class="text-muted">--</span>
                     </div>
-                    <form action="{{ route('ledger.import') }}" method="POST" enctype="multipart/form-data" id="ledgerImportModalForm">
+                    <form id="addDmForm">
                         @csrf
-                        <input type="hidden" name="account_no" id="hiddenAccountNo" value="">
+                        <input type="hidden" name="consumer_zone_id" id="addDmConsumerZoneId" value="">
                         <div class="form-group">
-                            <label class="font-weight-bold mb-1">Select Excel File (.xlsx, .xls, .xltx)</label>
-                            <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx,.xls,.xltx" required>
-                            <small class="text-muted">Upload ledger data from Excel file or Excel Template</small>
+                            <label for="addDmDate" class="font-weight-bold">Date <span class="text-danger">*</span></label>
+                            <input type="date" name="date" id="addDmDate" class="form-control" required>
                         </div>
-                        <button type="submit" class="btn btn-primary btn-sm btn-block">
-                            <i class="fas fa-upload mr-1"></i>Import Ledger
-                        </button>
+                        <div class="form-group">
+                            <label for="addDmAmount" class="font-weight-bold">Amount (Debit) <span class="text-danger">*</span></label>
+                            <input type="number" name="amount" id="addDmAmount" class="form-control" step="0.01" min="0" placeholder="0.00" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="addDmReference" class="font-weight-bold">Reference</label>
+                            <input type="text" id="addDmReference" class="form-control bg-light" placeholder="Auto-generated (6 digits) when saved" readonly>
+                        </div>
                     </form>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">
+                    <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal" data-bs-dismiss="modal">
                         <i class="fas fa-times mr-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-warning btn-sm" id="addDmSubmitBtn">
+                        <i class="fas fa-save mr-1"></i>Add DM
                     </button>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- Upload DM (Excel) Modal -->
+    <div class="modal fade" id="importDmModal" tabindex="-1" role="dialog" aria-labelledby="importDmModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header bg-info text-white">
+                    <h5 class="modal-title" id="importDmModalLabel">
+                        <i class="fas fa-file-excel mr-2"></i>Upload DM (Excel)
+                    </h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3">Upload an Excel file with columns <strong>account_no</strong> and <strong>amount</strong>. All DMs will use date <strong>2026-02-27</strong>. Reference is auto-generated (6 digits) per row.</p>
+                    <form id="importDmForm">
+                        @csrf
+                        <div class="form-group">
+                            <label for="importDmFile" class="font-weight-bold">Excel File <span class="text-danger">*</span></label>
+                            <input type="file" name="file" id="importDmFile" class="form-control" accept=".xlsx,.xls,.csv" required>
+                            <small class="text-muted">.xlsx, .xls or .csv. Max 10MB.</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal" data-bs-dismiss="modal">
+                        <i class="fas fa-times mr-1"></i>Cancel
+                    </button>
+                    <button type="button" class="btn btn-info btn-sm" id="importDmSubmitBtn">
+                        <i class="fas fa-upload mr-1"></i>Upload & Import DM
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+   
 
     <!-- Scroll to top -->
     <a class="scroll-to-top rounded" href="#page-top">
@@ -364,6 +461,7 @@
 
     <!-- SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     
     <script>
         // Debug: Log flash messages
@@ -373,6 +471,94 @@
             warning: @json(session('warning')),
             import_success: @json(session('import_success'))
         });
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function getReadingGuideRowsData() {
+            const rows = document.querySelectorAll('#consumerTableBody tr.consumer-row');
+            const rowData = [];
+
+            rows.forEach((row) => {
+                if (row.style.display === 'none') return;
+                rowData.push([
+                    row.dataset.cardNo || '',
+                    row.dataset.accountNo || '',
+                    row.dataset.accountName || '',
+                    row.dataset.category || '',
+                    row.dataset.meterNumber || '',
+                    row.dataset.prevDate || '',
+                    row.dataset.presRdg || '',
+                    row.dataset.prevRdg || '',
+                    ''
+                ]);
+            });
+
+            return rowData;
+        }
+
+        function printReadingGuide() {
+            const bodyEl = document.getElementById('readingGuidePrintBody');
+            const printableRows = [];
+
+            getReadingGuideRowsData().forEach((rowData) => {
+                printableRows.push(`
+                    <tr>
+                        <td>${escapeHtml(rowData[0])}</td>
+                        <td>${escapeHtml(rowData[1])}</td>
+                        <td>${escapeHtml(rowData[2])}</td>
+                        <td>${escapeHtml(rowData[3])}</td>
+                        <td>${escapeHtml(rowData[4])}</td>
+                        <td>${escapeHtml(rowData[5])}</td>
+                        <td>${escapeHtml(rowData[6])}</td>
+                        <td>${escapeHtml(rowData[7])}</td>
+                        <td>${escapeHtml(rowData[8])}</td>
+                    </tr>
+                `);
+            });
+
+            bodyEl.innerHTML = printableRows.length
+                ? printableRows.join('')
+                : '<tr><td colspan="9" style="text-align:center;">No rows to print.</td></tr>';
+
+            const now = new Date();
+            document.getElementById('rgPrintDate').textContent =
+                now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+
+            document.body.classList.add('print-reading-guide');
+            window.print();
+            setTimeout(() => document.body.classList.remove('print-reading-guide'), 50);
+        }
+
+        function exportReadingGuideExcel() {
+            const headers = ['CardNo', 'AccountNo', 'Name', 'Category', 'Meter Number', 'Prevdate', 'PresRdg', 'PrevRdg', 'Remarks'];
+            const rows = getReadingGuideRowsData();
+            const worksheetData = [headers, ...rows];
+            const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'ConsumerMasterList');
+
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            XLSX.writeFile(workbook, `consumerMasterList-${yyyy}${mm}${dd}.xlsx`);
+        }
+
+        const printReadingGuideBtn = document.getElementById('printReadingGuideBtn');
+        if (printReadingGuideBtn) {
+            printReadingGuideBtn.addEventListener('click', printReadingGuide);
+        }
+        const exportReadingGuideExcelBtn = document.getElementById('exportReadingGuideExcelBtn');
+        if (exportReadingGuideExcelBtn) {
+            exportReadingGuideExcelBtn.addEventListener('click', exportReadingGuideExcel);
+        }
 
         // Populate account dropdown for import form
         $(document).ready(function() {
@@ -392,6 +578,176 @@
                     }
                 })
                 .catch(error => console.log('Error fetching accounts:', error));
+
+            // Client-side table search: filter consumer rows by account no or customer name
+            function updateTableFilterCount(visible, total) {
+                var el = $('#consumerTableSearchCount');
+                if (total === 0) {
+                    el.text('');
+                    return;
+                }
+                if (visible === total) {
+                    el.text('Showing all ' + total + ' consumer(s)');
+                } else {
+                    el.text('Showing ' + visible + ' of ' + total + ' consumer(s)');
+                }
+            }
+
+            $('#consumerTableSearch').on('input', function() {
+                var q = $(this).val().trim().toLowerCase();
+                var $rows = $('#consumerTableBody').find('tr.consumer-row');
+                var $emptyRow = $('#consumerTableEmptyRow');
+                var total = $rows.length;
+
+                if (total === 0) {
+                    updateTableFilterCount(0, 0);
+                    return;
+                }
+
+                if (q === '') {
+                    $rows.show();
+                    if ($emptyRow.length) $emptyRow.hide();
+                    updateTableFilterCount(total, total);
+                    return;
+                }
+
+                var visible = 0;
+                $rows.each(function() {
+                    var accountNo = ($(this).attr('data-account-no') || '').toString().toLowerCase();
+                    var accountName = ($(this).attr('data-account-name') || '').toString().toLowerCase();
+                    var match = accountNo.indexOf(q) !== -1 || accountName.indexOf(q) !== -1;
+                    $(this).toggle(match);
+                    if (match) visible++;
+                });
+
+                if ($emptyRow.length) $emptyRow.hide();
+                updateTableFilterCount(visible, total);
+            });
+
+            // Set initial count
+            var initialRows = $('#consumerTableBody').find('tr.consumer-row').length;
+            updateTableFilterCount(initialRows, initialRows);
+
+            // Add DM (single consumer): set consumer and default date when modal opens
+            $('#addDmModal').on('show.bs.modal', function(event) {
+                var btn = $(event.relatedTarget);
+                if (btn.hasClass('add-dm-btn')) {
+                    $('#addDmConsumerZoneId').val(btn.data('consumer-zone-id'));
+                    $('#addDmConsumerAccount').text(btn.data('account-no') || '--');
+                    $('#addDmConsumerName').text(btn.data('account-name') || '--');
+                    $('#addDmDate').val('2026-02-27');
+                    $('#addDmAmount').val('');
+                    $('#addDmReference').attr('placeholder', 'Auto-generated (6 digits) when saved').val('');
+                }
+            });
+
+            // Add DM: submit for single consumer
+            $('#addDmSubmitBtn').on('click', function() {
+                var consumerZoneId = $('#addDmConsumerZoneId').val();
+                var date = $('#addDmDate').val();
+                var amount = $('#addDmAmount').val();
+
+                if (!consumerZoneId) {
+                    Swal.fire({ icon: 'warning', title: 'Error', text: 'Consumer not set.', confirmButtonColor: '#f0ad4e' });
+                    return;
+                }
+                if (!date) {
+                    Swal.fire({ icon: 'warning', title: 'Required', text: 'Please select a date.', confirmButtonColor: '#f0ad4e' });
+                    return;
+                }
+                var amountNum = parseFloat(amount);
+                if (isNaN(amountNum) || amountNum < 0) {
+                    Swal.fire({ icon: 'warning', title: 'Invalid amount', text: 'Please enter a valid amount (≥ 0).', confirmButtonColor: '#f0ad4e' });
+                    return;
+                }
+
+                var amountLabel = '₱ ' + amountNum.toFixed(2);
+                Swal.fire({
+                    icon: 'question',
+                    title: 'Confirm Add DM',
+                    html: 'Add a DM of <strong>' + amountLabel + '</strong> for this consumer?',
+                    showCancelButton: true,
+                    confirmButtonColor: '#f0ad4e',
+                    cancelButtonColor: '#6c757d',
+                    confirmButtonText: 'Yes, add DM'
+                }).then(function(result) {
+                    if (!result.isConfirmed) return;
+
+                    var submitBtn = $('#addDmSubmitBtn');
+                    submitBtn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-1"></i>Adding...');
+
+                    $.ajax({
+                        url: '{{ route("consumer-master-list.store-dm") }}',
+                        method: 'POST',
+                        data: {
+                            _token: $('#addDmForm input[name="_token"]').val(),
+                            consumer_zone_id: parseInt(consumerZoneId, 10),
+                            date: date,
+                            amount: amountNum
+                        },
+                        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                        success: function(res) {
+                            $('#addDmModal').modal('hide');
+                            $('#addDmForm')[0].reset();
+                            submitBtn.prop('disabled', false).html('<i class="fas fa-save mr-1"></i>Add DM');
+                            Swal.fire({
+                                icon: 'success',
+                                title: 'Done',
+                                text: (res.reference ? 'Reference: ' + res.reference + '\n\n' : '') + (res.message || 'DM added successfully.'),
+                                confirmButtonColor: '#3085d6'
+                            }).then(function() { window.location.reload(); });
+                        },
+                        error: function(xhr) {
+                            submitBtn.prop('disabled', false).html('<i class="fas fa-save mr-1"></i>Add DM');
+                            var msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : (xhr.statusText || 'Request failed.');
+                            Swal.fire({ icon: 'error', title: 'Error', text: msg, confirmButtonColor: '#d33' });
+                        }
+                    });
+                });
+            });
+
+            // Upload DM (Excel): submit
+            $('#importDmSubmitBtn').on('click', function() {
+                var fileInput = $('#importDmFile')[0];
+                if (!fileInput || !fileInput.files || !fileInput.files.length) {
+                    Swal.fire({ icon: 'warning', title: 'Required', text: 'Please select an Excel file.', confirmButtonColor: '#f0ad4e' });
+                    return;
+                }
+                var formData = new FormData();
+                formData.append('_token', $('#importDmForm input[name="_token"]').val());
+                formData.append('file', fileInput.files[0]);
+                var btn = $('#importDmSubmitBtn');
+                btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-1"></i>Importing...');
+                $.ajax({
+                    url: '{{ route("consumer-master-list.import-dm") }}',
+                    method: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+                    success: function(res) {
+                        $('#importDmModal').modal('hide');
+                        $('#importDmForm')[0].reset();
+                        btn.prop('disabled', false).html('<i class="fas fa-upload mr-1"></i>Upload & Import DM');
+                        var msg = res.message || 'Import completed.';
+                        if (res.errors && res.errors.length) {
+                            msg += '\n\n' + res.errors.slice(0, 10).join('\n');
+                            if (res.errors.length > 10) msg += '\n... and ' + (res.errors.length - 10) + ' more.';
+                        }
+                        Swal.fire({
+                            icon: res.imported > 0 ? 'success' : 'warning',
+                            title: 'DM Import',
+                            text: msg,
+                            confirmButtonColor: '#3085d6'
+                        }).then(function() { window.location.reload(); });
+                    },
+                    error: function(xhr) {
+                        btn.prop('disabled', false).html('<i class="fas fa-upload mr-1"></i>Upload & Import DM');
+                        var msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : (xhr.statusText || 'Request failed.');
+                        Swal.fire({ icon: 'error', title: 'Error', text: msg, confirmButtonColor: '#d33' });
+                    }
+                });
+            });
         });
         
         // Handle flash messages with SweetAlert (only for non-AJAX requests)

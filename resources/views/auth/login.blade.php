@@ -69,7 +69,7 @@
     <img src="{{url('WDMS/img/logo/logo.png')}}" 
          alt="Water District Logo" class="logo">
 
-    <h2>HagunoyWD-IUMS Login</h2>
+    <h2>HagonoyWD-IUMS Login</h2>
     <form method="POST" action="/login">
       @csrf
       <div class="mb-3 text-start">

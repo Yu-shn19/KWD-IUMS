@@ -5,12 +5,29 @@
         <div class="d-flex justify-content-between align-items-center">
             <div id="consumerHeaderInfo">
                 @if($consumer)
-                    <h4 class="mb-1" id="consumerHeaderName">{{ $consumer->account_no ?? '' }} {{ $consumer->account_name ?? '' }}</h4>
-                    <span class="badge bg-{{ ($consumer->status_label ?? $consumer->status_code ?? '') == 'Active' ? 'success' : (($consumer->status_label ?? $consumer->status_code ?? '') == 'Inactive' ? 'warning' : 'danger') }}" id="consumerHeaderStatus">{{ $consumer->status_label ?? $consumer->status_code ?? 'N/A' }} Consumer</span>
-                @else
+                    @php
+                        $st = $consumer->status_label ?? $consumer->status_code ?? '';
+                        $headerStatusBadge = match ($st) {
+                            'Active' => 'success',
+                            'Pending' => 'warning',
+                            'Disconnected' => 'danger',
+                            default => 'secondary',
+                        };
+                        $headerNameClass = match ($st) {
+                            'Pending' => 'text-warning fw-semibold',
+                            'Disconnected' => 'text-danger fw-semibold',
+                            default => '',
+                        };
+                    @endphp
+                    <h4 class="mb-1 {{ $headerNameClass }}" id="consumerHeaderName">{{ $consumer->account_no ?? '' }} {{ $consumer->account_name ?? '' }}</h4>
+                    <p class="mb-1 small" id="consumerHeaderAddress" style="color: #000 !important;">{{ trim(($consumer->address1 ?? '') . ' ' . ($consumer->address2 ?? $consumer->address_2 ?? '')) ?: '—' }}</p>
+                    <span class="badge bg-{{ $headerStatusBadge }}" id="consumerHeaderStatus">{{ $consumer->status_label ?? $consumer->status_code ?? 'N/A' }} Consumer</span>
+                 @else
                     <h4 class="mb-1" id="consumerHeaderName">No Consumer Selected</h4>
+                    <p class="mb-1 small" id="consumerHeaderAddress" style="color: #000 !important;">—</p>
                     <span class="badge bg-secondary" id="consumerHeaderStatus">Please search for a consumer</span>
                 @endif
+                
             </div>
             <div class="text-end">
                 <h5 class="mb-0">Consumers</h5>
@@ -19,7 +36,11 @@
         </div>
     </div>
 </div>
-
+@if(isset($consumer) && $consumer)
+<script>
+    sessionStorage.setItem('currentConsumer', JSON.stringify(@json($consumer)));
+</script>
+@endif
 <!-- Consumer Search Box -->
 <div class="card mb-3">
     <div class="card-body py-2">

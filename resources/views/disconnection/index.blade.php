@@ -3,7 +3,133 @@
 @include('partials.header')
 
 <body id="page-top">
-    <div id="wrapper">
+    <style>
+        @media screen {
+            .disconnection-print-sheet { display: none !important; }
+        }
+        @media print {
+            @page { size: A4 landscape; margin: 10mm; }
+            html, body { background: #fff !important; color: #222 !important; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .no-print { display: none !important; }
+            .disconnection-print-sheet { display: block !important; }
+            .disconnection-print-sheet .print-report {
+                padding: 0;
+                font-family: Arial, Helvetica, sans-serif;
+                color: #222;
+                width: 100%;
+            }
+            .disconnection-print-sheet .print-header {
+                text-align: center;
+                margin-bottom: 10px;
+                padding-bottom: 6px;
+            }
+            .disconnection-print-sheet .print-title {
+                font-size: 16px;
+                font-weight: 700;
+                margin: 0 0 1px 0;
+                letter-spacing: 0.3px;
+            }
+            .disconnection-print-sheet .print-subtitle {
+                font-size: 13px;
+                font-weight: 600;
+                margin: 3px 0 2px;
+            }
+            .disconnection-print-sheet .print-meta {
+                font-size: 12px;
+                color: #444;
+                margin: 0;
+            }
+            .disconnection-print-sheet .print-criteria {
+                margin: 0 0 6px;
+                font-size: 9px;
+                color: #444;
+            }
+            .disconnection-print-sheet .print-zone-line {
+                font-size: 10px;
+                font-weight: 700;
+                margin: 6px 0 3px;
+            }
+            .disconnection-print-sheet table.print-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 4px;
+                margin-bottom: 8px;
+                font-size: 12px;
+                table-layout: fixed;
+            }
+            .disconnection-print-sheet table.print-table th,
+            .disconnection-print-sheet table.print-table td {
+                border: none !important;
+                padding: 5px 4px;
+                text-align: left;
+                vertical-align: top;
+                color: #333;
+            }
+            .disconnection-print-sheet table.print-table td {
+                font-size: 12px;
+                line-height: 1.2;
+            }
+            .disconnection-print-sheet table.print-table th {
+                background: #ffffff !important;
+                font-weight: 700;
+                font-size: 10px;
+                text-transform: none;
+            }
+            .disconnection-print-sheet table.print-table tbody tr {
+                height: 11mm;
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+            /* Target around 13 rows per printed page */
+            .disconnection-print-sheet table.print-table tbody tr:nth-child(13n) {
+                break-after: page;
+                page-break-after: always;
+            }
+            .disconnection-print-sheet table.print-table td:nth-child(1),
+            .disconnection-print-sheet table.print-table td:nth-child(3),
+            .disconnection-print-sheet table.print-table td:nth-child(4),
+            .disconnection-print-sheet table.print-table td:nth-child(5),
+            .disconnection-print-sheet table.print-table td:nth-child(6),
+            .disconnection-print-sheet table.print-table td:nth-child(7),
+            .disconnection-print-sheet table.print-table td:nth-child(8),
+            .disconnection-print-sheet table.print-table td:nth-child(9),
+            .disconnection-print-sheet table.print-table td:nth-child(10) {
+                white-space: nowrap;
+            }
+            .disconnection-print-sheet table.print-table td:nth-child(2) {
+                white-space: normal;
+                line-height: 1.15;
+                word-break: break-word;
+            }
+            .disconnection-print-sheet table.print-table td:nth-child(11) {
+                white-space: normal;
+            }
+            .disconnection-print-sheet table.print-table thead { display: table-header-group; }
+            .disconnection-print-sheet .print-table .text-center { text-align: center; }
+            .disconnection-print-sheet .print-table .text-right { text-align: right; }
+            .disconnection-print-sheet .print-zone-heading {
+                font-size: 9px;
+                font-weight: 700;
+                margin: 4px 0 2px;
+                page-break-after: avoid;
+            }
+            .disconnection-print-sheet .print-footer {
+                margin-top: 4px;
+                padding-top: 4px;
+                border-top: 0.5px solid #b9b9b9;
+                font-size: 11px;
+                color: #444;
+            }
+            .disconnection-print-sheet #printSearchNote {
+                font-size: 8px;
+                color: #555;
+                font-style: italic;
+                margin: 2px 0 3px;
+            }
+        }
+    </style>
+    <div id="wrapper" class="no-print">
         <!-- Sidebar -->
         @include('partials.sidebar')
         <!-- Sidebar -->
@@ -20,7 +146,9 @@
                         <div>
                             <h1 class="h3 mb-1 text-dark font-weight-bold">Disconnection Management</h1>
                             <p class="text-muted mb-0 small">
-                                @if(isset($filterType) && $filterType === '3_consecutive')
+                                @if(isset($filterType) && $filterType === '2_consecutive')
+                                    List of consumers with 2 consecutive months without payment
+                                @elseif(isset($filterType) && $filterType === '3_consecutive')
                                     List of consumers with 3 consecutive months without payment
                                 @else
                                     List of consumers with passed disconnection dates
@@ -32,7 +160,7 @@
                                 <div class="small text-muted">Total Consumers</div>
                                 <div class="h4 mb-0 text-primary font-weight-bold">{{ number_format($totalConsumers) }}</div>
                                 <div class="small text-muted">Total Outstanding</div>
-                                <div class="h5 mb-0 text-danger font-weight-bold">₱{{ number_format($totalOutstanding ?? 0, 2) }}</div>
+                                <div class="h5 mb-0 text-danger font-weight-bold">{{ number_format($totalOutstanding ?? 0, 2) }}</div>
                             </div>
                         @endif
                     </div>
@@ -63,6 +191,9 @@
                                         <select name="filter_type" class="form-control form-control-sm">
                                             <option value="disconnection_date" {{ (!isset($filterType) || $filterType == 'disconnection_date') ? 'selected' : '' }}>
                                                 Disconnection Date
+                                            </option>
+                                            <option value="2_consecutive" {{ (isset($filterType) && $filterType == '2_consecutive') ? 'selected' : '' }}>
+                                                2 Months Consecutive
                                             </option>
                                             <option value="3_consecutive" {{ (isset($filterType) && $filterType == '3_consecutive') ? 'selected' : '' }}>
                                                 3 Months Consecutive
@@ -142,6 +273,9 @@
 
                             <div class="row mb-3">
                                 <div class="col-md-12">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="printListBtn" title="Print the list for current filters (respects search)">
+                                        <i class="fas fa-print"></i> Print List
+                                    </button>
                                     <button type="button" class="btn btn-success btn-sm" id="saveBtn">
                                         <i class="fas fa-save"></i> Save & Send to Mobile App
                                     </button>
@@ -161,7 +295,7 @@
                                         <h6 class="m-0 font-weight-bold text-primary">
                                             <i class="fas fa-chevron-down mr-2"></i>
                                             Zone {{ $zoneCode }} - {{ $zoneConsumers->count() }} Consumer(s)
-                                            <span class="badge badge-info ml-2">₱{{ number_format($zoneConsumers->sum('total_outstanding'), 2) }}</span>
+                                            <span class="badge badge-info ml-2">{{ number_format($zoneConsumers->sum('total_outstanding'), 2) }}</span>
                                         </h6>
                                         <div>
                                             <input type="checkbox" class="select-all-zone" data-zone="{{ $zoneCode }}" 
@@ -209,7 +343,7 @@
                                                                     <span class="badge badge-danger">{{ $consumer->unpaid_months }}</span>
                                                                 </td>
                                                                 <td class="text-right font-weight-bold text-danger">
-                                                                    ₱{{ number_format($consumer->total_outstanding, 2) }}
+                                                                    {{ number_format($consumer->total_outstanding, 2) }}
                                                                 </td>
                                                                 <td>{{ $consumer->oldest_unpaid_date ? (is_string($consumer->oldest_unpaid_date) ? \Carbon\Carbon::parse($consumer->oldest_unpaid_date)->format('M d, Y') : $consumer->oldest_unpaid_date->format('M d, Y')) : 'N/A' }}</td>
                                                                 <td>{{ $consumer->latest_unpaid_date ? (is_string($consumer->latest_unpaid_date) ? \Carbon\Carbon::parse($consumer->latest_unpaid_date)->format('M d, Y') : $consumer->latest_unpaid_date->format('M d, Y')) : 'N/A' }}</td>
@@ -234,9 +368,92 @@
     </div>
 
     <!-- Scroll to top -->
-    <a class="scroll-to-top rounded" href="#page-top">
+    <a class="scroll-to-top rounded no-print" href="#page-top">
         <i class="fas fa-angle-up"></i>
     </a>
+
+    @if(!$consumersByZone->isEmpty())
+        @php
+            $filterTypeLabel = match ($filterType ?? '') {
+                '2_consecutive' => '2 consecutive months without payment',
+                '3_consecutive' => '3 consecutive months without payment',
+                default => 'Passed disconnection dates',
+            };
+            $zoneLabel = !empty($zone ?? null) ? 'Zone ' . $zone : 'All zones';
+            $billingMonthLabel = '—';
+            if (!empty($billingMonth ?? null)) {
+                try {
+                    $billingMonthLabel = \Carbon\Carbon::parse($billingMonth . '-01')->format('F Y');
+                } catch (\Exception $e) {
+                    $billingMonthLabel = $billingMonth;
+                }
+            }
+            $billingMonthHeader = $billingMonthLabel !== '—'
+                ? str_replace(' ', '-', $billingMonthLabel)
+                : \Carbon\Carbon::now()->format('F-Y');
+        @endphp
+        <div id="disconnection-print-sheet" class="disconnection-print-sheet" aria-hidden="true">
+            <div class="print-report">
+                <div class="print-header">
+                    <h1 class="print-title">HAGONOY WATER DISTRICT</h1>
+                    <p class="print-meta">Guihing, Hagonoy</p>
+                    <h2 class="print-subtitle">CONSUMERS FOR DISCONNECTION</h2>
+                    <p class="print-meta">{{ $billingMonthHeader }}</p>
+                </div>
+
+                <p class="print-meta" id="printSearchNote" style="display: none;"></p>
+
+                @foreach($consumersByZone as $zoneCode => $zoneConsumers)
+                <div class="print-zone-block" data-print-zone="{{ $zoneCode }}">
+                    <table class="print-table">
+                        <thead>
+                            <tr>
+                                <th class="text-center" style="width: 8%;">AccNo</th>
+                                <th style="width: 24%;">Name</th>
+                                <th class="text-center" style="width: 9%;">Meter #</th>
+                                <th class="text-right" style="width: 7%;">LastRdg</th>
+                                <th class="text-right" style="width: 7%;">CURRENT</th>
+                                <th class="text-right" style="width: 7%;">30 DAYS</th>
+                                <th class="text-right" style="width: 7%;">60 DAYS</th>
+                                <th class="text-right" style="width: 7%;">90 DAYS</th>
+                                <th class="text-right" style="width: 8%;">OVER 90</th>
+                                <th class="text-right" style="width: 9%;">BALANCE</th>
+                                <th style="width: 7%;">REMARKS</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($zoneConsumers as $consumer)
+                                <tr class="print-consumer-row"
+                                    data-zone="{{ $zoneCode }}"
+                                    data-account-no="{{ strtolower((string) $consumer->account_no) }}">
+                                    <td>{{ $consumer->account_no }}</td>
+                                    <td>
+                                        {{ $consumer->account_name }}<br>
+                                        <small>{{ $consumer->address1 }}</small>
+                                    </td>
+                                    <td class="text-center">{{ $consumer->meter_number }}</td>
+                                    <td class="text-right">{{ number_format((float)($consumer->last_reading ?? 0), 0) }}</td>
+                                    <td class="text-right">{{ number_format((float)($consumer->aging_current ?? 0), 2) }}</td>
+                                    <td class="text-right">{{ ((float)($consumer->aging_30_days ?? 0) > 0) ? number_format((float)$consumer->aging_30_days, 2) : '' }}</td>
+                                    <td class="text-right">{{ ((float)($consumer->aging_60_days ?? 0) > 0) ? number_format((float)$consumer->aging_60_days, 2) : '' }}</td>
+                                    <td class="text-right">{{ ((float)($consumer->aging_90_days ?? 0) > 0) ? number_format((float)$consumer->aging_90_days, 2) : '' }}</td>
+                                    <td class="text-right">{{ ((float)($consumer->aging_over_90 ?? 0) > 0) ? number_format((float)$consumer->aging_over_90, 2) : '' }}</td>
+                                    <td class="text-right">{{ number_format($consumer->total_outstanding, 2) }}</td>
+                                    <td></td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                @endforeach
+
+                <div class="print-footer">
+                    <span>Total outstanding: <strong>{{ number_format($totalOutstanding ?? 0, 2) }}</strong></span>
+                    <span style="margin-left: 24px;">Consumers: <strong>{{ number_format($totalConsumers ?? 0) }}</strong></span>
+                </div>
+            </div>
+        </div>
+    @endif
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -407,6 +624,68 @@
                             billingMonthInput.value = '';
                         }
                     }
+                });
+            }
+
+            // Print list (professional sheet; mirrors search visibility)
+            const printSheet = document.getElementById('disconnection-print-sheet');
+            function syncPrintSheetFromTable() {
+                if (!printSheet) return;
+                const searchInput = document.getElementById('searchInput');
+                const printSearchNote = document.getElementById('printSearchNote');
+                document.querySelectorAll('.print-consumer-row').forEach(function(prow) {
+                    const zone = prow.getAttribute('data-zone');
+                    const acc = prow.getAttribute('data-account-no');
+                    const mainRow = document.querySelector(
+                        '.consumer-row[data-zone="' + zone + '"][data-account-no="' + acc + '"]'
+                    );
+                    if (!mainRow) {
+                        prow.style.display = '';
+                        return;
+                    }
+                    prow.style.display = mainRow.style.display === 'none' ? 'none' : '';
+                });
+                document.querySelectorAll('#disconnection-print-sheet .print-zone-block').forEach(function(block) {
+                    const rows = block.querySelectorAll('.print-consumer-row');
+                    let anyVisible = false;
+                    rows.forEach(function(r) {
+                        if (r.style.display !== 'none') anyVisible = true;
+                    });
+                    block.style.display = anyVisible ? '' : 'none';
+                });
+                if (printSearchNote) {
+                    var shown = 0;
+                    document.querySelectorAll('.print-consumer-row').forEach(function(r) {
+                        if (r.style.display !== 'none') shown++;
+                    });
+                    if (searchInput && searchInput.value.trim() !== '') {
+                        printSearchNote.textContent = 'Search is active: this printout includes ' + shown + ' visible account(s). Totals above are for the full list from your filters (not only search results).';
+                        printSearchNote.style.display = 'block';
+                    } else {
+                        printSearchNote.textContent = '';
+                        printSearchNote.style.display = 'none';
+                    }
+                }
+            }
+            function resetPrintSheetDisplay() {
+                if (!printSheet) return;
+                document.querySelectorAll('.print-consumer-row').forEach(function(r) { r.style.display = ''; });
+                document.querySelectorAll('.print-zone-block').forEach(function(b) { b.style.display = ''; });
+                var printSearchNote = document.getElementById('printSearchNote');
+                if (printSearchNote) {
+                    printSearchNote.textContent = '';
+                    printSearchNote.style.display = 'none';
+                }
+            }
+            const printListBtn = document.getElementById('printListBtn');
+            if (printListBtn && printSheet) {
+                printListBtn.addEventListener('click', function() {
+                    syncPrintSheetFromTable();
+                    window.addEventListener('afterprint', function onAfterPrint() {
+                        window.removeEventListener('afterprint', onAfterPrint);
+                        resetPrintSheetDisplay();
+                    });
+                    window.print();
                 });
             }
         });

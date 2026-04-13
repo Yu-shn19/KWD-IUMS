@@ -30,6 +30,11 @@ class ConsumerZoneOne extends Model
         'installation_balance',
         'balance',
         'cons_ctrl',
+         'bill_disc_percent',
+        'bill_disc_amount',
+        'bill_disc_updated_at',
+        'osca_id_no',
+        'remark',
     ];
 
     protected $casts = [
@@ -38,18 +43,22 @@ class ConsumerZoneOne extends Model
         'installation_fee' => 'decimal:2',
         'installation_balance' => 'decimal:2',
         'balance' => 'decimal:2',
+           'bill_disc_percent' => 'string',
+        'bill_disc_amount' => 'decimal:2',
+        'bill_disc_updated_at' => 'date',
         'latitude' => 'decimal:8',
         'longitude' => 'decimal:8',
     ];
 
-    public function getStatusLabelAttribute(): string
+      public function getStatusLabelAttribute(): string
     {
-        return match (strtoupper((string) $this->status_code)) {
+        $code = strtoupper(trim((string) ($this->status_code ?? '')));
+
+        return match ($code) {
             'A', 'ACTIVE' => 'Active',
-            'I', 'INACTIVE' => 'Inactive',
-            'S', 'SUSPENDED' => 'Suspended',
-            'D', 'DISCONNECTED' => 'Disconnected',
-            default => $this->status_code ?? 'N/A',
+            'P', 'PENDING' => 'Pending',
+            'X', 'DISCONNECTED', 'D' => 'Disconnected', // D: legacy stored code for disconnected
+            default => $code !== '' ? (string) $this->status_code : 'N/A',
         };
     }
 

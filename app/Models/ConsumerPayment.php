@@ -14,6 +14,7 @@ class ConsumerPayment extends Model
     protected $fillable = [
         'reading_id',
         'consumer_id',
+        'account_name',
         'payment_method',
         'payment_amount',
         'senior_citizen_discount',

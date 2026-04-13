@@ -5,85 +5,61 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
-use App\Models\Consumer;
 use App\Models\ConsumerPayment;
 use App\Models\Penalty;
 use App\Models\LROLedger;
 use Carbon\Carbon;
+use App\Imports\PreviousReadingImport;
 use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Database\Eloquent\Builder;
+use Maatwebsite\Excel\Facades\Excel;
 use Throwable;
 
 class MeterReadingController extends Controller
 {
     /**
+     * Users with role reader, excluding configured identifiers (email local-part / name).
+     */
+    private function meterReadersBaseQuery(): Builder
+    {
+        $query = User::query()
+            ->where(function (Builder $q) {
+                $q->where('role', 'reader')
+                    ->orWhere('role', 'Reader')
+                    ->orWhere('role', 'READER');
+            });
+
+        $tokens = array_unique(array_map('strtolower', array_filter(config('meter_reading.excluded_reader_identifiers', []))));
+        if ($tokens !== []) {
+            $query->whereNot(function (Builder $q) use ($tokens) {
+                $q->where(function (Builder $inner) use ($tokens) {
+                    foreach ($tokens as $t) {
+                        $inner->orWhere(function (Builder $w) use ($t) {
+                            $w->whereRaw('LOWER(SUBSTRING_INDEX(TRIM(IFNULL(email, "")), ?, 1)) = ?', ['@', $t])
+                                ->orWhereRaw('LOWER(TRIM(IFNULL(email, ""))) = ?', [$t])
+                                ->orWhereRaw('LOWER(TRIM(IFNULL(name, ""))) = ?', [$t]);
+                        });
+                    }
+                });
+            });
+        }
+
+        return $query;
+    }
+
+    /**
      * Display meter reading page with readers and their assignments
      */
     public function index()
     {
-        // List of names to exclude (case-insensitive)
-        $excludedNames = array_map('strtolower', [
-            'aj9',
-            'kp8',
-            'Shuwnzonenew1',
-            'AJ',
-            'Shuwnzonenew2',
-            'Shuwnzonenew3',
-            'Shuwnzonenew4',
-            'Keyvenzonenew5',
-            'Keyvenzonenew6',
-            'Keyvenzonenew7',
-            'Keyvenzonenew8',
-            'Keyvenzonenew9',
-            'Alexi',
-            'Leojay',
-            'Albino',
-            'Alexi2',
-            'Alexi9',
-            'Alexi8',
-            'Albino6',
-            'Albinozone2',
-            'plazos7',
-            'shuwn7',
-            'p6',
-            'shuwn6',
-            'Plazos',
-            'Shuwn2',
-            'Suganob',
-            'Aj F.',
-            'Shuwn B.',
-            'reader 1',
-            'reader r.',
-            'PLARIZA',
-            'KEYVEN B. Jr.',
-            'Keyven',
-            'Villoria',
-            'Jonas K.'
-        ]);
-
-        // Get all users with role 'reader'
-        $readers = User::where(function($query) {
-                $query->where('role', 'reader')
-                    ->orWhere('role', 'Reader')
-                    ->orWhere('role', 'READER');
-            })
+        $readers = $this->meterReadersBaseQuery()
             ->orderBy('last_name')
             ->orderBy('first_name')
-            ->get()
-            ->filter(function($reader) use ($excludedNames) {
-                $fullName = strtolower($this->formatName($reader));
-                // Check if any excluded name is in the full name
-                foreach ($excludedNames as $excludedName) {
-                    if (stripos($fullName, $excludedName) !== false) {
-                        return false; // Exclude this reader
-                    }
-                }
-                return true; // Include this reader
-            })
-            ->values();
+            ->get();
 
         // Get reader assignments with zones and status
         $readerAssignments = [];
@@ -149,63 +125,81 @@ class MeterReadingController extends Controller
         return $name;
     }
 
-    /**
+       /**
      * Get reader assignments (API)
      */
     public function getReaderAssignments(Request $request)
     {
-        $readerId = $request->get('reader_id');
+        $readerId = $request->filled('reader_id') ? (int) $request->input('reader_id') : null;
         $zone = $request->get('zone');
-        $billMonth = $request->get('bill_month');
+        $billMonthRaw = $request->get('bill_month');
         $getBillMonths = $request->get('get_bill_months');
 
         // If requesting available bill months
         if ($getBillMonths) {
-            if (!$readerId) {
+            if (! $readerId) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'reader_id is required'
+                    'message' => 'reader_id is required',
                 ]);
             }
 
             $billMonths = MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                ->whereIn('status', ['Prepared', 'Assigned', 'In Progress', 'Completed'])
+                ->whereNotNull('bill_month')
                 ->distinct()
                 ->orderBy('bill_month', 'DESC')
                 ->pluck('bill_month')
-                ->map(function($month) {
-                    $date = \Carbon\Carbon::parse($month);
+                ->map(function ($month) {
+                    $date = Carbon::parse($month);
+
                     return [
-                        'date' => $month,
-                        'label' => $date->format('F Y') . ' (' . $date->format('Y-m-d') . ')'
+                        'date' => $date->format('Y-m-d'),
+                        'label' => $date->format('F Y').' ('.$date->format('Y-m-d').')',
                     ];
                 })
                 ->values();
 
             return response()->json([
                 'success' => true,
-                'bill_months' => $billMonths
+                'bill_months' => $billMonths,
             ]);
         }
 
-        // Standard get assignments logic with optional bill_month filter
-        $query = MeterReadingSchedule::with(['consumer', 'assignedReader']);
+        if (! $readerId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'reader_id is required',
+            ], 422);
+        }
 
-        if ($readerId) {
-            $query->where('assigned_reader_id', $readerId);
-            
-            // If specific bill_month provided, use it; otherwise get latest
-            if ($billMonth) {
-                $query->where('bill_month', $billMonth);
-            } else {
-                $latestBillMonth = MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                    ->whereIn('status', ['Prepared', 'Assigned', 'In Progress', 'Completed'])
-                    ->orderBy('bill_month', 'DESC')
-                    ->value('bill_month');
-                
-                if ($latestBillMonth) {
-                    $query->where('bill_month', $latestBillMonth);
-                }
+        $query = MeterReadingSchedule::with(['consumer', 'assignedReader']);
+        $latestBillMonth = null;
+        $billMonthNormalized = null;
+
+        $query->where('assigned_reader_id', $readerId);
+
+        if ($billMonthRaw !== null && $billMonthRaw !== '') {
+            try {
+                $bm = Carbon::parse($billMonthRaw)->startOfDay();
+                // Exact billing period: match stored bill_month date only (not whole calendar month)
+                $query->whereDate('bill_month', $bm->toDateString());
+                $billMonthNormalized = $bm->format('Y-m-d');
+            } catch (\Exception $e) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid bill_month',
+                ], 422);
+            }
+        } else {
+            $latestBillMonth = MeterReadingSchedule::where('assigned_reader_id', $readerId)
+                ->whereIn('status', ['Prepared', 'Assigned', 'In Progress', 'Completed'])
+                ->orderBy('bill_month', 'DESC')
+                ->value('bill_month');
+
+            if ($latestBillMonth) {
+                $lm = Carbon::parse($latestBillMonth)->startOfDay();
+                $query->whereDate('bill_month', $lm->toDateString());
+                $billMonthNormalized = $lm->format('Y-m-d');
             }
         }
 
@@ -213,16 +207,173 @@ class MeterReadingController extends Controller
             $query->where('zone', $zone);
         }
 
-        $schedules = $query->orderBy('sedr_number')->get();
+        $schedules = $query->orderByAccountNumberTail()->get();
 
         return response()->json([
             'success' => true,
-            'bill_month' => $billMonth ?: ($latestBillMonth ?? null),
-            'data' => $schedules,
-            'total' => $schedules->count()
+            'bill_month' => $billMonthNormalized ?? ($latestBillMonth ? Carbon::parse($latestBillMonth)->format('Y-m-d') : null),
+            'data' => $schedules->values()->all(),
+            'total' => $schedules->count(),
         ]);
     }
+ /**
+     * Upload Excel to bulk-update previous_reading in meter_reading_schedules.
+     * Required columns: account_no, account_name, previous_reading.
+     * Strict: no duplicate account_no in file; one schedule updated per account (latest by bill_month).
+     */
+    public function uploadPreviousReading(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+        ]);
 
+        $imported = 0;
+        $failed = 0;
+        $errors = [];
+
+        try {
+            $data = Excel::toArray(new PreviousReadingImport(), $request->file('file'));
+            $rows = $data[0] ?? [];
+
+            if (empty($rows)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The file is empty or has no data rows.',
+                    'imported' => 0,
+                    'failed' => 0,
+                    'errors' => [],
+                ], 422);
+            }
+
+            $header = $rows[0];
+            $accountNoCol = $this->findColumnIndex($header, ['account_no', 'account_number', 'accountnumber', 'account no']);
+            $accountNameCol = $this->findColumnIndex($header, ['account_name', 'accountname', 'account name', 'name']);
+            $previousReadingCol = $this->findColumnIndex($header, ['previous_reading', 'previousreading', 'previous reading', 'prev_reading', 'prev_read']);
+
+            if ($accountNoCol === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Excel must have column: account_no (or account_number).',
+                    'imported' => 0,
+                    'failed' => 0,
+                    'errors' => [],
+                ], 422);
+            }
+            if ($previousReadingCol === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Excel must have column: previous_reading (or prev_reading).',
+                    'imported' => 0,
+                    'failed' => 0,
+                    'errors' => [],
+                ], 422);
+            }
+
+            $processedInThisFile = []; // Strict: reject duplicate account_no in file
+
+            foreach ($rows as $index => $row) {
+                if ($index === 0) {
+                    continue;
+                }
+
+                $rowNum = $index + 1;
+
+                $accountNo = isset($row[$accountNoCol]) ? trim((string) $row[$accountNoCol]) : null;
+                if ($accountNo === '') {
+                    $accountNo = null;
+                }
+                $accountName = ($accountNameCol !== null && isset($row[$accountNameCol])) ? trim((string) $row[$accountNameCol]) : '';
+                $previousReadingVal = isset($row[$previousReadingCol]) ? $row[$previousReadingCol] : null;
+
+                if (!$accountNo) {
+                    $errors[] = "Row {$rowNum}: Missing account_no.";
+                    $failed++;
+                    continue;
+                }
+
+                // Strict: duplicate account_no in file
+                if (isset($processedInThisFile[$accountNo])) {
+                    $errors[] = "Row {$rowNum}: Duplicate in file – [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
+                    $failed++;
+                    continue;
+                }
+
+                $previousReadingInt = null;
+                if ($previousReadingVal !== null && $previousReadingVal !== '') {
+                    if (is_numeric($previousReadingVal)) {
+                        $previousReadingInt = (int) round((float) $previousReadingVal);
+                        if ($previousReadingInt < 0) {
+                            $errors[] = "Row {$rowNum}: previous_reading must be >= 0.";
+                            $failed++;
+                            continue;
+                        }
+                    } else {
+                        $errors[] = "Row {$rowNum}: previous_reading must be numeric.";
+                        $failed++;
+                        continue;
+                    }
+                } else {
+                    $errors[] = "Row {$rowNum}: Missing or invalid previous_reading.";
+                    $failed++;
+                    continue;
+                }
+
+                // Match by account_number (normalize for comparison)
+                $schedule = MeterReadingSchedule::where('account_number', $accountNo)
+                    ->orWhereRaw('TRIM(account_number) = ?', [trim($accountNo)])
+                    ->orderByDesc('bill_month')
+                    ->first();
+
+                if (!$schedule) {
+                    $errors[] = "Row {$rowNum}: No schedule found for account [{$accountNo}].";
+                    $failed++;
+                    continue;
+                }
+
+                $schedule->previous_reading = $previousReadingInt;
+                $schedule->save();
+                $processedInThisFile[$accountNo] = $rowNum;
+                $imported++;
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $imported > 0 ? "Updated previous_reading for {$imported} account(s)." : 'No rows updated.',
+                'imported' => $imported,
+                'failed' => $failed,
+                'errors' => $errors,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Upload previous_reading failed: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Upload failed: ' . $e->getMessage(),
+                'imported' => $imported,
+                'failed' => $failed,
+                'errors' => $errors,
+            ], 500);
+        }
+    }
+
+    /**
+     * Find column index by possible header names (case-insensitive, spaces/underscores normalized).
+     */
+    private function findColumnIndex(array $headerRow, array $possibleNames): ?int
+    {
+        $normalizedNames = array_map(function ($name) {
+            return trim(strtolower(str_replace([' ', '_'], '', (string) $name)));
+        }, $possibleNames);
+
+        foreach ($headerRow as $index => $cellValue) {
+            $cellNormalized = trim(strtolower(str_replace([' ', '_'], '', (string) $cellValue)));
+            if (in_array($cellNormalized, $normalizedNames, true)) {
+                return $index;
+            }
+        }
+        return null;
+    }
     /**
      * Assign schedules by zone to a specific reader
      */
@@ -287,70 +438,41 @@ class MeterReadingController extends Controller
         }
     }
 
+    // /**
+    //  * Get available readers for assignment
+    //  */
+    // public function getAvailableReaders()
+    // {
+    //     $readers = User::where('role', 'reader')
+    //         ->orWhere('role', 'Reader')
+    //         ->orWhere('role', 'READER')
+    //         ->orderBy('last_name')
+    //         ->orderBy('first_name')
+    //         ->get()
+    //         ->map(function($reader) {
+    //             return [
+    //                 'id' => $reader->id,
+    //                 'name' => $this->formatName($reader),
+    //                 'email' => $reader->email
+    //             ];
+    //         });
+
+    //     return response()->json([
+    //         'success' => true,
+    //         'data' => $readers,
+    //         'total' => $readers->count()
+    //     ]);
+    // }
+    
     /**
      * Get available readers for assignment
      */
     public function getAvailableReaders()
     {
-        // List of names to exclude (case-insensitive)
-        $excludedNames = array_map('strtolower', [
-            'aj9',
-            'kp8',
-            'Shuwnzonenew1',
-            'AJ',
-            'Shuwnzonenew2',
-            'Shuwnzonenew3',
-            'Shuwnzonenew4',
-            'Keyvenzonenew5',
-            'Keyvenzonenew6',
-            'Keyvenzonenew7',
-            'Keyvenzonenew8',
-            'Keyvenzonenew9',
-            'Alexi',
-            'Leojay',
-            'Albino',
-            'Alexi2',
-            'Alexi9',
-            'Alexi8',
-            'Albino6',
-            'Albinozone2',
-            'plazos7',
-            'shuwn7',
-            'p6',
-            'shuwn6',
-            'Plazos',
-            'Shuwn2',
-            'Suganob',
-            'Aj F.',
-            'Shuwn B.',
-            'reader 1',
-            'reader r.',
-            'PLARIZA',
-            'KEYVEN B. Jr.',
-            'Keyven',
-            'Villoria',
-            'Jonas K.'
-        ]);
-
-        $readers = User::where(function($query) {
-                $query->where('role', 'reader')
-                    ->orWhere('role', 'Reader')
-                    ->orWhere('role', 'READER');
-            })
+        $readers = $this->meterReadersBaseQuery()
             ->orderBy('last_name')
             ->orderBy('first_name')
             ->get()
-            ->filter(function($reader) use ($excludedNames) {
-                $fullName = strtolower($this->formatName($reader));
-                // Check if any excluded name is in the full name
-                foreach ($excludedNames as $excludedName) {
-                    if (stripos($fullName, $excludedName) !== false) {
-                        return false; // Exclude this reader
-                    }
-                }
-                return true; // Include this reader
-            })
-            ->values()
             ->map(function($reader) {
                 return [
                     'id' => $reader->id,
@@ -365,6 +487,7 @@ class MeterReadingController extends Controller
             'total' => $readers->count()
         ]);
     }
+
 
     /**
      * Get available zones for assignment
@@ -454,7 +577,7 @@ class MeterReadingController extends Controller
                 $query->where('bill_month', Carbon::parse($request->bill_month)->format('Y-m-d'));
             }
 
-            $schedules = $query->orderBy('sedr_number')->get();
+            $schedules = $query->orderByAccountNumberTail()->get();
 
             if ($schedules->isEmpty()) {
                 return response()->json([
@@ -524,66 +647,10 @@ class MeterReadingController extends Controller
      */
     public function downloadReadingPage()
     {
-        // List of names to exclude (case-insensitive)
-        $excludedNames = array_map('strtolower', [
-            'aj9',
-            'kp8',
-            'Shuwnzonenew1',
-            'AJ',
-            'Shuwnzonenew2',
-            'Shuwnzonenew3',
-            'Shuwnzonenew4',
-            'Keyvenzonenew5',
-            'Keyvenzonenew6',
-            'Keyvenzonenew7',
-            'Keyvenzonenew8',
-            'Keyvenzonenew9',
-            'Alexi',
-            'Leojay',
-            'Albino',
-            'Alexi2',
-            'Alexi9',
-            'Alexi8',
-            'Albino6',
-            'Albinozone2',
-            'plazos7',
-            'shuwn7',
-            'p6',
-            'shuwn6',
-            'Plazos',
-            'Shuwn2',
-            'Suganob',
-            'Aj F.',
-            'Shuwn B.',
-            'reader 1',
-            'reader r.',
-            'PLARIZA',
-            'KEYVEN B. Jr.',
-            'Keyven',
-            'Villoria',
-            'Jonas K.'
-        ]);
-
-        // Get all readers (excluding filtered names)
-        $readers = User::where(function($query) {
-                $query->where('role', 'reader')
-                    ->orWhere('role', 'Reader')
-                    ->orWhere('role', 'READER');
-            })
-            ->get()
-            ->filter(function($reader) use ($excludedNames) {
-                $fullName = strtolower($this->formatName($reader));
-                // Check if any excluded name is in the full name
-                foreach ($excludedNames as $excludedName) {
-                    if (stripos($fullName, $excludedName) !== false) {
-                        return false; // Exclude this reader
-                    }
-                }
-                return true; // Include this reader
-            })
-            ->values()
-            ->sortBy('last_name')
-            ->values();
+        $readers = $this->meterReadersBaseQuery()
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->get();
 
         // Get summary of assignments
         $assignmentsSummary = MeterReadingSchedule::select(
@@ -600,7 +667,37 @@ class MeterReadingController extends Controller
 
         return view('processes.download-reading', compact('readers', 'assignmentsSummary'));
     }
+ /**
+     * JSON summary of reader assignments for the download-reading page (badge updates).
+     */
+    public function getAssignmentsSummary()
+    {
+        $rows = MeterReadingSchedule::select(
+                'assigned_reader_id',
+                DB::raw('COUNT(*) as total_routes'),
+                DB::raw('SUM(CASE WHEN status = "Assigned" THEN 1 ELSE 0 END) as pending'),
+                DB::raw('SUM(CASE WHEN status = "In Progress" THEN 1 ELSE 0 END) as in_progress'),
+                DB::raw('SUM(CASE WHEN status = "Completed" THEN 1 ELSE 0 END) as completed')
+            )
+            ->whereNotNull('assigned_reader_id')
+            ->groupBy('assigned_reader_id')
+            ->get();
 
+        $summary = [];
+        foreach ($rows as $row) {
+            $summary[(int) $row->assigned_reader_id] = [
+                'total_routes' => (int) $row->total_routes,
+                'pending'     => (int) $row->pending,
+                'in_progress' => (int) $row->in_progress,
+                'completed'   => (int) $row->completed,
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'summary' => $summary,
+        ]);
+    }
     /**
      * Display billing payment page focused on downloaded readings
      */
@@ -718,11 +815,58 @@ class MeterReadingController extends Controller
             if ($payment->reading_id) {
                 $dr = DB::table('downloaded_readings')->where('id', $payment->reading_id)->first();
                 if (!$dr) {
+                    // Linked reading missing: fall back to consumer_payment + consumer so the form can still load and be updated
+                    $consumer = $payment->consumer_id ? \App\Models\ConsumerZoneOne::find($payment->consumer_id) : null;
+                    if (!$consumer) {
                     return response()->json([
                         'success' => false,
-                        'message' => 'Payment record found but linked reading not found.',
+                        'message' => 'Payment record found but linked reading and consumer not found. Cannot load form.',
                     ], 404);
                 }
+                $accountNumber = $consumer->account_no ? strtoupper(trim($consumer->account_no)) : null;
+                    $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                    $billMonthDateObj = $billMonthDate ? $billMonthDate->format('Y-m-d') : null;
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'zone' => $consumer->zone_code ?? null,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'reading_date' => null,
+                        'status' => 'Prepared',
+                        'reader_notes' => null,
+                        'completed_at' => null,
+                        'payment_method' => $payment->payment_method ?? null,
+                        'payment_amount' => $payment->payment_amount ?? null,
+                        'amount_tendered' => $payment->amount_tendered ?? null,
+                        'change_amount' => $payment->change_amount ?? null,
+                        'official_receipt_number' => $payment->or_number,
+                        'payment_remarks' => $payment->remarks ?? null,
+                        'paid_at' => $payment->paid_at ?? null,
+                        'schedule_account_name' => $consumer->account_name,
+                        'address' => $consumer->address1 ?? '',
+                        'category' => $consumer->category_code ?? '',
+                        'meter_number' => $consumer->meter_number ?? null,
+                        'bill_month' => $billMonthDateObj,
+                        'bill_date' => null,
+                        'due_date' => null,
+                        'disconnection_date' => null,
+                        'previous_reading_date' => null,
+                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'arrears' => null,
+                        'total_amount' => null,
+                        'schedule_status' => null,
+                        'sedr_number' => null,
+                        'downloaded_created_at' => null,
+                        'downloaded_updated_at' => null,
+                        'payment_reference' => null,
+                    ];
+                } else {
                 $schedule = null;
                 if ($dr->schedule_id) {
                     $schedule = DB::table('meter_reading_schedules')->where('id', $dr->schedule_id)->first();
@@ -773,27 +917,72 @@ class MeterReadingController extends Controller
                 }
                 $accountNumber = $accountNumber ? strtoupper(trim($accountNumber)) : null;
                 $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                }
             } else {
                 $consumer = \App\Models\ConsumerZoneOne::find($payment->consumer_id);
                 if (!$consumer) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'OR number found but consumer record not found.',
-                    ], 404);
-                }
-                $accountNumber = $consumer->account_no ? strtoupper(trim($consumer->account_no)) : null;
-                $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
-                $billMonthDateObj = $billMonthDate ? $billMonthDate->format('Y-m-d') : null;
-                $reading = (object) [
-                    'downloaded_id' => null,
-                    'schedule_id' => null,
-                    'reader_id' => null,
-                    'account_number' => $consumer->account_no,
-                    'account_name' => $consumer->account_name,
-                    'zone' => $consumer->zone_code ?? null,
-                    'previous_reading' => 0,
-                    'current_reading' => null,
-                    'consumption' => 0,
+                    // Support "Others" payments where consumer_id is null and only account_name is stored.
+                    $paidAt = $payment->paid_at ? Carbon::parse($payment->paid_at) : null;
+                    $billMonthDateObj = $billMonthDate
+                        ? $billMonthDate->format('Y-m-d')
+                        : ($paidAt ? $paidAt->copy()->startOfMonth()->format('Y-m-d') : null);
+
+                    $accountNumber = null;
+                    $normalizedAccount = null;
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => null,
+                        'account_name' => $payment->account_name ?? '',
+                        'zone' => null,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'reading_date' => null,
+                        'status' => 'Prepared',
+                        'reader_notes' => null,
+                        'completed_at' => null,
+                        'payment_method' => $payment->payment_method ?? null,
+                        'payment_amount' => $payment->payment_amount ?? null,
+                        'amount_tendered' => $payment->amount_tendered ?? null,
+                        'change_amount' => $payment->change_amount ?? null,
+                        'official_receipt_number' => $payment->or_number,
+                        'payment_remarks' => $payment->remarks ?? null,
+                        'paid_at' => $payment->paid_at ?? null,
+                        'schedule_account_name' => $payment->account_name ?? '',
+                        'address' => '',
+                        'category' => '',
+                        'meter_number' => null,
+                        'bill_month' => $billMonthDateObj,
+                        'bill_date' => null,
+                        'due_date' => null,
+                        'disconnection_date' => null,
+                        'previous_reading_date' => null,
+                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'arrears' => null,
+                        'total_amount' => null,
+                        'schedule_status' => null,
+                        'sedr_number' => null,
+                        'downloaded_created_at' => null,
+                        'downloaded_updated_at' => null,
+                        'payment_reference' => null,
+                    ];
+                } else {
+                    $accountNumber = $consumer->account_no ? strtoupper(trim($consumer->account_no)) : null;
+                    $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                    $billMonthDateObj = $billMonthDate ? $billMonthDate->format('Y-m-d') : null;
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'zone' => $consumer->zone_code ?? null,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
                     'downloaded_current_bill' => 0.0,
                     'reading_date' => null,
                     'status' => 'Prepared',
@@ -824,6 +1013,8 @@ class MeterReadingController extends Controller
                     'downloaded_updated_at' => null,
                     'payment_reference' => null,
                 ];
+                    
+                }
             }
             $lookupSuccessMessage = 'Billing record loaded by OR number.';
         }
@@ -1230,6 +1421,19 @@ class MeterReadingController extends Controller
         if ($reading->reader_id) {
             $reader = User::find($reading->reader_id);
         }
+        
+        // Always source address from consumer_zone.address1 when possible (single source of truth).
+        // meter_reading_schedules.address may be stale or missing.
+        $consumerForAddress = null;
+        $accForAddress = strtoupper(trim((string) ($reading->account_number ?? $accountNumber ?? '')));
+        if ($accForAddress !== '') {
+            $normForAddress = str_replace('-', '', $accForAddress);
+            $consumerForAddress = \App\Models\ConsumerZoneOne::where(function ($q) use ($accForAddress, $normForAddress) {
+                $q->where('account_no', $accForAddress)
+                    ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normForAddress])
+                    ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [$accForAddress]);
+            })->first();
+        }
 
         // Prepare account data from downloaded_readings
         $accountData = [
@@ -1237,7 +1441,12 @@ class MeterReadingController extends Controller
             'name' => $reading->account_name ?? $reading->schedule_account_name ?? '',
             'zone' => $reading->zone ?? '',
             'category' => $reading->category ?? '',
-            'address' => $reading->address ?? '',
+            'address' => $consumerForAddress?->address1 ?? ($reading->address ?? ''),
+            'bill_disc_percent' => $consumerForAddress?->bill_disc_percent,
+            'osca_id_no' => $consumerForAddress?->osca_id_no,
+            'bill_disc_updated_at' => !empty($consumerForAddress?->bill_disc_updated_at)
+                ? Carbon::parse($consumerForAddress->bill_disc_updated_at)->format('Y-m-d')
+                : null,
             'meter_number' => $reading->meter_number ?? null,
             'reader_id' => $reading->reader_id,
             'reader_name' => $reader ? $this->formatName($reader) : null,
@@ -1536,6 +1745,50 @@ class MeterReadingController extends Controller
         // Add current balance to account data
         $accountData['current_balance'] = round($currentBalance, 2);
 
+        // When record was loaded by OR number, fetch LRO payment entries linked to that OR.
+        // This is used by Billing Payment to repopulate SUNDRIES for already-paid records.
+        $lroEntriesByOr = [];
+        if ($orNumberInput !== '') {
+            $orRemarks = 'Payment OR#' . trim($orNumberInput);
+            $accountForLro = $accountData['number'] ?? $accountNumber ?? null;
+
+            $baseLroQuery = LROLedger::where('remarks', $orRemarks)
+                ->orderBy('date', 'asc')
+                ->orderBy('id', 'asc');
+
+            // Prefer account-matched rows, but allow blank/null account rows (legacy Others saves).
+            $candidateRows = $accountForLro
+                ? (clone $baseLroQuery)->where(function ($q) use ($accountForLro) {
+                    $q->where('account', $accountForLro)
+                      ->orWhereNull('account')
+                      ->orWhere('account', '');
+                })->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'amount', 'ar_type', 'acct_code', 'reference', 'remarks', 'status'])
+                : (clone $baseLroQuery)->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'amount', 'ar_type', 'acct_code', 'reference', 'remarks', 'status']);
+
+            // Fallback: if account-filtered query produced nothing, return all rows for this OR.
+            if ($candidateRows->isEmpty()) {
+                $candidateRows = (clone $baseLroQuery)
+                    ->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'amount', 'ar_type', 'acct_code', 'reference', 'remarks', 'status']);
+            }
+
+            $lroEntriesByOr = $candidateRows->map(function ($row) {
+                return [
+                    'id' => $row->id,
+                    'type' => $row->type,
+                    'date' => $row->date,
+                    'account' => $row->account,
+                    'name' => $row->name,
+                    'bam_no' => $row->bam_no,
+                    'amount' => (float) ($row->amount ?? 0),
+                    'ar_type' => $row->ar_type,
+                    'acct_code' => $row->acct_code,
+                    'reference' => $row->reference,
+                    'remarks' => $row->remarks,
+                    'status' => $row->status,
+                ];
+            })->values()->toArray();
+        }
+
         // Fetch SUNDRIES (LRO Ledger) entries for this account.
         // Only DM (charge) rows are shown. For each DM row, sum all matching CM (credit) rows
         // to determine the remaining unpaid balance. Skip fully-paid entries.
@@ -1600,6 +1853,7 @@ class MeterReadingController extends Controller
                 'payment' => $paymentData,
                 'downloaded_reading' => $downloadedReadingData,
                 'sundries' => $sundries,
+                'lro_entries_by_or' => $lroEntriesByOr,
             ],
         ]);
         } catch (\Throwable $e) {
@@ -1619,6 +1873,98 @@ class MeterReadingController extends Controller
                 'message' => $userMessage,
             ], 200);
         }
+    }
+    
+    
+    /**
+     * Look up LRO Ledger (lro_ledger) entries by BAM No.
+     * Used by Billing Payment "Search BAM No." to populate SUNDRIES rows.
+     */
+    public function lookupBamNo(Request $request)
+    {
+        $request->validate([
+            'bam_no' => ['required', 'string', 'max:50'],
+        ]);
+
+        $bamNo = trim((string) $request->input('bam_no', ''));
+        if ($bamNo === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'BAM No. is required.',
+            ], 422);
+        }
+
+        // Fetch LRO ledger entries by BAM No (or legacy "reference") from lro_ledger.
+        // This BAM search is ONLY for "Others" entries.
+        $rows = LROLedger::where(function ($q) use ($bamNo) {
+                $q->where('bam_no', $bamNo)
+                  ->orWhere('reference', $bamNo);
+            })
+            ->where('type', 'Others')
+            ->where('status', 'Approved')
+            ->orderBy('date', 'asc')
+            ->orderBy('id', 'asc')
+            ->limit(4) // matches the 4 sundry slots on the payment form
+            ->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'reference', 'acct_code', 'amount', 'status']);
+
+        if ($rows->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'BAM No. not found in LRO Ledger.',
+            ], 404);
+        }
+
+        $first = $rows->first();
+        // Check if this BAM already has a posted payment CM row and capture its OR number from remarks.
+        $paidRow = LROLedger::where(function ($q) use ($bamNo) {
+                $q->where('bam_no', $bamNo)
+                  ->orWhere('reference', $bamNo);
+            })
+            ->where('type', 'CM')
+            ->where('status', 'Posted')
+            ->whereNotNull('remarks')
+            ->where('remarks', 'like', 'Payment OR#%')
+            ->orderBy('date', 'desc')
+            ->orderBy('id', 'desc')
+            ->first(['id', 'remarks', 'date']);
+
+        $paidOrNumber = null;
+        if ($paidRow && !empty($paidRow->remarks)) {
+            $paidOrNumber = trim((string) preg_replace('/^Payment OR#/', '', (string) $paidRow->remarks));
+            if ($paidOrNumber === '') {
+                $paidOrNumber = null;
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'BAM No. loaded from LRO Ledger.',
+            'data' => [
+                'account' => [
+                    'number' => $first->account,
+                    'name' => $first->name,
+                    'date' => $first->date,
+                ],
+                'payment' => [
+                    'is_paid' => $paidRow !== null,
+                    'or_number' => $paidOrNumber,
+                    'paid_at' => $paidRow?->date,
+                ],
+                'sundries' => $rows->map(function ($row) {
+                    $bamRef = $row->bam_no ?? $row->reference;
+                    return [
+                        'id'        => $row->id,
+                        'type'      => $row->type,
+                        'acct_code' => $row->acct_code,
+                        'bam_no'    => $bamRef,
+                        'reference' => $row->reference,
+                        'amount'    => (float) ($row->amount ?? 0),
+                        'name'      => $row->name,
+                        'account'   => $row->account,
+                    ];
+                })->values(),
+            ],
+        ]);
     }
 
     /**
@@ -3625,48 +3971,6 @@ class MeterReadingController extends Controller
         return response()->json([
             'success' => true,
             'data' => $accounts,
-        ]);
-    }
-
-    /**
-     * Update previous reading for a meter reading schedule (main-consumer page).
-     * Updates meter_reading_schedules and optionally downloaded_readings for the same schedule.
-     */
-    public function updateConsumerMeterReading(Request $request)
-    {
-        $request->validate([
-            'schedule_id' => 'required|integer|exists:meter_reading_schedules,id',
-            'account_no' => 'nullable|string',
-            'previous_reading' => 'required|integer|min:0',
-        ]);
-
-        $schedule = MeterReadingSchedule::find($request->schedule_id);
-        if (!$schedule) {
-            return response()->json(['success' => false, 'message' => 'Schedule not found.'], 404);
-        }
-
-        if ($request->filled('account_no')) {
-            $normalizedRequest = str_replace('-', '', trim($request->account_no));
-            $normalizedSchedule = str_replace('-', '', trim($schedule->account_number ?? ''));
-            if (strcasecmp($normalizedRequest, $normalizedSchedule) !== 0) {
-                return response()->json(['success' => false, 'message' => 'Account does not match schedule.'], 422);
-            }
-        }
-
-        $previousReading = (int) $request->previous_reading;
-
-        $schedule->previous_reading = $previousReading;
-        $schedule->save();
-
-        // Keep downloaded_readings in sync if a row exists for this schedule
-        DB::table('downloaded_readings')
-            ->where('schedule_id', $schedule->id)
-            ->update(['previous_reading' => $previousReading]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Previous reading updated successfully.',
-            'previous_reading' => $previousReading,
         ]);
     }
 }

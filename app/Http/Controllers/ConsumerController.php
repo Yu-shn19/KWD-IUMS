@@ -13,9 +13,10 @@ use Illuminate\Support\Facades\DB;
 class ConsumerController extends Controller
 {
     /**
-     * Display a listing of the resource.
+     * Resolve consumer from ?account= / ?account_no= / ?account_number=.
+     * When $fallbackToLatest is true and no account is in the query, returns the most recently created row (main consumer page default).
      */
-    public function index(Request $request)
+     public static function resolveConsumerFromRequest(Request $request, bool $fallbackToLatest = false): ?ConsumerZoneOne
     {
         $accountNo = $request->query('account_no') ?: $request->query('account_number') ?: $request->query('account');
         $accountNo = $accountNo ? trim((string) $accountNo) : null;
@@ -26,9 +27,32 @@ class ConsumerController extends Controller
                 $normalized = str_replace('-', '', $accountNo);
                 $consumer = ConsumerZoneOne::whereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalized])->first();
             }
-        } else {
-            $consumer = ConsumerZoneOne::orderBy('id', 'desc')->first();
+
+            if ($consumer) {
+                return $consumer;
+            }
+
+            // Stale or typo ?account= in URL: still show a consumer on main page when requested
+            if ($fallbackToLatest) {
+                return ConsumerZoneOne::orderBy('id', 'desc')->first();
+            }
+
+            return null;
         }
+
+        if ($fallbackToLatest) {
+            return ConsumerZoneOne::orderBy('id', 'desc')->first();
+        }
+
+        return null;
+    }
+
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(Request $request)
+    {
+        $consumer = self::resolveConsumerFromRequest($request, true);
 
         $latestBill = null;
         $meterReading = null;
@@ -39,6 +63,45 @@ class ConsumerController extends Controller
         }
 
         return view('Files.main-consumer', compact('consumer', 'latestBill', 'meterReading'));
+    }
+
+    /**
+     * Consumer tab views: resolve consumer from request so header shows on all tabs.
+     */
+    public function ledger(Request $request)
+    {
+        $consumer = $this->resolveConsumerFromRequest($request);
+        return view('consumer.ledger', compact('consumer'));
+    }
+
+    public function lroLedger(Request $request)
+    {
+        $consumer = $this->resolveConsumerFromRequest($request);
+        return view('consumer.lro-ledger', compact('consumer'));
+    }
+
+    public function service(Request $request)
+    {
+        $consumer = $this->resolveConsumerFromRequest($request);
+        return view('consumer.service', compact('consumer'));
+    }
+
+    public function meter(Request $request)
+    {
+        $consumer = $this->resolveConsumerFromRequest($request);
+        return view('consumer.meter', compact('consumer'));
+    }
+
+    public function location(Request $request)
+    {
+        $consumer = $this->resolveConsumerFromRequest($request);
+        return view('consumer.location', compact('consumer'));
+    }
+
+    public function consumption(Request $request)
+    {
+        $consumer = $this->resolveConsumerFromRequest($request);
+        return view('consumer.consumption', compact('consumer'));
     }
 
     /**
@@ -413,6 +476,7 @@ class ConsumerController extends Controller
         // Note: materials, septage_fee, others are not stored in meter_reading_schedules table
         // They default to 0.00 unless stored elsewhere (e.g., in downloaded_readings or another table)
         return (object) [
+            'account_no' => trim((string) $accountNumber),
             'bill_month' => $reading->bill_month ?? null,
             'bill_date' => $reading->bill_date ?? null,
             'current_bill' => round($currentBill, 2),
@@ -479,12 +543,65 @@ class ConsumerController extends Controller
         }
     }
 
+    // /**
+    //  * Update the specified resource in storage.
+    //  */
+    // public function update(Request $request, ConsumerZoneOne $consumer)
+    // {
+    //     $validator = Validator::make($request->all(), [
+    //         'install_date' => 'nullable|date',
+    //         'account_no' => 'required|string|unique:consumer_zone,account_no,' . $consumer->id,
+    //         'account_name' => 'required|string',
+    //         'address1' => 'nullable|string',
+    //         'latitude' => 'nullable|numeric|between:-90,90',
+    //         'longitude' => 'nullable|numeric|between:-180,180',
+    //         'zone_code' => 'required|string',
+    //         'category_code' => 'nullable|string',
+    //         'meter_number' => 'nullable|string',
+    //         'meter_brand' => 'nullable|string',
+    //         'rate_code' => 'nullable|string',
+    //         'status_code' => 'nullable|string',
+    //         'sequence' => 'nullable|integer',
+    //         'consumer_deposit' => 'nullable|numeric',
+    //         'installation_fee' => 'nullable|numeric',
+    //         'installation_balance' => 'nullable|numeric',
+    //         'balance' => 'nullable|numeric',
+    //         'cons_ctrl' => 'nullable|string',
+    //     ]);
+
+    //     if ($validator->fails()) {
+    //         return response()->json([
+    //             'success' => false,
+    //             'errors' => $validator->errors()
+    //         ], 422);
+    //     }
+
+    //     try {
+    //         $data = $request->all();
+            
+    //         $consumer->update($data);
+
+    //         return response()->json([
+    //             'success' => true,
+    //             'message' => 'Consumer updated successfully!',
+    //             'consumer' => $consumer->fresh()
+    //         ], 200);
+    //     } catch (\Exception $e) {
+    //         return response()->json([
+    //             'success' => false,
+    //             'message' => 'Failed to update consumer: ' . $e->getMessage()
+    //         ], 500);
+    //     }
+    // }
+    
     /**
      * Update the specified resource in storage.
      */
     public function update(Request $request, ConsumerZoneOne $consumer)
     {
-        $validator = Validator::make($request->all(), [
+        $billDiscChanged = $this->consumerBillDiscChangedFromRequest($request, $consumer);
+
+        $rules = [
             'install_date' => 'nullable|date',
             'account_no' => 'required|string|unique:consumer_zone,account_no,' . $consumer->id,
             'account_name' => 'required|string',
@@ -503,7 +620,18 @@ class ConsumerController extends Controller
             'installation_balance' => 'nullable|numeric',
             'balance' => 'nullable|numeric',
             'cons_ctrl' => 'nullable|string',
-        ]);
+            'bill_disc_percent' => 'nullable|string|in:SC DISCOUNT',
+            'bill_disc_amount' => 'nullable|numeric|min:0',
+            'osca_id_no' => 'nullable|string|max:100',
+            'remark' => 'nullable|string|max:2000',
+            'bill_disc_updated_at' => 'nullable|date',
+        ];
+
+        if ($billDiscChanged) {
+            $rules['bill_disc_updated_at'] = 'required|date';
+        }
+
+        $validator = Validator::make($request->all(), $rules);
 
         if ($validator->fails()) {
             return response()->json([
@@ -513,8 +641,7 @@ class ConsumerController extends Controller
         }
 
         try {
-            $data = $request->all();
-            
+            $data = $request->except(['_token', '_method']);
             $consumer->update($data);
 
             return response()->json([
@@ -548,6 +675,47 @@ class ConsumerController extends Controller
                 'message' => 'Failed to delete consumer: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+ /**
+    * True when bill discount fields in request differ from stored values.
+     */
+    private function consumerBillDiscChangedFromRequest(Request $request, ConsumerZoneOne $consumer): bool
+    {
+        $normPercent = function ($v) {
+            if ($v === '' || $v === null) {
+                return null;
+            }
+            $s = trim((string) $v);
+            if ($s === '') {
+                return null;
+            }
+            // Backward compatibility: treat numeric 5/5.00 as SC DISCOUNT.
+            if (is_numeric($s) && abs(((float) $s) - 5.0) < 0.001) {
+                return 'SC DISCOUNT';
+            }
+            if (strtoupper($s) === 'SC DISCOUNT') {
+                return 'SC DISCOUNT';
+            }
+            return $s;
+        };
+
+        $normAmount = function ($v) {
+            if ($v === '' || $v === null) {
+                return null;
+            }
+            if (! is_numeric($v)) {
+                return null;
+            }
+
+            return round((float) $v, 4);
+        };
+
+        $percentChanged = $normPercent($request->input('bill_disc_percent')) !== $normPercent($consumer->bill_disc_percent);
+        $amountChanged = $request->has('bill_disc_amount')
+            && $normAmount($request->input('bill_disc_amount')) !== $normAmount($consumer->bill_disc_amount);
+
+        return $percentChanged || $amountChanged;
     }
 
     /**

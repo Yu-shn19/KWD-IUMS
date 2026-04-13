@@ -25,47 +25,7 @@
             <div id="content">
                 <!-- Simple Header -->
                 @include('consumer.header')
-
-                <!-- Navigation Tabs -->
-                <div class="card-body p-0">
-                    <ul class="nav nav-tabs">
-                        <li class="nav-item">
-                            <a href="{{ route('consumer') }}" class="nav-link ">
-                                <i class="fas fa-user me-1"></i>Consumer Details
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('ledger') }}" class="nav-link">
-                                <i class="fas fa-file-invoice me-1"></i>Account Ledger
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('lro-ledger') }}" class="nav-link active">
-                                <i class="fas fa-list me-1"></i>LRO Ledger
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('service') }}" class="nav-link">
-                                <i class="fas fa-history me-1"></i>Service History
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('meter') }}" class="nav-link">
-                                <i class="fas fa-tachometer-alt me-1"></i>Meter Reading
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('location') }}" class="nav-link">
-                                <i class="fas fa-map-marker-alt me-1"></i>Location Map
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('consumption') }}" class="nav-link">
-                                <i class="fas fa-chart-line me-1"></i>Consumption Graph
-                            </a>
-                        </li>
-                    </ul>
-                </div>
+               @include('consumer.nav-tabs', ['activeTab' => 'lro-ledger'])
 
                 <!-- Container Fluid-->
                 <div class="container-fluid" id="container-wrapper">

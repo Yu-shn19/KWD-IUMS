@@ -119,7 +119,52 @@
         });
     }
 
-    function updateConsumerHeader(consumer) {
+    // function updateConsumerHeader(consumer) {
+    //     // Use account_name from consumer_zone table (or fallback to old structure)
+    //     const accountNo = consumer.account_no || consumer.account_number || '';
+    //     const accountName = consumer.account_name || consumer.full_name || '';
+        
+    //     // If no account_name, try to construct from old structure
+    //     let fullName = accountName;
+    //     if (!fullName && (consumer.last_name || consumer.first_name)) {
+    //         fullName = (consumer.last_name || '') + ', ' + (consumer.first_name || '');
+    //         if (consumer.middle_name) {
+    //             fullName += ' ' + consumer.middle_name.charAt(0) + '.';
+    //         }
+    //         if (consumer.extension) {
+    //             fullName += ' ' + consumer.extension;
+    //         }
+    //     }
+
+    //     // Update header name
+    //     const headerName = document.getElementById('consumerHeaderName');
+    //     if (headerName) {
+    //         headerName.textContent = accountNo + ' ' + fullName;
+    //     }
+
+    //     // Update header status badge - use status_label or status_code from consumer_zone
+    //     const headerStatus = document.getElementById('consumerHeaderStatus');
+    //     if (headerStatus) {
+    //         const statusText = consumer.status_label || consumer.status_code || consumer.status || 'N/A';
+    //         headerStatus.textContent = statusText + ' Consumer';
+            
+    //         // Update badge color based on status
+    //         headerStatus.className = 'badge';
+    //         const statusUpper = (statusText || '').toUpperCase();
+    //         if (statusUpper === 'ACTIVE' || statusUpper === 'A') {
+    //             headerStatus.classList.add('bg-success');
+    //         } else if (statusUpper === 'INACTIVE' || statusUpper === 'I') {
+    //             headerStatus.classList.add('bg-warning');
+    //         } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'D') {
+    //             headerStatus.classList.add('bg-danger');
+    //         } else if (statusUpper === 'SUSPENDED' || statusUpper === 'S') {
+    //             headerStatus.classList.add('bg-warning');
+    //         } else {
+    //             headerStatus.classList.add('bg-secondary');
+    //         }
+    //     }
+    // }
+     function updateConsumerHeader(consumer) {
         // Use account_name from consumer_zone table (or fallback to old structure)
         const accountNo = consumer.account_no || consumer.account_number || '';
         const accountName = consumer.account_name || consumer.full_name || '';
@@ -136,29 +181,34 @@
             }
         }
 
-        // Update header name
+        const statusText = consumer.status_label || consumer.status_code || consumer.status || 'N/A';
+        const statusUpper = (statusText || '').toUpperCase();
+
+        // Update header name (warning/danger text matches status, like badge)
         const headerName = document.getElementById('consumerHeaderName');
         if (headerName) {
             headerName.textContent = accountNo + ' ' + fullName;
+            headerName.className = 'mb-1';
+            if (statusUpper === 'PENDING' || statusUpper === 'P') {
+                headerName.classList.add('text-warning', 'fw-semibold');
+            } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'X' || statusUpper === 'D') {
+                headerName.classList.add('text-danger', 'fw-semibold');
+            }
         }
 
         // Update header status badge - use status_label or status_code from consumer_zone
         const headerStatus = document.getElementById('consumerHeaderStatus');
         if (headerStatus) {
-            const statusText = consumer.status_label || consumer.status_code || consumer.status || 'N/A';
             headerStatus.textContent = statusText + ' Consumer';
             
-            // Update badge color based on status
+            // Badge colors: Active / Pending / Disconnected (matches ConsumerZoneOne::status_label)
             headerStatus.className = 'badge';
-            const statusUpper = (statusText || '').toUpperCase();
             if (statusUpper === 'ACTIVE' || statusUpper === 'A') {
                 headerStatus.classList.add('bg-success');
-            } else if (statusUpper === 'INACTIVE' || statusUpper === 'I') {
+            } else if (statusUpper === 'PENDING' || statusUpper === 'P') {
                 headerStatus.classList.add('bg-warning');
-            } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'D') {
+            } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'X' || statusUpper === 'D') {
                 headerStatus.classList.add('bg-danger');
-            } else if (statusUpper === 'SUSPENDED' || statusUpper === 'S') {
-                headerStatus.classList.add('bg-warning');
             } else {
                 headerStatus.classList.add('bg-secondary');
             }
@@ -408,10 +458,17 @@
     let f1SuggestionsTimeout;
     let f1SelectedIndex = -1;
 
-    function isMainConsumerPage() {
+    // function isMainConsumerPage() {
+    //     if (window.isMainConsumerPage === true) return true;
+    //     const path = (window.location.pathname || '').replace(/\/$/, '');
+    //     const pathSegment = path.split('/').pop() || path;
+    //     return pathSegment === 'consumer' || pathSegment === 'main-consumer' || path === 'consumer' || path.endsWith('/consumer') || path.endsWith('/main-consumer');
+    // }
+     function isMainConsumerPage() {
+        if (window.isMainConsumerPage === true) return true;
         const path = (window.location.pathname || '').replace(/\/$/, '');
         const pathSegment = path.split('/').pop() || path;
-        return pathSegment === 'consumer' || path === 'consumer' || path.endsWith('/consumer');
+        return pathSegment === 'consumer' || pathSegment === 'main-consumer' || path === 'consumer' || path.endsWith('/consumer') || path.endsWith('/main-consumer');
     }
 
     $(document).on('keydown', function(e) {
@@ -482,7 +539,7 @@
         }
     }
 
-    function selectConsumerFromF1Modal(accountNo, accountName) {
+       function selectConsumerFromF1Modal(accountNo, accountName) {
         $('#f1SearchSuggestions').hide();
         f1SelectedIndex = -1;
 
@@ -507,6 +564,13 @@
                         if (typeof window.updateLatestBillCard === 'function') {
                             window.updateLatestBillCard(response.latest_bill || null);
                         }
+                        if (typeof window.updateMeterReadingCard === 'function') {
+                            window.updateMeterReadingCard(response.meter_reading || null);
+                        }
+                        if (consumer && (consumer.account_no || consumer.account_number)) {
+                            var $meterAcc = $('#meterReadingAccountNo');
+                            if ($meterAcc.length) $meterAcc.val(consumer.account_no || consumer.account_number);
+                        }
                         $('#editConsumerBtn').prop('disabled', false);
                         $('#deleteConsumerBtn').prop('disabled', false);
                         $('#f1SearchModal').modal('hide');
@@ -521,6 +585,15 @@
                             return;
                         }
                         $('#f1SearchModal').modal('hide');
+                    }
+
+                    // Always update meter reading card when the page provides it (same as search bar behavior)
+                    if (typeof window.updateMeterReadingCard === 'function') {
+                        window.updateMeterReadingCard(response.meter_reading || null);
+                    }
+                    if (consumer && (consumer.account_no || consumer.account_number)) {
+                        var $meterAccNo = $('#meterReadingAccountNo');
+                        if ($meterAccNo.length) $meterAccNo.val(consumer.account_no || consumer.account_number);
                     }
 
                     if (typeof Swal !== 'undefined') {

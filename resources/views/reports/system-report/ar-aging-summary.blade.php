@@ -43,9 +43,8 @@
                                                 <select name="status" class="form-control form-control-sm">
                                                     <option value="">All Status</option>
                                                     <option value="A - ACTIVE" {{ $status == 'A - ACTIVE' ? 'selected' : '' }}>A - ACTIVE</option>
-                                                    <option value="I - INACTIVE" {{ $status == 'I - INACTIVE' ? 'selected' : '' }}>I - INACTIVE</option>
-                                                    <option value="S - SUSPENDED" {{ $status == 'S - SUSPENDED' ? 'selected' : '' }}>S - SUSPENDED</option>
-                                                    <option value="D - DISCONNECTED" {{ $status == 'D - DISCONNECTED' ? 'selected' : '' }}>D - DISCONNECTED</option>
+                                                    <option value="P - PENDING" {{ $status == 'P - PENDING' ? 'selected' : '' }}>P - PENDING</option>
+                                                    <option value="X - DISCONNECTED" {{ $status == 'X - DISCONNECTED' ? 'selected' : '' }}>X - DISCONNECTED</option>
                                                 </select>
                                             </div>
 
@@ -104,8 +103,8 @@
                         </div>
                     @endif
 
-                    <!-- Report Tabs -->
-                    <div class="row mb-2">
+                    <!-- Report Tabs (screen only; avoids extra vertical space in print) -->
+                    <div class="row mb-2 no-print">
                         <div class="col-md-12">
                             <ul class="nav nav-tabs">
                                 <li class="nav-item">
@@ -159,39 +158,39 @@
                                     <div class="card shadow-sm mb-4">
                                         <div class="card-body p-0">
                                             <div class="table-responsive" style="max-height: 600px; overflow: auto;">
-                                                <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 10px;" id="agingTable">
+                                                <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 14px;" id="agingTable">
                                                     <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                                         <tr>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">Zone_code</th>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">Sequence</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 100px;">ACCOUNT NO</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 140px;">ACCOUNT NO</th>
                                                             <th class="py-2 px-1" style="min-width: 180px;">ACCOUNT NAME</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 60px;">STATUS</th>
+                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 60px;">STATUS</th>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 90px;">Category_code</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 90px;">CURRENT</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">30 DAYS</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">60 DAYS</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">90 DAYS</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">120 DAYS</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">OVER 120</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">PREV YEAR</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">BALANCE</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 90px;">current</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">_30</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">_60</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 70px;">_90</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">_over90</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">prev_year</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">balance</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        @forelse(($detailRecords ?? []) as $record)
+                                                        @forelse(collect($detailRecords ?? [])->sortBy(function ($record) {
+                                                            return (string) ($record['sequence'] ?? '');
+                                                        }, SORT_NATURAL | SORT_FLAG_CASE)->values() as $record)
                                                             <tr>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['zone'] }}</td>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['sequence'] }}</td>
                                                                 <td class="text-center py-1">{{ $record['account_number'] }}</td>
                                                                 <td class="py-1 px-1">{{ $record['account_name'] }}</td>
-                                                                <td class="text-center py-1">{{ $record['status_code'] }}</td>
+                                                                <td class="text-center py-1 no-print-col">{{ $record['status_code'] }}</td>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['category_code'] }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['current_bill'] ?? 0, 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['days_1_30'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['days_31_60'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['days_61_90'], 2) }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['days_91_120'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['over_120'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['prev_house'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1 font-weight-bold">{{ number_format($record['balance'], 2) }}</td>
@@ -204,6 +203,13 @@
                                                             </tr>
                                                         @endforelse
                                                     </tbody>
+                                                    <tfoot>
+                                                        <tr class="bg-light font-weight-bold">
+                                                            <td colspan="13" class="text-right py-2 px-2">
+                                                                Total Number of Accounts: {{ count($detailRecords ?? []) }}
+                                                            </td>
+                                                        </tr>
+                                                    </tfoot>
                                                 </table>
                                             </div>
                                         </div>
@@ -212,7 +218,7 @@
                                         <table class="print-totals-table" style="display: none; width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 15px;">
                                             <!-- COUNT row -->
                                             <tr>
-                                                <td colspan="11" class="text-left" style="border: none; padding: 6px 5px; font-size: 9px; font-weight: bold; color: #333;">COUNT: {{ count($detailRecords ?? []) }}</td>
+                                                <td colspan="9" class="text-left" style="border: none; padding: 6px 5px; font-size: 9px; font-weight: bold; color: #333;">COUNT: {{ count($detailRecords ?? []) }}</td>
                                             </tr>
                                             <!-- TOTALS row - calculating from all detailRecords to ensure all data is included -->
                                             @php
@@ -221,23 +227,17 @@
                                                 $totalDays1_30 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_1_30'] ?? 0); });
                                                 $totalDays31_60 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_31_60'] ?? 0); });
                                                 $totalDays61_90 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_61_90'] ?? 0); });
-                                                $totalDays91_120 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_91_120'] ?? 0); });
                                                 $totalOver120 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['over_120'] ?? 0); });
                                                 $totalPrevHouse = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['prev_house'] ?? 0); });
                                                 $totalBalance = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['balance'] ?? 0); });
                                             @endphp
                                             <tr style="background-color: #f8f9fa !important; font-weight: bold;">
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;"></td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;"></td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ $selectedZone ? $selectedZone : 'ALL' }} TOTALS:</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;"></td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;"></td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;"></td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalCurrent, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays1_30, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays31_60, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays61_90, 2) }}</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays91_120, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalOver120, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalPrevHouse, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalBalance, 2) }}</td>
@@ -277,6 +277,8 @@
                                                         Zone {{ $selectedZone }} - 
                                                     @endif
                                                     As of {{ isset($asOf) ? $asOf->format('m/d/Y') : now()->format('m/d/Y') }}
+                                                    <span class="ml-2">|</span>
+                                                    Total Number of Accounts: <strong>{{ count($detailRecords ?? []) }}</strong>
                                                 </small>
                                                 <small class="text-muted">
                                                     Total Balance: <strong class="text-danger">₱ {{ number_format($totals['total_balance'] ?? 0, 2) }}</strong>
@@ -499,9 +501,64 @@
 
     <style>
         @media print {
+            /* Do NOT use visibility:hidden on body — it keeps layout boxes (e.g. 100vh sidebar
+               wrapper) and often causes a blank first printed page. Use display:none instead. */
+            html, body, #page-top {
+                height: auto !important;
+                min-height: 0 !important;
+            }
+
+            /* Beat global header.css: body #wrapper { min-height: 100vh } flex layout —
+               that reserves a full viewport on page 1 and often leaves it blank in print. */
+            body #wrapper {
+                display: block !important;
+                min-height: 0 !important;
+                height: auto !important;
+                width: 100% !important;
+            }
+
+            body #wrapper #content-wrapper {
+                display: block !important;
+                flex: none !important;
+                width: 100% !important;
+                margin-left: 0 !important;
+                min-height: 0 !important;
+                height: auto !important;
+            }
+
+            body #wrapper #content {
+                display: block !important;
+                flex: none !important;
+                min-height: 0 !important;
+                height: auto !important;
+            }
+
+            body #wrapper .navbar-nav.sidebar,
+            body #wrapper #accordionSidebar {
+                display: none !important;
+                position: absolute !important;
+                left: -9999px !important;
+                width: 0 !important;
+                height: 0 !important;
+                overflow: hidden !important;
+                visibility: hidden !important;
+            }
+
             /* Hide sidebar, navbar, and elements marked as no-print */
             #sidebar,
+            #accordionSidebar,
+            .sidebar,
+            .navbar-nav.sidebar,
+            .modern-sidebar,
+            #wrapper > ul,
+            footer,
+            .sticky-footer,
+            .scroll-to-top,
             .navbar,
+            .topbar,
+            .sidebar-brand,
+            .sidebar-divider-modern,
+            .sidebar-heading-modern,
             .no-print,
             .no-print *,
             .btn,
@@ -521,7 +578,7 @@
             }
 
             .print-header h1 {
-                font-size: 16px !important;
+                font-size: 19px !important;
                 font-weight: bold !important;
                 margin: 0 !important;
                 letter-spacing: 0.5px !important;
@@ -529,7 +586,7 @@
             }
 
             .print-header h2 {
-                font-size: 14px !important;
+                font-size: 16px !important;
                 font-weight: bold !important;
                 margin: 8px 0 5px 0 !important;
                 letter-spacing: 0.5px !important;
@@ -538,7 +595,7 @@
 
             .print-header p {
                 margin: 2px 0 !important;
-                font-size: 10px !important;
+                font-size: 12px !important;
             }
 
             /* Ensure table container is visible */
@@ -554,7 +611,7 @@
                 width: 100% !important;
                 border-collapse: separate !important;
                 border-spacing: 0 !important;
-                font-size: 9px !important;
+                font-size: 14px !important;
                 margin: 0 !important;
                 display: table !important;
                 font-family: Arial, sans-serif !important;
@@ -575,12 +632,14 @@
                 background-color: #f8f9fa !important;
                 border: none !important;
                 border-bottom: 2px solid #333 !important;
-                padding: 8px 5px !important;
+                padding: 10px 6px !important;
                 font-weight: bold !important;
                 text-align: center !important;
-                font-size: 9px !important;
+                font-size: 14px !important;
                 text-transform: uppercase !important;
                 color: #333 !important;
+                position: static !important;
+                top: auto !important;
             }
 
             #agingTable tbody {
@@ -595,8 +654,8 @@
 
             #agingTable tbody td {
                 border: none !important;
-                padding: 6px 5px !important;
-                font-size: 9px !important;
+                padding: 8px 6px !important;
+                font-size: 14px !important;
                 color: #333 !important;
             }
 
@@ -623,10 +682,10 @@
                 padding: 0 !important;
             }
 
-            /* Page settings */
+            /* Page settings (single @page block — duplicate rules can confuse some print engines) */
             @page {
                 margin: 1.5cm 1cm !important;
-                size: A4 landscape !important;
+                size: A4 portrait !important;
             }
 
             /* Ensure content wrapper is visible */
@@ -635,6 +694,8 @@
                 width: 100% !important;
                 margin: 0 !important;
                 padding: 0 !important;
+                min-height: 0 !important;
+                height: auto !important;
             }
 
             /* Hide empty message in print */
@@ -653,7 +714,7 @@
                 width: 100% !important;
                 border-collapse: separate !important;
                 border-spacing: 0 !important;
-                font-size: 9px !important;
+                font-size: 11px !important;
                 margin-top: 15px !important;
                 page-break-inside: avoid !important;
             }
@@ -675,8 +736,8 @@
             .print-totals-table td {
                 display: table-cell !important;
                 border: none !important;
-                padding: 8px 5px !important;
-                font-size: 9px !important;
+                padding: 9px 6px !important;
+                font-size: 11px !important;
                 font-weight: bold !important;
                 color: #333 !important;
             }
@@ -700,14 +761,6 @@
                 page-break-inside: avoid !important;
             }
 
-            /* Print footer */
-            @page {
-                @bottom-right {
-                    content: "Page " counter(page) " of " counter(pages);
-                    font-size: 9px;
-                    color: #666;
-                }
-            }
         }
     </style>
 
@@ -724,10 +777,10 @@
             if (mainTable && totalsTable) {
                 // Get visible headers (excluding no-print-col)
                 const mainHeaders = Array.from(mainTable.querySelectorAll('thead th')).filter(th => !th.classList.contains('no-print-col'));
-                const totalsCells = Array.from(totalsTable.querySelectorAll('td'));
+                const totalsRow = totalsTable.querySelector('tr:last-child');
+                const totalsCells = totalsRow ? Array.from(totalsRow.querySelectorAll('td')) : [];
                 
-                // Match widths - totals table structure: [empty, empty, TOTALS:, Current, 30 Days, ...]
-                // Main table headers: [Account No, Account Name, Status, Current, 30 Days, ...]
+                // Match widths for visible print columns.
                 mainHeaders.forEach((header, headerIndex) => {
                     if (totalsCells[headerIndex]) {
                         const width = header.offsetWidth;

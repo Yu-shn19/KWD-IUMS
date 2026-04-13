@@ -16,6 +16,8 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use App\Imports\DmLedgerImport;
+use Maatwebsite\Excel\Facades\Excel;
 
 class BillingProcessController extends Controller
 {
@@ -33,161 +35,167 @@ class BillingProcessController extends Controller
         return view('processes.billing-processes');
     }
 
-    /**
-     * Prepare meter reading data for a specific zone and billing period
-     */
+    
+    
+    // * Prepare meter reading data for:
+    //  * - Meter Reading Preparation: zone + dates → active consumers in zone only (excludes disconnected/inactive); can_save only when no existing schedules.
+    //  * - Single Consumer: account_no + zone + dates → that consumer (any status); can_save always; allows adding even if batch exists.
+    //  * - Multiple Consumers: account_numbers + dates → those consumers (any status); can_save always; allows adding even if batch exists.
+    //  */
     public function prepareMeterReading(Request $request)
     {
         $request->validate([
-            'zone' => 'required|string',
+            'zone' => 'nullable|string',
+            'account_no' => 'nullable|string',
+            'account_numbers' => 'nullable|array',
+            'account_numbers.*' => 'string',
             'bill_month' => 'required|date',
             'bill_date' => 'required|date',
             'due_date' => 'required|date',
             'disconnection_date' => 'required|date',
         ]);
 
-        try {
-            $zone = $request->zone;
-            $billMonth = Carbon::parse($request->bill_month);
-            $billDate = Carbon::parse($request->bill_date);
-            $dueDate = Carbon::parse($request->due_date);
-            $disconnectionDate = Carbon::parse($request->disconnection_date);
+        $billMonth = Carbon::parse($request->bill_month);
+        $billDate = Carbon::parse($request->bill_date);
+        $dueDate = Carbon::parse($request->due_date);
+        $disconnectionDate = Carbon::parse($request->disconnection_date);
+        $billMonthYmd = $billMonth->format('Y-m-d');
 
-            // First, check if there are any consumers in this zone at all
-            $totalInZone = ConsumerZoneOne::where('zone_code', $zone)->count();
-            
-            // Fetch consumers for the selected zone (case-insensitive status check)
-            $consumers = ConsumerZoneOne::where('zone_code', $zone)
-                ->where(function($query) {
-                    $query->where('status_code', 'A')
-                          ->orWhere('status_code', 'ACTIVE')
-                          ->orWhere('status_code', 'Active')
-                          ->orWhere('status_code', 'active');
-                })
-                ->orderBy('sequence', 'asc')
-                ->orderBy('account_no', 'asc')
-                ->get();
+        $zone = $request->zone ? trim($request->zone) : null;
+        $accountNo = $request->account_no ? trim($request->account_no) : null;
+        $accountNumbers = $request->account_numbers ? array_values(array_filter(array_map('trim', $request->account_numbers))) : null;
 
+        // Determine mode: zone-only (active only), single account (any status), or multiple accounts (any status)
+        $isSingle = $accountNo !== null && $accountNo !== '';
+        $isMultiple = $accountNumbers !== null && count($accountNumbers) > 0;
+        $isAccountsScope = $isSingle || $isMultiple;
+
+        $consumers = collect();
+        $effectiveZone = $zone;
+
+        if ($isSingle) {
+            $consumer = ConsumerZoneOne::where(function ($q) use ($accountNo) {
+                $q->where('account_no', $accountNo)
+                  ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [str_replace('-', '', $accountNo)]);
+            })->first();
+            if (!$consumer) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Account number not found: ' . $accountNo,
+                ], 404);
+            }
+            $consumers = collect([$consumer]);
+            $effectiveZone = $consumer->zone_code ?? $zone;
+        } elseif ($isMultiple) {
+            $normalizedAccounts = array_map(function ($a) {
+                return str_replace('-', '', $a);
+            }, $accountNumbers);
+            $consumers = ConsumerZoneOne::where(function ($q) use ($accountNumbers, $normalizedAccounts) {
+                foreach ($accountNumbers as $i => $acc) {
+                    $norm = $normalizedAccounts[$i] ?? str_replace('-', '', $acc);
+                    $q->orWhere('account_no', $acc)
+                      ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$norm]);
+                }
+            })->get();
             if ($consumers->isEmpty()) {
-                // Provide more helpful error message
-                if ($totalInZone > 0) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Found ' . $totalInZone . ' consumer(s) in Zone ' . $zone . ', but none are marked as Active. Please check consumer status.'
-                    ], 404);
-                } else {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'No consumers found in Zone ' . $zone . '. Please verify the zone has registered consumers.'
-                    ], 404);
-                }
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No consumers found for the given account numbers.',
+                ], 404);
             }
-
-            // Check if schedules already exist for this zone and bill month
-            $existingSchedules = MeterReadingSchedule::where('zone', $zone)
-                ->where('bill_month', $billMonth->format('Y-m-d'))
-                ->count();
-
-            // Prepare meter reading data (NOT SAVED YET)
-            $meterReadingData = [];
-            $sedr = 1;
-
-            // Get balances from the same source as ledger view (getLedger summary.balance)
-            // This ensures the Arrears column exactly matches "Current Balance" in ledger.blade.php (footerBalance)
-            $ledgerBalanceMap = [];
-            $ledgerController = new \App\Http\Controllers\ConsumerLedgerController();
-            
-            foreach ($consumers as $consumer) {
-                try {
-                    $ledgerRequest = new Request([
-                        'account_no' => $consumer->account_no,
-                        'year' => '', // All years - matches ledger when year filter is blank
-                    ]);
-                    $ledgerResponse = $ledgerController->getLedger($ledgerRequest);
-                    $data = $ledgerResponse->getData(true);
-                    if (!empty($data['success']) && isset($data['summary']['balance'])) {
-                        $ledgerBalance = (float) $data['summary']['balance'];
-                    } else {
-                        $ledgerBalance = 0.00;
-                    }
-                    $ledgerBalanceMap[$consumer->id] = $ledgerBalance;
-                } catch (\Exception $e) {
-                    Log::error('Error getting ledger balance for account ' . $consumer->account_no . ': ' . $e->getMessage());
-                    $ledgerBalanceMap[$consumer->id] = 0.00;
-                }
+            $effectiveZone = $consumers->first()->zone_code ?? $zone;
+        } else {
+            if (!$zone) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Zone is required for Meter Reading Preparation.',
+                ], 422);
             }
-
-            foreach ($consumers as $consumer) {
-                // Get previous reading - checks downloaded_readings, meter_reading_schedules, and consumer_ledgers
-                $previousReading = $this->getPreviousReading($consumer->account_no);
-                
-                // Use the actual date from previous reading if available, otherwise calculate from bill_month
-                $prevDate = !empty($previousReading['date']) && $previousReading['date'] !== Carbon::now()->subMonth()->format('m/d/Y')
-                    ? $previousReading['date']
-                    : $billMonth->copy()->subMonth()->format('m/d/Y');
-                
-                // Get current balance from ledger (same source as ledger view)
-                // This is the exact balance shown in ledger.blade.php line 148-149 (summary.balance)
-                $ledgerBalance = $ledgerBalanceMap[$consumer->id] ?? 0.00;
-                
-                // Calculate water maintenance charge: 20.00 if there's a current bill, 0.00 otherwise
-                // Since current_bill is 0.00 at preparation stage, water_maintenance_charge will be 0.00
-                // It will be calculated properly when the bill is actually generated
-                $currentBill = 0.00; // Will be calculated when reading is done
-                $waterMaintenanceCharge = ($currentBill > 0) ? 20.00 : 0.00;
-                
-                // Prepare data for frontend display using consumer_zone fields
-                $meterReadingData[] = [
-                    'sedr' => $sedr++,
-                    'consumer_zone_id' => $consumer->id,
-                    'account_number' => $consumer->account_no,
-                    'account_name' => $consumer->account_name,
-                    'address' => $consumer->address1 ?? '',
-                    'zone' => $consumer->zone_code,
-                    'category' => $consumer->category_code ?? '',
-                    'meter_number' => $consumer->meter_number ?? '',
-                    'prev_date' => $prevDate,
-                    'prev_read' => $previousReading['reading'] ?? 0,
-                    'prev_volume' => $previousReading['volume'] ?? 0, // Latest volume from all sources
-                    'pres_read' => 0, // To be filled during actual reading
-                    'volume' => $previousReading['volume'] ?? 0, // Show latest volume
-                    'current_bill' => $currentBill,
-                    'water_maintenance_charge' => $waterMaintenanceCharge, // 20.00 if current_bill > 0, else 0.00
-                    'arrears' => $ledgerBalance, // Current balance from ledger (remaining balance)
-                    'balance' => $ledgerBalance, // Latest balance from ledger
-                    'total' => 0.00,
-                    'status' => 'Prepared',
-                    'bill_month' => $billMonth->format('Y-m-d'),
-                    'bill_date' => $billDate->format('Y-m-d'),
-                    'due_date' => $dueDate->format('Y-m-d'),
-                    'disconnection_date' => $disconnectionDate->format('Y-m-d'),
-                ];
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Meter reading preparation completed! Review the data and click "Save Schedules" to store.',
-                'data' => $meterReadingData,
-                'summary' => [
-                    'zone' => $zone,
-                    'bill_month' => $billMonth->format('F Y'),
-                    'total_consumers' => count($meterReadingData),
-                    'prepared_date' => Carbon::now()->format('F d, Y'),
-                    'existing_schedules' => $existingSchedules
-                ],
-                'can_save' => $existingSchedules === 0
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error preparing meter reading: ' . $e->getMessage()
-            ], 500);
+            // Zone-only: only ACTIVE consumers (exclude disconnected / inactive)
+            $consumers = ConsumerZoneOne::where('zone_code', $zone)
+                ->whereIn(DB::raw('UPPER(TRIM(COALESCE(status_code, "")))'), ['A', 'ACTIVE'])
+                ->orderBy('sequence')
+                ->orderBy('account_no')
+                ->get();
         }
+
+        $existingCount = 0;
+        if ($effectiveZone) {
+            $existingCount = MeterReadingSchedule::where('zone', $effectiveZone)
+                ->where('bill_month', $billMonthYmd)
+                ->count();
+        }
+        if ($isAccountsScope) {
+            $existingForAccounts = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values()->all())
+                ->where('bill_month', $billMonthYmd)
+                ->count();
+            $existingCount = $existingForAccounts;
+        }
+
+        // can_save: zone-only = only when no existing schedules; single/multiple = always (additive allowed)
+        $canSave = $isAccountsScope ? true : ($existingCount === 0);
+        $sedr = 1;
+        $data = [];
+        $ledgerBalanceYear = $billMonth->format('Y');
+        foreach ($consumers as $consumer) {
+            $accountNoVal = $consumer->account_no ?? '';
+            $previousReading = $this->getPreviousReading($accountNoVal);
+            $currentBill = 0.00;
+            $wmc = 0.00;
+          //  $arrears = (float) ($previousReading['arrears'] ?? 0);
+               // Must match consumer ledger footer Current Balance (same year as bill month)
+           // $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
+               $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
+            // Meter Reading Preparation (zone) and (Single Consumer): arrears must not be negative; Multiple Consumers path unchanged
+            if (!$isMultiple) {
+                $arrears = max(0.0, (float) $arrears);
+            }  
+            $total = $currentBill + $wmc + $arrears;
+            $data[] = [
+                'sedr' => (string) $sedr++,
+                'account_number' => $accountNoVal,
+                'account_name' => $consumer->account_name ?? '',
+                'address' => $consumer->address1 ?? '',
+                'zone' => $consumer->zone_code ?? $effectiveZone ?? '',
+                'category' => $consumer->category_code ?? '',
+                'meter_number' => $consumer->meter_number ?? '',
+                'bill_month' => $billMonthYmd,
+                'bill_date' => $billDate->format('Y-m-d'),
+                'due_date' => $dueDate->format('Y-m-d'),
+                'disconnection_date' => $disconnectionDate->format('Y-m-d'),
+                'prev_date' => $previousReading['date'],
+                'prev_read' => $previousReading['reading'],
+                'pres_read' => 0,
+                'volume' => $previousReading['volume'],
+                'current_bill' => $currentBill,
+                'water_maintenance_charge' => $wmc,
+                'arrears' => $arrears,
+                'total' => $total,
+                'status' => $consumer->status_label ?? 'Active',
+                'consumer_zone_id' => $consumer->id,
+            ];
+        }
+
+        $summary = [
+            'zone' => $effectiveZone ?? $zone ?? '—',
+            'bill_month' => $billMonth->format('F Y'),
+            'existing_schedules' => $existingCount,
+        ];
+
+        return response()->json([
+            'success' => true,
+            'message' => $isAccountsScope
+                ? count($data) . ' consumer(s) prepared. You can save even if schedules already exist for this period (additive).'
+                : count($data) . ' active consumer(s) prepared for Zone ' . ($effectiveZone ?? $zone) . '.',
+            'data' => $data,
+            'summary' => $summary,
+            'can_save' => $canSave && count($data) > 0,
+        ]);
     }
 
     /**
-     * Save prepared meter reading schedules to database
+     * Save prepared meter reading schedules to database.
+     * When save_scope = 'accounts' (Single/Multiple Consumer), allows saving even if zone+bill_month already has schedules (additive).
      */
     public function saveMeterReadingSchedules(Request $request)
     {
@@ -197,18 +205,21 @@ class BillingProcessController extends Controller
             'schedules.*.account_number' => 'required|string',
             'schedules.*.zone' => 'required|string',
             'schedules.*.bill_month' => 'required|date',
+            'save_scope' => 'nullable|string|in:zone,accounts',
         ]);
 
         try {
             $zone = $request->schedules[0]['zone'];
             $billMonth = Carbon::parse($request->schedules[0]['bill_month']);
+            $saveScope = $request->input('save_scope', 'zone');
 
-            // Check if schedules already exist
+            // When save_scope = 'zone' (default): block if any schedules exist for this zone+bill_month.
+            // When save_scope = 'accounts' (Single/Multiple Consumer): allow additive save; skip per-account if that account already has a schedule for this period.
             $existingSchedules = MeterReadingSchedule::where('zone', $zone)
                 ->where('bill_month', $billMonth->format('Y-m-d'))
                 ->count();
 
-            if ($existingSchedules > 0) {
+            if ($saveScope !== 'accounts' && $existingSchedules > 0) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Schedules already exist for Zone ' . $zone . ' for ' . $billMonth->format('F Y') . '. Please delete existing schedules first.',
@@ -217,6 +228,9 @@ class BillingProcessController extends Controller
             }
 
             $savedSchedules = [];
+            $billDateYmd = isset($request->schedules[0]['bill_date']) ? Carbon::parse($request->schedules[0]['bill_date'])->format('Y-m-d') : null;
+            $dueDateYmd = isset($request->schedules[0]['due_date']) ? Carbon::parse($request->schedules[0]['due_date'])->format('Y-m-d') : null;
+            $disconnectionDateYmd = isset($request->schedules[0]['disconnection_date']) ? Carbon::parse($request->schedules[0]['disconnection_date'])->format('Y-m-d') : null;
 
             // Get the authenticated user's formatted name
             $preparedBy = $this->getFormattedUserName();
@@ -224,6 +238,27 @@ class BillingProcessController extends Controller
             DB::beginTransaction();
             try {
                 foreach ($request->schedules as $scheduleData) {
+                    // Additive (save_scope = 'accounts'): skip if this account already has a schedule for this zone+period to avoid duplicates
+                    if ($saveScope === 'accounts') {
+                        $billDateRow = isset($scheduleData['bill_date']) ? Carbon::parse($scheduleData['bill_date'])->format('Y-m-d') : $billDateYmd;
+                        $dueDateRow = isset($scheduleData['due_date']) ? Carbon::parse($scheduleData['due_date'])->format('Y-m-d') : $dueDateYmd;
+                        $disconnectionDateRow = isset($scheduleData['disconnection_date']) ? Carbon::parse($scheduleData['disconnection_date'])->format('Y-m-d') : $disconnectionDateYmd;
+                        $alreadyExists = MeterReadingSchedule::where('zone', $scheduleData['zone'])
+                            ->where('bill_month', $billMonth->format('Y-m-d'))
+                            ->where('bill_date', $billDateRow)
+                            ->where('due_date', $dueDateRow)
+                            ->where('disconnection_date', $disconnectionDateRow)
+                            ->where(function ($q) use ($scheduleData) {
+                                $acc = $scheduleData['account_number'];
+                                $q->where('account_number', $acc)
+                                  ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [str_replace('-', '', $acc)]);
+                            })
+                            ->exists();
+                        if ($alreadyExists) {
+                            continue; // skip duplicate account for this period
+                        }
+                    }
+
                     // Parse previous reading date if provided, otherwise calculate from bill_month
                     $prevDateStr = $scheduleData['prev_date'] ?? null;
                     $previousReadingDate = null;
@@ -239,6 +274,11 @@ class BillingProcessController extends Controller
                     } else {
                         $previousReadingDate = Carbon::parse($scheduleData['bill_month'])->subMonth();
                     }
+
+                    // Previous reading: use edited value from UI (prev_read) — same logic for all process types (Meter Reading Preparation / Single / Multiple)
+                    $prevRead = isset($scheduleData['prev_read'])
+                        ? (is_numeric($scheduleData['prev_read']) ? (float) $scheduleData['prev_read'] : 0)
+                        : 0;
                     
                     // Create meter reading schedule using account_number as the link (no consumer_id column)
                     $schedule = MeterReadingSchedule::create([
@@ -253,7 +293,7 @@ class BillingProcessController extends Controller
                         'due_date' => Carbon::parse($scheduleData['due_date']),
                         'disconnection_date' => Carbon::parse($scheduleData['disconnection_date']),
                         'previous_reading_date' => $previousReadingDate,
-                        'previous_reading' => $scheduleData['prev_read'],
+                        'previous_reading' => $prevRead,
                         'arrears' => $scheduleData['arrears'] ?? 0.00,
                         'status' => 'Prepared',
                         'sedr_number' => $scheduleData['sedr'],
@@ -323,7 +363,7 @@ class BillingProcessController extends Controller
                             'date' => Carbon::parse($scheduleData['bill_date'])->format('Y-m-d'),
                             'due_date' => Carbon::parse($scheduleData['due_date'])->format('Y-m-d'),
                             'reference' => $scheduleData['sedr'] ?? '', // SEDR number as reference
-                            'reading' => $scheduleData['prev_read'], // Previous reading (current reading not available yet)
+                            'reading' => $prevRead, // Same as meter_reading_schedules.previous_reading (edited Prev. Read from UI)
                             'volume' => 0, // Consumption is 0 until reading is taken
                             'billamount' => $currentBill,
                             'penalty' => 0, // Penalty is a separate entry, not included in BILLING
@@ -339,10 +379,17 @@ class BillingProcessController extends Controller
 
                 DB::commit();
 
+                $savedCount = count($savedSchedules);
+                $message = $savedCount > 0
+                    ? 'Successfully saved ' . $savedCount . ' meter reading schedule(s) to database!'
+                    : ($saveScope === 'accounts'
+                        ? 'No new schedules saved; all selected account(s) already have a schedule for this period.'
+                        : 'Successfully saved ' . $savedCount . ' meter reading schedule(s) to database!');
+
                 return response()->json([
                     'success' => true,
-                    'message' => 'Successfully saved ' . count($savedSchedules) . ' meter reading schedule(s) to database!',
-                    'saved_count' => count($savedSchedules),
+                    'message' => $message,
+                    'saved_count' => $savedCount,
                     'schedule_ids' => $savedSchedules
                 ]);
 
@@ -793,6 +840,8 @@ class BillingProcessController extends Controller
             ]),
         ]);
     }
+    
+    
 
     /**
      * Search billing records
@@ -834,7 +883,8 @@ class BillingProcessController extends Controller
 
             foreach ($consumers as $consumer) {
                 $previousReading = $this->getPreviousReading($consumer->account_no);
-                
+                $ledgerArrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, date('Y'));
+
                 $results[] = [
                     'sedr' => $sedr++,
                     'account_number' => $consumer->account_no,
@@ -848,7 +898,7 @@ class BillingProcessController extends Controller
                     'pres_read' => 0,
                     'volume' => $previousReading['volume'], // Show latest volume from consumer_ledgers
                     'current_bill' => 0.00,
-                    'arrears' => $previousReading['arrears'],
+                     'arrears' => $ledgerArrears,
                     'total' => 0.00,
                     'status' => 'Active'
                 ];
@@ -995,13 +1045,116 @@ class BillingProcessController extends Controller
             'zone' => 'nullable|string',
         ]);
 
-        // This would generate the actual export file
-        // For now, return success message
-        return response()->json([
-            'success' => true,
-            'message' => 'Export functionality will be implemented'
-        ]);
+        $zone = $request->input('zone');
+
+        // Build base query for schedules in the selected zone (or all zones)
+        $query = MeterReadingSchedule::query()
+            ->with('consumer')
+            ->orderBy('zone')
+            ->orderByAccountNumberTail();
+
+        if ($zone && $zone !== 'all') {
+            $query->where('zone', $zone);
+        }
+
+        $schedules = $query->get();
+
+        if ($schedules->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No billing records found to export for the selected filters.',
+            ], 404);
+        }
+
+ // Map schedules to flat array for export (only required columns)
+        $records = $schedules->map(function (MeterReadingSchedule $item) {
+            $currentBill = $item->current_bill !== null ? (float) $item->current_bill : 0.0;
+            $arrears = $item->arrears !== null ? (float) $item->arrears : 0.0;
+            // Water maintenance charge: 20.00 when there is a bill, otherwise 0
+            $maintenanceCharge = $currentBill > 0 ? 20.00 : 0.00;
+            $totalAmount = $item->total_amount !== null
+                ? (float) $item->total_amount
+                : ($currentBill + $arrears + $maintenanceCharge);
+
+            return [
+                'Account #' => $item->account_number ?? '',
+                'Account Name' => $item->account_name ?? $item->consumer->account_name ?? '',
+                'Meter #' => $item->meter_number ?? '',
+                'Consumption' => $item->consumption !== null ? number_format((float) $item->consumption, 0) : '',
+                'Water Maintenance Charge' => number_format($maintenanceCharge, 2),
+                'Total Amount' => number_format($totalAmount, 2),
+            ];
+        });
+
+        $zoneText = $zone && $zone !== 'all' ? "Zone-{$zone}" : 'All-Zones';
+        $filename = "Billing-Records-{$zoneText}-" . Carbon::now()->format('YmdHis') . '.xlsx';
+
+        // Use Laravel Excel if available, otherwise fall back to CSV stream
+        if (class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
+            return \Maatwebsite\Excel\Facades\Excel::download(
+                new class($records) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle {
+                    protected $data;
+
+                    public function __construct($data)
+                    {
+                        $this->data = collect($data);
+                    }
+
+                    public function collection()
+                    {
+                        return $this->data;
+                    }
+
+                    public function headings(): array
+                    {
+                        return [
+                            'Account #',
+                            'Account Name',
+                            'Meter #',
+                            'Consumption',
+                            'Water Maintenance Charge',
+                            'Total Amount',
+                        ];
+                    }
+
+                    public function title(): string
+                    {
+                        return 'Billing Records';
+                    }
+                },
+                $filename
+            );
+        }
+
+        // Fallback: CSV if Excel package is not available
+        $csvFilename = str_replace('.xlsx', '.csv', $filename);
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => "attachment; filename=\"{$csvFilename}\"",
+        ];
+
+        $callback = function () use ($records) {
+            $file = fopen('php://output', 'w');
+
+            fputcsv($file, [
+                'Account #',
+                'Account Name',
+                'Meter #',
+                'Consumption',
+                'Water Maintenance Charge',
+                'Total Amount',
+            ]);
+
+            foreach ($records as $record) {
+                fputcsv($file, array_values($record));
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
     }
+
 
     /**
      * Debug endpoint - Get all consumers info by zone
@@ -1044,8 +1197,7 @@ class BillingProcessController extends Controller
             'zones' => $zones
         ]);
     }
-
-    /**
+/**
      * Get distinct meter reading preparation batches for Schedule Viewing tab
      * Sorted by zone ASC, then bill_month DESC by default. Accepts sort_by, sort_dir, zone, bill_month (filters).
      */
@@ -1102,7 +1254,6 @@ class BillingProcessController extends Controller
             'distinct_bill_months' => $distinct_bill_months,
         ]);
     }
-
     /**
      * Get meter reading schedules by zone and period
      */
@@ -1121,7 +1272,7 @@ class BillingProcessController extends Controller
             $query->where('bill_month', Carbon::parse($billMonth)->format('Y-m-d'));
         }
 
-        $schedules = $query->orderBy('sedr_number')->get();
+        $schedules = $query->orderByAccountNumberTail()->get();
 
         return response()->json([
             'success' => true,
@@ -1164,36 +1315,22 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Delete meter reading schedules (by zone + bill_month, or by exact batch when bill_date/due_date/disconnection_date provided).
-     * Database cascade will delete related consumer_ledgers (and downloaded_readings, penalties) when schedules are deleted.
+     * Delete meter reading schedules
      */
     public function deleteSchedules(Request $request)
     {
         $request->validate([
             'zone' => 'required|string',
-            'bill_month' => 'required|date',
-            'bill_date' => 'nullable|date',
-            'due_date' => 'nullable|date',
-            'disconnection_date' => 'nullable|date',
+            'bill_month' => 'required|date'
         ]);
 
         try {
             $zone = $request->zone;
-            $billMonth = Carbon::parse($request->bill_month)->format('Y-m-d');
+            $billMonth = Carbon::parse($request->bill_month);
 
-            $query = MeterReadingSchedule::where('zone', $zone)->where('bill_month', $billMonth);
-
-            if ($request->filled('bill_date')) {
-                $query->where('bill_date', Carbon::parse($request->bill_date)->format('Y-m-d'));
-            }
-            if ($request->filled('due_date')) {
-                $query->where('due_date', Carbon::parse($request->due_date)->format('Y-m-d'));
-            }
-            if ($request->filled('disconnection_date')) {
-                $query->where('disconnection_date', Carbon::parse($request->disconnection_date)->format('Y-m-d'));
-            }
-
-            $deleted = $query->delete();
+            $deleted = MeterReadingSchedule::where('zone', $zone)
+                ->where('bill_month', $billMonth->format('Y-m-d'))
+                ->delete();
 
             return response()->json([
                 'success' => true,
@@ -1208,8 +1345,7 @@ class BillingProcessController extends Controller
             ], 500);
         }
     }
-
-    /**
+       /**
      * Update a batch of meter reading schedules (same zone, bill_month, bill_date, due_date, disconnection_date).
      * Also updates due_date on related consumer_ledgers so ledger stays in sync.
      */
@@ -1275,13 +1411,13 @@ class BillingProcessController extends Controller
             ], 500);
         }
     }
-
+     
     /**
      * Get downloaded readings for bill printing
      * Fetches from downloaded_readings table joined with meter_reading_schedules
      * Filters by zone and reading_date only
      */
-    public function getDownloadedReadings(Request $request)
+     public function getDownloadedReadings(Request $request)
     {
         $request->validate([
             'zone' => 'required|string',
@@ -1349,14 +1485,15 @@ class BillingProcessController extends Controller
                     });
                 });
 
-            // Filter by exact Reading Date only (when readings were taken)
-            // Use only dr.reading_date so Bill Printing shows only records for the selected date
-            $date = $readingDate->format('Y-m-d');
-            // Order by CUSTOMER ACCOUNT NUMBER ascending (e.g. 011-12-020 lowest to highest) for Daily billing report
-            $readings = (clone $baseQuery)
-                ->whereDate('dr.reading_date', $date)
-                ->orderBy(DB::raw('COALESCE(mrs.account_number, dr.account_number)'), 'asc')
+            // KARON NABAG O // Filter by exact Reading Date only (when readings were taken)
+            // // Use only dr.reading_date so Bill Printing shows only records for the selected date
+             $date = $readingDate->format('Y-m-d');
+             $readings = (clone $baseQuery)
+                 ->whereDate('dr.reading_date', $date)
+                 ->orderBy(DB::raw('COALESCE(mrs.sedr_number, dr.account_number)'))
                 ->get();
+            
+               
 
             if ($readings->isEmpty()) {
                 return response()->json([
@@ -1368,7 +1505,7 @@ class BillingProcessController extends Controller
             // Get bill_month from the first record for summary
             $billMonth = $readings->first()->bill_month ? Carbon::parse($readings->first()->bill_month) : Carbon::now();
 
-            // Format data for display: PRE-DUE vs POST-DUE formulas (paid_at is sole source of truth)
+           // Format data for display: PRE-DUE vs POST-DUE formulas (paid_at is sole source of truth)
             $formattedReadings = [];
             $today = Carbon::now()->startOfDay();
             foreach ($readings as $reading) {
@@ -1401,7 +1538,11 @@ class BillingProcessController extends Controller
                     $currentBill = isset($reading->downloaded_current_bill) ? (float) $reading->downloaded_current_bill : 0.00;
                     $arrearsPy = (float) ($reading->arrears ?? 0);
                 }
-
+                 
+                   // Bill Printing: Current Bill from downloaded_readings.current_bill; Water Maintenance = 20
+                $currentBill = (float) ($reading->downloaded_current_bill ?? 0);
+                $waterMaintenanceCharge = 20.00;
+                 
                 $arrears = $arrearsCy + $arrearsPy;
                 $total = round($currentBill + $penalty + $waterMaintenanceCharge + $arrears, 2);
                 $statusCode = strtolower($reading->status ?? 'downloaded');
@@ -1450,6 +1591,13 @@ class BillingProcessController extends Controller
                 $formattedReadings[] = $formattedReading;
             }
 
+                // De-duplicate by account_number so each consumer appears only once in Bill Printing
+                $formattedReadings = collect($formattedReadings)
+                    ->sortByDesc('downloaded_id')   // keep latest downloaded row for each account
+                    ->unique('account_number')
+                    ->values()
+                    ->all();
+
         return response()->json([
             'success' => true,
             'message' => count($formattedReadings) . ' downloaded reading(s) found for Zone ' . $zone,
@@ -1471,6 +1619,24 @@ class BillingProcessController extends Controller
     }
     }
 
+    /**
+     * Calculate water bill based on consumption (cubic meters)
+     * This is a basic calculation - adjust rates according to your actual tariff structure
+     */
+    private function calculateWaterBill($consumption)
+    {
+        // Basic rate structure (adjust to your actual rates)
+        $minimumCharge = 150.00; // For 0-10 cubic meters
+        $rate = 15.00; // Per cubic meter beyond minimum
+
+        if ($consumption <= 10) {
+            return $minimumCharge;
+        }
+
+        return $minimumCharge + (($consumption - 10) * $rate);
+    }
+    
+    
     /**
      * Get surcharge candidates: past-due consumers (no payment) for the selected zone and bill date.
      * Used by Generate Surcharge to list consumers that can have penalty/surcharge applied.
@@ -1545,19 +1711,39 @@ class BillingProcessController extends Controller
                 if ($currentBill <= 0 && $consumer) {
                     $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
                     $currentBill = (float) ($breakdown['current_bill'] ?? 0);
-                    $arrears = (float) ($breakdown['arrears_cy'] ?? 0) + (float) ($breakdown['arrears_py'] ?? 0);
-                } elseif ($consumer) {
-                    $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
-                    $arrears = (float) ($breakdown['arrears_cy'] ?? 0) + (float) ($breakdown['arrears_py'] ?? 0);
+                }
+                // Arrears = balance from consumer_ledger immediately before the BILLING for this schedule
+                if ($consumer && !empty($row->schedule_id)) {
+                    $billingLedger = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                        ->where('schedule_id', $row->schedule_id)
+                        ->whereIn('trans', ['BILLING', 'BILL'])
+                        ->orderBy('id', 'asc')
+                        ->first();
+                    if ($billingLedger) {
+                        $prevLedger = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                            ->whereNotNull('balance')
+                            ->where('id', '<', $billingLedger->id)
+                            ->orderBy('id', 'desc')
+                            ->first();
+                        $arrears = $prevLedger ? (float) ($prevLedger->balance ?? 0) : 0.00;
+                    }
                 }
 
                 $wmc = ($currentBill > 0) ? (float) self::WMC_PER_MONTH : 0.00;
-                $penaltyBase = $currentBill + $wmc;
+                $penaltyBase = $currentBill; // 10% on current_bill only, not current_bill + WMC
                 $calculatedPenalty = round($penaltyBase * (float) self::PENALTY_RATE, 2);
                 if ($calculatedPenalty < (float) self::PENALTY_PER_MONTH && $penaltyBase > 0) {
                     $calculatedPenalty = (float) self::PENALTY_PER_MONTH;
                 }
                 $total = round($currentBill + $wmc + $arrears + $calculatedPenalty, 2);
+                
+                // Compute actual outstanding balance before penalty
+                $outstandingBalance = $currentBill + $arrears;
+
+                // Skip consumers with credit or zero balance
+                    if ($outstandingBalance <= 0) {
+                  continue;
+                        }   
 
                 $data[] = [
                     'schedule_id' => $row->schedule_id,
@@ -1609,25 +1795,198 @@ class BillingProcessController extends Controller
         }
     }
 
-    /**
-     * Calculate water bill based on consumption (cubic meters)
-     */
-    private function calculateWaterBill($consumption)
-    {
-        // Basic rate structure (adjust to your actual rates)
-        $minimumCharge = 150.00; // For 0-10 cubic meters
-        $rate = 15.00; // Per cubic meter beyond minimum
+    // //   * Generate penalty report from penalties table.
+    // //  * Joins meter_reading_schedules and consumer_zone for zone, account, sequence, rate_code.
+    // //  */
+    // public function penaltyReport(Request $request)
+    // {
+    //     try {
+    //         $request->validate([
+    //             'zone' => 'nullable|string',
+    //             'bill_month' => 'nullable|string',
+    //             'bill_year' => 'nullable|integer',
+    //         ]);
 
-        if ($consumption <= 10) {
-            return $minimumCharge;
-        }
+    //         $zone = $request->get('zone');
+    //         $billMonth = $request->get('bill_month'); // Format: MM-YYYY or MM
+    //         $billYear = $request->get('bill_year') ?? date('Y');
 
-        return $minimumCharge + (($consumption - 10) * $rate);
-    }
+    //         // Parse bill month
+    //         $month = null;
+    //         $year = $billYear;
+    //         if ($billMonth) {
+    //             if (strpos($billMonth, '-') !== false) {
+    //                 $parts = explode('-', $billMonth);
+    //                 $month = $parts[0] ?? null;
+    //                 $year = $parts[1] ?? $billYear;
+    //             } else {
+    //                 $month = $billMonth;
+    //             }
+    //         }
 
-    /**
-     * Generate penalty report for consumers who have reached due date
-     * Gets data from downloaded_readings table only
+    //         // Query penalties table joined with meter_reading_schedules and consumer_zone
+    //         $query = DB::table('penalties')
+    //             ->leftJoin('meter_reading_schedules as mrs', 'penalties.schedule_id', '=', 'mrs.id')
+    //             ->leftJoin('consumer_zone as cz', 'penalties.consumer_zone_id', '=', 'cz.id')
+    //             ->select(
+    //                 'penalties.id',
+    //                 'penalties.date',
+    //                 'penalties.due_date',
+    //                 'penalties.reference',
+    //                 'penalties.penalty_amount',
+    //                 'penalties.bill_amount',
+    //                 'mrs.zone as mrs_zone',
+    //                 'mrs.bill_month',
+    //                 'mrs.account_number as mrs_account_number',
+    //                 'mrs.account_name as mrs_account_name',
+    //                 'mrs.category',
+    //                 'cz.zone_code',
+    //                 'cz.sequence',
+    //                 'cz.rate_code',
+    //                 'cz.account_no',
+    //                 'cz.account_name as cz_account_name'
+    //             );
+
+    //         // Apply zone filter (schedule zone or consumer_zone.zone_code)
+    //         if ($zone && $zone !== '' && $zone !== 'All Zones') {
+    //             $query->where(function ($q) use ($zone) {
+    //                 $q->where('mrs.zone', $zone)
+    //                     ->orWhere('cz.zone_code', $zone)
+    //                     ->orWhereRaw('LPAD(TRIM(COALESCE(mrs.zone, "")), 3, "0") = ?', [$zone])
+    //                     ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
+    //             });
+    //         }
+
+    //         // Apply bill month filter by penalty due_date (or bill_month from schedule)
+    //         if ($month && $month !== '') {
+    //             $query->where(function ($q) use ($month, $year) {
+    //                 $q->where(function ($q1) use ($month, $year) {
+    //                     $q1->whereMonth('penalties.due_date', $month)->whereYear('penalties.due_date', $year);
+    //                 })->orWhere(function ($q2) use ($month, $year) {
+    //                     $q2->whereMonth('mrs.bill_month', $month)->whereYear('mrs.bill_month', $year);
+    //                 });
+    //             });
+    //         } elseif ($year) {
+    //             $query->where(function ($q) use ($year) {
+    //                 $q->whereYear('penalties.due_date', $year)
+    //                     ->orWhereYear('mrs.bill_month', $year);
+    //             });
+    //         }
+
+    //         $rows = $query->orderBy('penalties.due_date', 'asc')
+    //             ->orderBy('cz.sequence')
+    //             ->orderBy('penalties.id')
+    //             ->get();
+
+    //         if ($rows->isEmpty()) {
+    //             return response()->json([
+    //                 'success' => false,
+    //                 'message' => 'No records found for the selected criteria.',
+    //                 'data' => [],
+    //                 'summary' => [
+    //                     'zone' => $zone ?? 'All Zones',
+    //                     'bill_month' => $month ? sprintf('%02d-%d', $month, $year) : 'All Months',
+    //                     'total_penalized' => 0,
+    //                     'total_penalty' => 0,
+    //                 ]
+    //             ]);
+    //         }
+
+    //         $data = [];
+    //         foreach ($rows as $row) {
+    //             $penaltyDate = $row->date ? Carbon::parse($row->date) : ($row->due_date ? Carbon::parse($row->due_date) : Carbon::today());
+    //             $billMonthFormatted = $row->bill_month ? Carbon::parse($row->bill_month)->format('m-Y') : ($row->due_date ? Carbon::parse($row->due_date)->format('m-Y') : '');
+    //             $zoneCode = $row->zone_code ?? $row->mrs_zone ?? '';
+    //             $accountNumber = $row->mrs_account_number ?? $row->account_no ?? '';
+    //             $accountName = $row->mrs_account_name ?? $row->cz_account_name ?? '';
+    //             $penaltyAmount = (float) ($row->penalty_amount ?? 0);
+
+    //             $data[] = [
+    //                 'zone_code' => $zoneCode,
+    //                 'bill_month' => $billMonthFormatted,
+    //                 'sequence' => $row->sequence ?? 0,
+    //                 'account_number' => $accountNumber,
+    //                 'account_name' => $accountName,
+    //                 'rate_code' => $row->rate_code ?? $row->category ?? 'P1',
+    //                 'date' => $penaltyDate->format('m/d/Y'),
+    //                 'rate_code1' => 'LP', // Late Payment
+    //                 'penalty' => round($penaltyAmount, 2),
+    //                 'ref' => $row->reference ?? 'Late Payment',
+    //                 'sedr' => '',
+    //             ];
+    //         }
+
+    //         // Calculate summary
+    //         $totalPenalty = array_sum(array_column($data, 'penalty'));
+
+    //         // Group by zone for summary
+    //         $summaryByZone = [];
+    //         foreach ($data as $record) {
+    //             $zoneKey = $record['zone_code'] ?? 'Unknown';
+    //             if (!isset($summaryByZone[$zoneKey])) {
+    //                 $summaryByZone[$zoneKey] = [
+    //                     'zone' => $zoneKey,
+    //                     'accounts' => 0,
+    //                     'total_penalty' => 0
+    //                 ];
+    //             }
+    //             $summaryByZone[$zoneKey]['accounts']++;
+    //             $summaryByZone[$zoneKey]['total_penalty'] += $record['penalty'];
+    //         }
+
+    //         // Group by penalty type for summary
+    //         $summaryByPenaltyType = [];
+    //         foreach ($data as $record) {
+    //             $penaltyType = $record['rate_code1'] ?? 'LP';
+    //             if (!isset($summaryByPenaltyType[$penaltyType])) {
+    //                 $summaryByPenaltyType[$penaltyType] = [
+    //                     'type' => $penaltyType,
+    //                     'accounts' => 0,
+    //                     'total_amount' => 0
+    //                 ];
+    //             }
+    //             $summaryByPenaltyType[$penaltyType]['accounts']++;
+    //             $summaryByPenaltyType[$penaltyType]['total_amount'] += $record['penalty'];
+    //         }
+
+    //         $summary = [
+    //             'zone' => $zone ?? 'All Zones',
+    //             'bill_month' => $month ? sprintf('%02d-%d', $month, $year) : 'All Months',
+    //             'total_penalized' => count($data),
+    //             'total_penalty' => round($totalPenalty, 2),
+    //             'by_zone' => array_values($summaryByZone),
+    //             'by_penalty_type' => array_values($summaryByPenaltyType),
+    //         ];
+
+    //         return response()->json([
+    //             'success' => true,
+    //             'message' => 'Penalty report generated successfully.',
+    //             'data' => $data,
+    //             'summary' => $summary,
+    //         ]);
+    //     } catch (\Exception $e) {
+    //         Log::error('Penalty Report Error: ' . $e->getMessage(), [
+    //             'trace' => $e->getTraceAsString(),
+    //             'request' => $request->all()
+    //         ]);
+
+    //         return response()->json([
+    //             'success' => false,
+    //             'message' => 'Error generating penalty report: ' . $e->getMessage(),
+    //             'data' => [],
+    //             'summary' => [
+    //                 'zone' => $request->get('zone') ?? 'All Zones',
+    //                 'bill_month' => 'Error',
+    //                 'total_penalized' => 0,
+    //                 'total_penalty' => 0,
+    //             ]
+    //         ], 500);
+    //     }
+    // }
+    
+       /**
+     * Generate penalty report from penalties table.
+     * Joins meter_reading_schedules and consumer_zone for zone, account, sequence, rate_code.
      */
     public function penaltyReport(Request $request)
     {
@@ -1647,55 +2006,69 @@ class BillingProcessController extends Controller
             $year = $billYear;
             if ($billMonth) {
                 if (strpos($billMonth, '-') !== false) {
-                    list($month, $year) = explode('-', $billMonth);
+                    $parts = explode('-', $billMonth);
+                    $month = $parts[0] ?? null;
+                    $year = $parts[1] ?? $billYear;
                 } else {
                     $month = $billMonth;
                 }
             }
 
-            // Query downloaded_readings joined with meter_reading_schedules
-            // Base zone and bill_month filters on meter_reading_schedules table
-            $query = DB::table('downloaded_readings as dr')
-                ->join('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-                ->leftJoin('consumer_zone as cz', function($join) {
-                    $join->on(DB::raw('mrs.account_number COLLATE utf8mb4_unicode_ci'), '=', DB::raw('cz.account_no COLLATE utf8mb4_unicode_ci'));
-                })
+            // Query penalties table joined with meter_reading_schedules and consumer_zone
+            $query = DB::table('penalties')
+                ->leftJoin('meter_reading_schedules as mrs', 'penalties.schedule_id', '=', 'mrs.id')
+                ->leftJoin('consumer_zone as cz', 'penalties.consumer_zone_id', '=', 'cz.id')
                 ->select(
-                    'dr.id',
-                    'dr.account_number',
-                    'dr.account_name',
-                    'dr.current_bill as downloaded_current_bill',
-                    'dr.consumption',
-                    'dr.reading_date',
+                    'penalties.id',
+                    'penalties.date',
+                    'penalties.due_date',
+                    'penalties.reference',
+                    'penalties.penalty_amount',
+                    'penalties.bill_amount',
+                    'mrs.zone as mrs_zone',
                     'mrs.bill_month',
-                    'mrs.due_date',
+                    'mrs.account_number as mrs_account_number',
+                    'mrs.account_name as mrs_account_name',
                     'mrs.category',
-                    'mrs.sedr_number',
-                    'mrs.zone',
                     'cz.zone_code',
                     'cz.sequence',
-                    'cz.rate_code'
-                )
-                ->whereNotNull('mrs.due_date');
+                    'cz.rate_code',
+                    'cz.account_no',
+                    'cz.account_name as cz_account_name'
+                );
 
-            // Apply zone filter - base on meter_reading_schedules.zone
+            // Apply zone filter (schedule zone or consumer_zone.zone_code)
             if ($zone && $zone !== '' && $zone !== 'All Zones') {
-                $query->where('mrs.zone', $zone);
+                $query->where(function ($q) use ($zone) {
+                    $q->where('mrs.zone', $zone)
+                        ->orWhere('cz.zone_code', $zone)
+                        ->orWhereRaw('LPAD(TRIM(COALESCE(mrs.zone, "")), 3, "0") = ?', [$zone])
+                        ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
+                });
             }
 
-            // Apply bill month filter - base on meter_reading_schedules.bill_month
+            // Apply bill month filter by penalty due_date (or bill_month from schedule)
             if ($month && $month !== '') {
-                $query->whereMonth('mrs.bill_month', $month);
-            }
-            if ($year) {
-                $query->whereYear('mrs.bill_month', $year);
+                $query->where(function ($q) use ($month, $year) {
+                    $q->where(function ($q1) use ($month, $year) {
+                        $q1->whereMonth('penalties.due_date', $month)->whereYear('penalties.due_date', $year);
+                    })->orWhere(function ($q2) use ($month, $year) {
+                        $q2->whereMonth('mrs.bill_month', $month)->whereYear('mrs.bill_month', $year);
+                    });
+                });
+            } elseif ($year) {
+                $query->where(function ($q) use ($year) {
+                    $q->whereYear('penalties.due_date', $year)
+                        ->orWhereYear('mrs.bill_month', $year);
+                });
             }
 
-            $readings = $query->orderBy('mrs.due_date')
-                             ->orderBy('cz.sequence')
-                             ->get();
+            $rows = $query->orderBy('penalties.due_date', 'asc')
+                ->orderBy('cz.sequence')
+                ->orderBy('penalties.id')
+                ->get();
 
-            if ($readings->isEmpty()) {
+            if ($rows->isEmpty()) {
                 return response()->json([
                     'success' => false,
                     'message' => 'No records found for the selected criteria.',
@@ -1709,59 +2082,52 @@ class BillingProcessController extends Controller
                 ]);
             }
 
-            $today = Carbon::today();
             $data = [];
-            
-            foreach ($readings as $reading) {
-                // Get current bill (prioritize downloaded_readings.current_bill)
-                $currentBill = $reading->downloaded_current_bill ?? 0;
-                
-                // Calculate penalty: 10% of current bill if due date has passed
-                $dueDate = $reading->due_date ? Carbon::parse($reading->due_date) : null;
-                $penalty = 0;
-                
-                if ($dueDate && $today->greaterThanOrEqualTo($dueDate) && $currentBill > 0) {
-                    $penalty = round($currentBill * 0.10, 2);
-                }
+            foreach ($rows as $row) {
+                $penaltyDate = $row->date ? Carbon::parse($row->date) : ($row->due_date ? Carbon::parse($row->due_date) : Carbon::today());
+                $billMonthFormatted = $row->bill_month ? Carbon::parse($row->bill_month)->format('m-Y') : ($row->due_date ? Carbon::parse($row->due_date)->format('m-Y') : '');
+                $zoneCode = $row->zone_code ?? $row->mrs_zone ?? '';
+                $accountNumber = $row->mrs_account_number ?? $row->account_no ?? '';
+                $accountName = $row->mrs_account_name ?? $row->cz_account_name ?? '';
+                $penaltyAmount = (float) ($row->penalty_amount ?? 0);
 
-                // Only include records with penalty > 0
-                if ($penalty > 0) {
-                    $billMonthDate = $reading->bill_month ? Carbon::parse($reading->bill_month) : null;
-                    $penaltyDate = $dueDate ? $dueDate : ($reading->reading_date ? Carbon::parse($reading->reading_date) : $today);
-                    
-                    $data[] = [
-                        'zone_code' => $reading->zone ?? $reading->zone_code ?? '',
-                        'bill_month' => $billMonthDate ? $billMonthDate->format('m-Y') : '',
-                        'sequence' => $reading->sequence ?? 0,
-                        'account_number' => $reading->account_number ?? '',
-                        'account_name' => $reading->account_name ?? '',
-                        'rate_code' => $reading->rate_code ?? $reading->category ?? 'P1',
-                        'date' => $penaltyDate->format('m/d/Y'),
-                        'rate_code1' => 'LP', // Late Payment
-                        'penalty' => round($penalty, 2),
-                        'ref' => 'Late Payment',
-                        'sedr' => $reading->sedr_number ?? '',
-                    ];
-                }
-            }
-
-            if (empty($data)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No penalized consumers found for the selected criteria.',
-                    'data' => [],
-                    'summary' => [
-                        'zone' => $zone ?? 'All Zones',
-                        'bill_month' => $month ? sprintf('%02d-%d', $month, $year) : 'All Months',
-                        'total_penalized' => 0,
-                        'total_penalty' => 0,
-                    ]
-                ]);
+                $data[] = [
+                    'zone_code' => $zoneCode,
+                    'bill_month' => $billMonthFormatted,
+                    'sequence' => $row->sequence ?? 0,
+                    'account_number' => $accountNumber,
+                    'account_name' => $accountName,
+                    'rate_code' => $row->rate_code ?? $row->category ?? 'P1',
+                    'date' => $penaltyDate->format('m/d/Y'),
+                    'rate_code1' => 'LP', // Late Payment
+                    'penalty' => round($penaltyAmount, 2),
+                    'ref' => $row->reference ?? 'Late Payment',
+                    'sedr' => '',
+                ];
             }
 
             // Calculate summary
             $totalPenalty = array_sum(array_column($data, 'penalty'));
-            
+
+            // Group by category (rate_code) for breakdown used in printed report
+            $summaryByCategory = [];
+            foreach ($data as $record) {
+                $category = $record['rate_code'] ?? 'UNKNOWN';
+                if (!isset($summaryByCategory[$category])) {
+                    $summaryByCategory[$category] = [
+                        'category' => $category,
+                        'consumers' => 0,
+                        // For now we don't have cubic meter directly linked to penalties;
+                        // keep this at 0 so the front-end can still display the column.
+                        'cubic_meter' => 0,
+                        'total_penalty' => 0.0,
+                    ];
+                }
+
+                $summaryByCategory[$category]['consumers']++;
+                $summaryByCategory[$category]['total_penalty'] += $record['penalty'];
+            }
+
             // Group by zone for summary
             $summaryByZone = [];
             foreach ($data as $record) {
@@ -1776,7 +2142,7 @@ class BillingProcessController extends Controller
                 $summaryByZone[$zoneKey]['accounts']++;
                 $summaryByZone[$zoneKey]['total_penalty'] += $record['penalty'];
             }
-            
+
             // Group by penalty type for summary
             $summaryByPenaltyType = [];
             foreach ($data as $record) {
@@ -1791,7 +2157,7 @@ class BillingProcessController extends Controller
                 $summaryByPenaltyType[$penaltyType]['accounts']++;
                 $summaryByPenaltyType[$penaltyType]['total_amount'] += $record['penalty'];
             }
-            
+
             $summary = [
                 'zone' => $zone ?? 'All Zones',
                 'bill_month' => $month ? sprintf('%02d-%d', $month, $year) : 'All Months',
@@ -1799,6 +2165,7 @@ class BillingProcessController extends Controller
                 'total_penalty' => round($totalPenalty, 2),
                 'by_zone' => array_values($summaryByZone),
                 'by_penalty_type' => array_values($summaryByPenaltyType),
+                'by_category' => array_values($summaryByCategory),
             ];
 
             return response()->json([
@@ -1812,7 +2179,7 @@ class BillingProcessController extends Controller
                 'trace' => $e->getTraceAsString(),
                 'request' => $request->all()
             ]);
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Error generating penalty report: ' . $e->getMessage(),
@@ -1825,6 +2192,442 @@ class BillingProcessController extends Controller
                 ]
             ], 500);
         }
+    }
+         
+           /**
+     * Get surcharge candidate for a specific consumer account on selected bill date.
+     * Used by Generate Penalty (Single Consumer).
+     */
+    public function getSingleConsumerPenaltyCandidate(Request $request)
+    {
+        try {
+            $request->validate([
+                'account_number' => 'required|string',
+                'bill_date' => 'required|date',
+            ]);
+
+            $accountNumber = trim((string) $request->input('account_number'));
+            $normalizedAccount = str_replace('-', '', $accountNumber);
+            $billDate = Carbon::parse($request->input('bill_date'))->startOfDay();
+            $today = Carbon::now()->startOfDay();
+
+            $rows = MeterReadingSchedule::query()
+                ->leftJoin('downloaded_readings as dr', 'dr.schedule_id', '=', 'meter_reading_schedules.id')
+                ->where(function ($q) use ($accountNumber, $normalizedAccount) {
+                    $q->whereRaw('TRIM(meter_reading_schedules.account_number) = ?', [$accountNumber])
+                        ->orWhereRaw("REPLACE(TRIM(meter_reading_schedules.account_number), '-', '') = ?", [$normalizedAccount]);
+                })
+                ->whereDate('meter_reading_schedules.bill_date', $billDate->format('Y-m-d'))
+                ->whereNotNull('meter_reading_schedules.due_date')
+                ->whereRaw('CAST(meter_reading_schedules.due_date AS DATE) < ?', [$today->format('Y-m-d')])
+                ->whereDoesntHave('ledgerEntries', function ($q) {
+                    $q->where('trans', 'PAYMENT');
+                })
+                ->select(
+                    'meter_reading_schedules.id as schedule_id',
+                    'meter_reading_schedules.account_number',
+                    'meter_reading_schedules.account_name',
+                    'meter_reading_schedules.address',
+                    'meter_reading_schedules.zone',
+                    'meter_reading_schedules.category',
+                    'meter_reading_schedules.meter_number',
+                    'meter_reading_schedules.sedr_number as sedr',
+                    'meter_reading_schedules.previous_reading_date as prev_date',
+                    'meter_reading_schedules.previous_reading as prev_read',
+                    'meter_reading_schedules.bill_date',
+                    'meter_reading_schedules.due_date',
+                    'dr.id as downloaded_id',
+                    'dr.current_reading as pres_read',
+                    'dr.consumption as volume',
+                    'dr.current_bill as dr_current_bill'
+                )
+                ->get();
+
+            $paidScheduleIds = ConsumerLedger::where('trans', 'PAYMENT')
+                ->whereIn('schedule_id', $rows->pluck('schedule_id')->filter()->toArray())
+                ->pluck('schedule_id')
+                ->toArray();
+
+            $data = [];
+            foreach ($rows as $row) {
+                if (in_array($row->schedule_id, $paidScheduleIds, true)) {
+                    continue;
+                }
+
+                $consumer = ConsumerZoneOne::where('account_no', $row->account_number)->first();
+                if (!$consumer) {
+                    $norm = str_replace('-', '', $row->account_number);
+                    $consumer = ConsumerZoneOne::whereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$norm])->first();
+                }
+
+                $arrears = 0.00;
+                $currentBill = (float) ($row->dr_current_bill ?? 0);
+                if ($currentBill <= 0 && $consumer) {
+                    $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
+                    $currentBill = (float) ($breakdown['current_bill'] ?? 0);
+                }
+
+                if ($consumer && !empty($row->schedule_id)) {
+                    $billingLedger = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                        ->where('schedule_id', $row->schedule_id)
+                        ->whereIn('trans', ['BILLING', 'BILL'])
+                        ->orderBy('id', 'asc')
+                        ->first();
+                    if ($billingLedger) {
+                        $prevLedger = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                            ->whereNotNull('balance')
+                            ->where('id', '<', $billingLedger->id)
+                            ->orderBy('id', 'desc')
+                            ->first();
+                        $arrears = $prevLedger ? (float) ($prevLedger->balance ?? 0) : 0.00;
+                    }
+                }
+
+                $wmc = ($currentBill > 0) ? (float) self::WMC_PER_MONTH : 0.00;
+                $penaltyBase = $currentBill;
+                $calculatedPenalty = round($penaltyBase * (float) self::PENALTY_RATE, 2);
+                if ($calculatedPenalty < (float) self::PENALTY_PER_MONTH && $penaltyBase > 0) {
+                    $calculatedPenalty = (float) self::PENALTY_PER_MONTH;
+                }
+                $total = round($currentBill + $wmc + $arrears + $calculatedPenalty, 2);
+
+                $outstandingBalance = $currentBill + $arrears;
+                if ($outstandingBalance <= 0) {
+                    continue;
+                }
+
+                $data[] = [
+                    'schedule_id' => $row->schedule_id,
+                    'downloaded_id' => $row->downloaded_id,
+                    'consumer_zone_id' => $consumer ? $consumer->id : null,
+                    'account_number' => $row->account_number,
+                    'account_name' => $row->account_name,
+                    'address' => $row->address,
+                    'zone' => $row->zone,
+                    'category' => $row->category,
+                    'meter_number' => $row->meter_number,
+                    'sedr' => $row->sedr,
+                    'prev_date' => $row->prev_date ? Carbon::parse($row->prev_date)->format('m/d/Y') : '-',
+                    'prev_read' => $row->prev_read ?? 0,
+                    'pres_read' => $row->pres_read ?? 0,
+                    'volume' => $row->volume ?? 0,
+                    'current_bill' => round($currentBill, 2),
+                    'arrears' => round($arrears, 2),
+                    'calculated_penalty' => $calculatedPenalty,
+                    'penalty_base' => round($penaltyBase, 2),
+                    'total' => $total,
+                    'due_date' => $row->due_date ? Carbon::parse($row->due_date)->format('Y-m-d') : null,
+                    'status' => 'Past Due',
+                    'include' => true,
+                ];
+            }
+
+            $summary = [
+                'total_records' => count($data),
+                'total_penalty' => round(array_sum(array_column($data, 'calculated_penalty')), 2),
+                'account_number' => $accountNumber,
+                'bill_date' => $billDate->format('Y-m-d'),
+            ];
+
+            return response()->json([
+                'success' => true,
+                'message' => count($data) > 0
+                    ? count($data) . ' consumer record(s) eligible for penalty.'
+                    : 'No eligible past-due billing found for this account and bill date.',
+                'data' => $data,
+                'summary' => $summary,
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('getSingleConsumerPenaltyCandidate error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Error loading single-consumer penalty candidate: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+         
+     /**
+     * Apply surcharge (penalty) to selected past-due consumers.
+     * Creates Penalty records for each selected item from Generate Surcharge.
+     */
+    public function applySurcharge(Request $request)
+    {
+        try {
+            $request->validate([
+                'items' => 'required|array',
+                'items.*.schedule_id' => 'required|integer',
+                'items.*.downloaded_id' => 'nullable|integer',
+                'items.*.consumer_zone_id' => 'nullable|integer',
+                'items.*.current_bill' => 'nullable|numeric|min:0',
+                'items.*.due_date' => 'nullable|string',
+                'items.*.calculated_penalty' => 'required|numeric|min:0',
+            ]);
+
+            $items = $request->input('items', []);
+            $applied = 0;
+            $skipped = 0;
+            $errors = [];
+
+            foreach ($items as $item) {
+                $scheduleId = (int) ($item['schedule_id'] ?? 0);
+                $downloadedId = isset($item['downloaded_id']) ? (int) $item['downloaded_id'] : null;
+                $consumerZoneId = isset($item['consumer_zone_id']) ? (int) $item['consumer_zone_id'] : null;
+                $currentBill = (float) ($item['current_bill'] ?? 0);
+                $dueDateStr = $item['due_date'] ?? null;
+                $calculatedPenalty = (float) ($item['calculated_penalty'] ?? 0);
+
+                if ($scheduleId <= 0 || $calculatedPenalty <= 0) {
+                    $skipped++;
+                    continue;
+                }
+
+                // Skip if penalty already exists for this schedule
+                $exists = Penalty::where('schedule_id', $scheduleId)->exists();
+                if ($exists) {
+                    $skipped++;
+                    continue;
+                }
+
+                $dueDate = $dueDateStr ? Carbon::parse($dueDateStr) : Carbon::today();
+                $penaltyDate = $dueDate->copy()->addDay();
+                $reference = $dueDate->format('m-Y');
+                $dueDateFormatted = $dueDate->format('Y-m-d');
+                $penaltyDateTime = $penaltyDate->format('Y-m-d') . ' 00:00:00';
+                $username = Auth::check() ? (Auth::user()->name ?? 'Billing') : 'Billing';
+
+                try {
+                    DB::transaction(function () use (
+                        $consumerZoneId,
+                        $scheduleId,
+                        $downloadedId,
+                        $currentBill,
+                        $calculatedPenalty,
+                        $dueDateFormatted,
+                        $penaltyDate,
+                        $reference,
+                        $penaltyDateTime,
+                        $username,
+                    ) {
+                        // Create penalty record first (same as existing logic)
+                        $penaltyRecord = Penalty::create([
+                            'consumer_zone_id' => $consumerZoneId ?: null,
+                            'schedule_id' => $scheduleId,
+                            'downloaded_reading_id' => $downloadedId,
+                            'date' => $penaltyDate->format('Y-m-d'),
+                            'due_date' => $dueDateFormatted,
+                            'reference' => $reference,
+                            'bill_amount' => $currentBill,
+                            'penalty_amount' => $calculatedPenalty,
+                            'balance' => $calculatedPenalty,
+                            'username' => $username,
+                            'txtime' => $penaltyDateTime,
+                        ]);
+
+                        // Create PENALTY row in consumer_ledger and update consumer_zone balance (same logic as CollectionController)
+                        if ($consumerZoneId) {
+                            $prevLedger = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
+                                ->whereNotNull('balance')
+                                ->orderBy('id', 'desc')
+                                ->first();
+                            $previousBalance = $prevLedger ? (float) ($prevLedger->balance ?? 0) : 0.00;
+                            $consumerZone = ConsumerZoneOne::find($consumerZoneId);
+                            if ($consumerZone !== null) {
+                                $previousBalance = $previousBalance ?: (float) ($consumerZone->balance ?? 0);
+                            }
+                            $newBalance = $previousBalance + $calculatedPenalty;
+
+                            ConsumerLedger::create([
+                                'consumer_zone_id' => $consumerZoneId,
+                                'trans' => 'PENALTY',
+                                'penalty_id' => $penaltyRecord->id,
+                                'schedule_id' => $scheduleId,
+                                'downloaded_reading_id' => $downloadedId,
+                                'date' => $penaltyDate->format('Y-m-d'),
+                                'due_date' => $dueDateFormatted,
+                                'reference' => $reference,
+                                'reading' => null,
+                                'volume' => null,
+                                'billamount' => 0,
+                                'penalty' => $calculatedPenalty,
+                                'others' => 0,
+                                'debit' => $calculatedPenalty,
+                                'credit' => 0,
+                                'balance' => $newBalance,
+                                'username' => $username,
+                                'txtime' => $penaltyDateTime,
+                            ]);
+
+                            if ($consumerZone !== null) {
+                                $consumerZone->balance = $newBalance;
+                                $consumerZone->save();
+                            }
+                        }
+                    });
+                    $applied++;
+                } catch (\Throwable $e) {
+                    Log::error('applySurcharge item error: ' . $e->getMessage(), ['item' => $item, 'trace' => $e->getTraceAsString()]);
+                    $errors[] = ($item['account_number'] ?? 'Schedule ' . $scheduleId) . ': ' . $e->getMessage();
+                }
+            }
+
+            $message = $applied . ' surcharge(s) applied successfully.';
+            if ($skipped > 0) {
+                $message .= ' ' . $skipped . ' skipped (already applied or invalid).';
+            }
+            if (count($errors) > 0) {
+                $message .= ' Errors: ' . implode('; ', array_slice($errors, 0, 3));
+                if (count($errors) > 3) {
+                    $message .= ' (+' . (count($errors) - 3) . ' more)';
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'applied' => $applied,
+                'skipped' => $skipped,
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('applySurcharge error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Error applying surcharge: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+     /**
+     * Export penalty report as Excel (same data source as penaltyReport: penalties table).
+     */
+    public function exportPenaltyReport(Request $request)
+    {
+        $zone = $request->get('zone');
+        $billMonth = $request->get('bill_month');
+        $billYear = $request->get('bill_year') ?? date('Y');
+
+        $month = null;
+        $year = $billYear;
+        if ($billMonth) {
+            if (strpos($billMonth, '-') !== false) {
+                $parts = explode('-', $billMonth);
+                $month = $parts[0] ?? null;
+                $year = $parts[1] ?? $billYear;
+            } else {
+                $month = $billMonth;
+            }
+        }
+
+        $query = DB::table('penalties')
+            ->leftJoin('meter_reading_schedules as mrs', 'penalties.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', 'penalties.consumer_zone_id', '=', 'cz.id')
+            ->select(
+                'penalties.id',
+                'penalties.date',
+                'penalties.due_date',
+                'penalties.reference',
+                'penalties.penalty_amount',
+                'mrs.zone as mrs_zone',
+                'mrs.bill_month',
+                'mrs.account_number as mrs_account_number',
+                'mrs.account_name as mrs_account_name',
+                'mrs.category',
+                'cz.zone_code',
+                'cz.sequence',
+                'cz.rate_code',
+                'cz.account_no',
+                'cz.account_name as cz_account_name'
+            );
+
+        if ($zone && $zone !== '' && $zone !== 'All Zones') {
+            $query->where(function ($q) use ($zone) {
+                $q->where('mrs.zone', $zone)
+                    ->orWhere('cz.zone_code', $zone)
+                    ->orWhereRaw('LPAD(TRIM(COALESCE(mrs.zone, "")), 3, "0") = ?', [$zone])
+                    ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
+            });
+        }
+
+        if ($month && $month !== '') {
+            $query->where(function ($q) use ($month, $year) {
+                $q->where(function ($q1) use ($month, $year) {
+                    $q1->whereMonth('penalties.due_date', $month)->whereYear('penalties.due_date', $year);
+                })->orWhere(function ($q2) use ($month, $year) {
+                    $q2->whereMonth('mrs.bill_month', $month)->whereYear('mrs.bill_month', $year);
+                });
+            });
+        } elseif ($year) {
+            $query->where(function ($q) use ($year) {
+                $q->whereYear('penalties.due_date', $year)
+                    ->orWhereYear('mrs.bill_month', $year);
+            });
+        }
+
+        $rows = $query->orderBy('penalties.due_date', 'asc')
+            ->orderBy('cz.sequence')
+            ->orderBy('penalties.id')
+            ->get();
+
+        $data = [];
+        foreach ($rows as $row) {
+            $penaltyDate = $row->date ? Carbon::parse($row->date) : ($row->due_date ? Carbon::parse($row->due_date) : Carbon::today());
+            $billMonthFormatted = $row->bill_month ? Carbon::parse($row->bill_month)->format('m-Y') : ($row->due_date ? Carbon::parse($row->due_date)->format('m-Y') : '');
+            $zoneCode = $row->zone_code ?? $row->mrs_zone ?? '';
+            $accountNumber = $row->mrs_account_number ?? $row->account_no ?? '';
+            $accountName = $row->mrs_account_name ?? $row->cz_account_name ?? '';
+            $penaltyAmount = (float) ($row->penalty_amount ?? 0);
+
+            $data[] = [
+                $zoneCode,
+                $billMonthFormatted,
+                $row->sequence ?? 0,
+                $accountNumber,
+                $accountName,
+                $row->rate_code ?? $row->category ?? 'P1',
+                $penaltyDate->format('m/d/Y'),
+                'LP',
+                round($penaltyAmount, 2),
+                $row->reference ?? 'Late Payment',
+            ];
+        }
+
+        $zoneText = ($zone && $zone !== 'All Zones') ? "Zone-{$zone}" : 'All-Zones';
+        $monthText = $month ? sprintf('%02d-%d', $month, $year) : $year;
+        $filename = "Penalty-Report-{$zoneText}-{$monthText}-" . Carbon::now()->format('YmdHis') . '.xlsx';
+
+        if (class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
+            return Excel::download(
+                new class($data) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle {
+                    protected $rows;
+
+                    public function __construct($rows)
+                    {
+                        $this->rows = collect($rows);
+                    }
+
+                    public function collection()
+                    {
+                        return $this->rows;
+                    }
+
+                    public function headings(): array
+                    {
+                        return ['Zone_code', 'Bill month', 'Sequence', 'Account_no', 'Account_name', 'Rate_code', 'Date', 'Rate_code1', 'Penalty', 'Ref'];
+                    }
+
+                    public function title(): string
+                    {
+                        return 'Penalty Report';
+                    }
+                },
+                $filename
+            );
+        }
+
+        return redirect()->back()->with('error', 'Excel export is not available. Laravel Excel package is missing.');
     }
 
     /**
@@ -1867,9 +2670,8 @@ class BillingProcessController extends Controller
 
             $statusMap = [
                 'Active' => ['A', 'ACTIVE', 'Active', 'A - ACTIVE'],
-                'Inactive' => ['I', 'INACTIVE', 'Inactive'],
-                'Suspended' => ['S', 'SUSPENDED', 'Suspended'],
-                'Disconnected' => ['D', 'DISCONNECTED', 'Disconnected'],
+                 'Pending' => ['P', 'PENDING', 'Pending'],
+                 'Disconnected' => ['X', 'DISCONNECTED', 'Disconnected', 'D'],
             ];
 
             if (isset($statusMap[$statusValue])) {
@@ -1922,6 +2724,53 @@ class BillingProcessController extends Controller
         // Eager load ledger count to check if consumer has imported ledger entries
         $consumers = $consumersQuery->withCount('ledgers')->get();
 
+        // Reading guide print fields:
+        // - Prevdate / PrevRdg from previous month schedule
+        // - PresRdg from latest/current generated month schedule
+        $previousMonth = Carbon::now()->subMonthNoOverflow();
+        $accountNos = $consumers->pluck('account_no')->filter()->values();
+        $previousScheduleByAccount = collect();
+        $latestScheduleByAccount = collect();
+        if ($accountNos->isNotEmpty()) {
+            $previousScheduleByAccount = MeterReadingSchedule::whereIn('account_number', $accountNos)
+                ->whereYear('bill_month', $previousMonth->year)
+                ->whereMonth('bill_month', $previousMonth->month)
+                ->orderBy('bill_date', 'desc')
+                ->orderBy('id', 'desc')
+                ->get(['account_number', 'bill_date', 'current_reading', 'previous_reading'])
+                ->groupBy('account_number')
+                ->map(function ($rows) {
+                    return $rows->first();
+                });
+
+            $latestGeneratedBillMonth = MeterReadingSchedule::whereNotNull('bill_month')->max('bill_month');
+            if ($latestGeneratedBillMonth) {
+                $latestMonth = Carbon::parse($latestGeneratedBillMonth);
+                $latestScheduleByAccount = MeterReadingSchedule::whereIn('account_number', $accountNos)
+                    ->whereYear('bill_month', $latestMonth->year)
+                    ->whereMonth('bill_month', $latestMonth->month)
+                    ->orderBy('bill_date', 'desc')
+                    ->orderBy('id', 'desc')
+                    ->get(['account_number', 'bill_month', 'bill_date', 'current_reading', 'previous_reading'])
+                    ->groupBy('account_number')
+                    ->map(function ($rows) {
+                        return $rows->first();
+                    });
+            }
+        }
+
+        $consumers->transform(function ($consumer) use ($previousScheduleByAccount, $latestScheduleByAccount) {
+            $prev = $previousScheduleByAccount->get($consumer->account_no);
+            $latest = $latestScheduleByAccount->get($consumer->account_no);
+            $consumer->prev_bill_date = $prev && $prev->bill_date ? Carbon::parse($prev->bill_date)->format('m/d/Y') : '';
+            $consumer->prev_pres_rdg = $latest && $latest->current_reading !== null ? (string) ((int) $latest->current_reading) : '';
+            $consumer->prev_prev_rdg = $prev && $prev->current_reading !== null
+                ? (string) ((int) $prev->current_reading)
+                : ($prev && $prev->previous_reading !== null ? (string) ((int) $prev->previous_reading) : '');
+
+            return $consumer;
+        });
+
         $summaryByZone = (clone $baseQuery)
             ->select('zone_code as zone', DB::raw('COUNT(*) as total'))
             ->groupBy('zone_code')
@@ -1951,14 +2800,15 @@ class BillingProcessController extends Controller
 
         $validated = $request->validate([
             'downloaded_id' => 'nullable|exists:downloaded_readings,id',
-            'account_number' => 'required_if:downloaded_id,null|nullable|string|max:50',
+            'account_number' => 'nullable|string|max:50',
+            'account_name' => 'nullable|string|max:255',
             'amount_due' => 'required|numeric|min:0',
             'amount_tendered' => 'required|numeric|min:0',
             'payment_method' => 'required|string|max:50',
             'reference_number' => 'nullable|string|max:255',
             'remarks' => 'nullable|string|max:1000',
             'official_receipt_number' => 'nullable|string|max:20',
-            'is_update' => 'nullable|boolean', // Flag to indicate if this is an update
+            'is_update' => 'nullable|boolean',
             'current_bill' => 'nullable|numeric|min:0',
             'senior_citizen_discount' => 'nullable|numeric|min:0',
             'penalty' => 'nullable|numeric|min:0',
@@ -1970,8 +2820,8 @@ class BillingProcessController extends Controller
             'materials' => 'nullable|numeric|min:0',
             'fees_charges' => 'nullable|numeric|min:0',
             'inspection_fee' => 'nullable|numeric|min:0',
-            'transaction_date' => 'nullable|date', // Payment date (for "paid before due date" and ledger display)
-            'pay_months' => 'nullable|integer|in:1,2,3', // Pay 1, 2, or 3 principal months only; penalty/WMC unchanged
+            'transaction_date' => 'nullable|date',
+            'pay_months' => 'nullable|integer|in:1,2,3',
             'sundries'   => 'nullable|array',
             'sundries.*.acct_code' => 'required_with:sundries|string|max:50',
             'sundries.*.bam_no'    => 'nullable|string|max:50',
@@ -2043,23 +2893,30 @@ class BillingProcessController extends Controller
                     }
                 }
 
-                if ($downloaded) {
-                    $existingPaidPayment = ConsumerPayment::where('reading_id', $downloaded->id)->whereNotNull('paid_at')->first();
-                    if (!$isUpdate && $existingPaidPayment) {
-                        $existingOrNumber = $existingPaidPayment->or_number ? " (OR #{$existingPaidPayment->or_number})" : '';
-                        $paidDate = $existingPaidPayment->paid_at ? Carbon::parse($existingPaidPayment->paid_at)->format('M d, Y') : '';
-                        throw new \Exception(
-                            "Payment already exists for account number {$downloaded->account_number}{$existingOrNumber}. " .
-                            "Payment was recorded on {$paidDate}. " .
-                            "Use edit mode to update existing payments."
-                        );
-                    }
-                }
+                // Allow multiple payments per bill month: no duplicate check on reading_id.
 
                 if ($validated['official_receipt_number']) {
                     $q = ConsumerPayment::where('or_number', $validated['official_receipt_number']);
-                    if ($downloaded) {
-                        $q->where('reading_id', '!=', $downloaded->id);
+                    // When updating, exclude the payment we're updating so it can keep its OR number (find by reading_id+OR or by OR+consumer when loaded by OR #)
+                    if ($isUpdate) {
+                        $paymentBeingUpdated = null;
+                        if ($downloaded) {
+                            $paymentBeingUpdated = ConsumerPayment::where('reading_id', $downloaded->id)
+                                ->where('or_number', $validated['official_receipt_number'])
+                                ->first();
+                        }
+                        if (!$paymentBeingUpdated) {
+                            $byOr = ConsumerPayment::where('or_number', $validated['official_receipt_number']);
+                            if ($consumerId) {
+                                $byOr->where('consumer_id', $consumerId);
+                            }
+                            $paymentBeingUpdated = $byOr->first();
+                        }
+                        if ($paymentBeingUpdated) {
+                            $q->where('id', '!=', $paymentBeingUpdated->id);
+                        } elseif ($downloaded) {
+                            $q->where('reading_id', '!=', $downloaded->id);
+                        }
                     }
                     if ($q->exists()) {
                         throw new \Exception(
@@ -2078,6 +2935,7 @@ class BillingProcessController extends Controller
                 // Update or create consumer_payment; store full breakdown so all particulars are in DB
                 $paymentData = [
                     'consumer_id' => $consumerId,
+                    'account_name' => $validated['account_name'] ?? null,
                     'payment_method' => $validated['payment_method'],
                     'payment_amount' => round($validated['amount_due'], 2),
                     'amount_tendered' => round($validated['amount_tendered'], 2),
@@ -2099,10 +2957,50 @@ class BillingProcessController extends Controller
                     'created_by' => $this->getFormattedUserName(),
                 ];
                 if ($downloaded) {
-                    $consumerPayment = ConsumerPayment::updateOrCreate(
-                        ['reading_id' => $downloaded->id],
-                        array_merge($paymentData, ['reading_id' => $downloaded->id])
-                    );
+                    if ($isUpdate) {
+                        if (empty($validated['official_receipt_number'])) {
+                            throw new \Exception('OR number is required to update an existing payment. Enter the OR number of the payment you want to update.');
+                        }
+                        // Update: first try payment for this billing record (reading_id + OR)
+                        $consumerPayment = ConsumerPayment::where('reading_id', $downloaded->id)
+                            ->where('or_number', $validated['official_receipt_number'])
+                            ->first();
+                        // Fallback: if not found, find by OR + consumer (same account) so "search by OR #" can update even when payment is linked to a different bill month
+                        if (!$consumerPayment && $consumerId) {
+                            $consumerPayment = ConsumerPayment::where('or_number', $validated['official_receipt_number'])
+                                ->where('consumer_id', $consumerId)
+                                ->first();
+                        }
+                        if ($consumerPayment) {
+                            $consumerPayment->update($paymentData);
+                        } else {
+                            throw new \Exception(
+                                'No payment found with OR #' . $validated['official_receipt_number'] . '.' .
+                                ($consumerId ? ' Ensure the account number matches the payment.' : ' Load the record by OR number or enter account number first.')
+                            );
+                        }
+                    } else {
+                        // New payment: always create (allows multiple payments per same month/reading)
+                        $consumerPayment = ConsumerPayment::create(array_merge($paymentData, ['reading_id' => $downloaded->id]));
+                    }
+                } elseif ($isUpdate && !empty($validated['official_receipt_number'])) {
+                    // Update by OR # when record was loaded by OR (no downloaded_id): find payment by OR and account/consumer
+                    $byOr = ConsumerPayment::where('or_number', $validated['official_receipt_number']);
+                    if ($consumerId) {
+                        $byOr->where('consumer_id', $consumerId);
+                    }
+                    $consumerPayment = $byOr->first();
+                    if ($consumerPayment) {
+                        if (!$consumerId && $consumerPayment->consumer_id) {
+                            $consumerId = $consumerPayment->consumer_id;
+                        }
+                        $consumerPayment->update($paymentData);
+                    } else {
+                        throw new \Exception(
+                            'No payment found with OR #' . $validated['official_receipt_number'] . '.' .
+                            ($consumerId ? ' Ensure the account number matches the payment.' : ' Enter account number and try again.')
+                        );
+                    }
                 } else {
                     // New accounts (no meter reading yet): allow payment with reading_id null
                     $consumerPayment = ConsumerPayment::create(array_merge($paymentData, ['reading_id' => null]));
@@ -2327,22 +3225,56 @@ class BillingProcessController extends Controller
                 // Create or update ConsumerLedger PAYMENT (bill portion only; skip for sundry-only payments)
                 if ($consumerId && $billPaymentAmount > 0) {
                     $newBalance = ($outstandingBalance ?? 0) - $billPaymentAmount;
+                    // When updating, use the balance *before* this payment row so we don't double-subtract the payment
+                    if ($isUpdate && $consumerPayment) {
+                        $existingPaymentRow = ConsumerLedger::where('consumer_payment_id', $consumerPayment->id)
+                            ->where('trans', 'PAYMENT')
+                            ->where(function ($q) {
+                                $q->whereNull('reference')->orWhere('reference', 'not like', '%-SC');
+                            })
+                            ->first();
+                        if (!$existingPaymentRow) {
+                            $existingPaymentRow = ConsumerLedger::where('consumer_payment_id', $consumerPayment->id)
+                                ->where('trans', 'PAYMENT')
+                                ->first();
+                        }
+                        if ($existingPaymentRow) {
+                            $previousEntry = ConsumerLedger::where('consumer_zone_id', $consumerId)
+                                ->whereNotNull('balance')
+                                ->where(function ($q) use ($existingPaymentRow) {
+                                    $q->where('date', '<', $existingPaymentRow->date)
+                                        ->orWhere(function ($q2) use ($existingPaymentRow) {
+                                            $q2->where('date', $existingPaymentRow->date)
+                                                ->where('id', '<', $existingPaymentRow->id);
+                                        });
+                                })
+                                ->orderBy('date', 'desc')
+                                ->orderBy('id', 'desc')
+                                ->first();
+                            $balanceBeforeThisPayment = $previousEntry ? (float)($previousEntry->balance ?? 0) : 0;
+                            $newBalance = round($balanceBeforeThisPayment - $billPaymentAmount, 2);
+                        }
+                    }
                     $orNumber = $validated['official_receipt_number'] ?? ($downloaded ? 'Payment DR#' . $downloaded->id : 'Payment ACCT#' . ($validated['account_number'] ?? ''));
-                    $ledgerNow = Carbon::now();
+                    // Use transaction date (paidAt) so ledger and reports show the same date as the form (e.g. 02/03/2026)
+                    $ledgerDate = $paidAt;
                     $readingId = $downloaded?->id;
                     $scheduleId = $downloaded?->schedule_id;
                     if ($downloaded && !$isUpdate) {
+                        // Only delete orphan -SC rows that might have been left behind (e.g. from old single-payment flow).
+                        // Do not delete all -SC rows for this reading, so multiple payments per month keep their -SC entries.
                         ConsumerLedger::where('consumer_zone_id', $consumerId)
                             ->where('trans', 'PAYMENT')
                             ->where('downloaded_reading_id', $downloaded->id)
                             ->where('reference', 'like', '%-SC')
+                            ->whereNull('consumer_payment_id')
                             ->delete();
                     }
                     $ledgerPayload = [
                         'consumer_zone_id' => $consumerId,
                         'consumer_payment_id' => $consumerPayment->id,
                         'schedule_id' => $scheduleId,
-                        'date' => $ledgerNow->format('Y-m-d'),
+                        'date' => $ledgerDate->format('Y-m-d'),
                         'due_date' => null,
                         'reference' => $orNumber,
                         'reading' => null,
@@ -2354,23 +3286,50 @@ class BillingProcessController extends Controller
                         'credit' => $billPaymentAmount,
                         'balance' => round($newBalance, 2),
                         'username' => $this->getFormattedUserName(),
-                        'txtime' => $ledgerNow->format('Y-m-d H:i:s'),
-                        'paid_at' => $ledgerNow,
+                        'txtime' => $ledgerDate->format('Y-m-d H:i:s'),
+                        'paid_at' => $ledgerDate,
                     ];
                     if ($readingId !== null) {
-                        ConsumerLedger::updateOrCreate(
-                            [
-                                'consumer_zone_id' => $consumerId,
+                        if ($isUpdate) {
+                            // Update the existing ledger row for this payment
+                            $ledgerRow = ConsumerLedger::where('consumer_payment_id', $consumerPayment->id)
+                                ->where('trans', 'PAYMENT')
+                                ->first();
+                            if ($ledgerRow) {
+                                $ledgerRow->update($ledgerPayload);
+                            } else {
+                                ConsumerLedger::create(array_merge($ledgerPayload, [
+                                    'trans' => 'PAYMENT',
+                                    'downloaded_reading_id' => $readingId,
+                                ]));
+                            }
+                        } else {
+                            // New payment: always create a new ledger row (supports multiple payments per reading)
+                            ConsumerLedger::create(array_merge($ledgerPayload, [
                                 'trans' => 'PAYMENT',
                                 'downloaded_reading_id' => $readingId,
-                            ],
-                            $ledgerPayload
-                        );
+                            ]));
+                        }
                     } else {
-                        ConsumerLedger::create(array_merge($ledgerPayload, [
-                            'trans' => 'PAYMENT',
-                            'downloaded_reading_id' => null,
-                        ]));
+                        // No reading_id (e.g. update by OR only, or new-account payment)
+                        if ($isUpdate) {
+                            $ledgerRow = ConsumerLedger::where('consumer_payment_id', $consumerPayment->id)
+                                ->where('trans', 'PAYMENT')
+                                ->first();
+                            if ($ledgerRow) {
+                                $ledgerRow->update($ledgerPayload);
+                            } else {
+                                ConsumerLedger::create(array_merge($ledgerPayload, [
+                                    'trans' => 'PAYMENT',
+                                    'downloaded_reading_id' => null,
+                                ]));
+                            }
+                        } else {
+                            ConsumerLedger::create(array_merge($ledgerPayload, [
+                                'trans' => 'PAYMENT',
+                                'downloaded_reading_id' => null,
+                            ]));
+                        }
                     }
 
                     $scDiscount = round($validated['senior_citizen_discount'] ?? 0, 2);
@@ -2387,7 +3346,7 @@ class BillingProcessController extends Controller
                                 [
                                     'consumer_payment_id' => $consumerPayment->id,
                                     'schedule_id' => $downloaded->schedule_id,
-                                    'date' => $ledgerNow->format('Y-m-d'),
+                                    'date' => $ledgerDate->format('Y-m-d'),
                                     'due_date' => null,
                                     'reading' => null,
                                     'volume' => null,
@@ -2398,17 +3357,18 @@ class BillingProcessController extends Controller
                                     'credit' => $scDiscount,
                                     'balance' => round($newBalance - $scDiscount, 2),
                                     'username' => $this->getFormattedUserName(),
-                                    'txtime' => $ledgerNow->format('Y-m-d H:i:s'),
-                                    'paid_at' => $ledgerNow,
+                                    'txtime' => $ledgerDate->format('Y-m-d H:i:s'),
+                                    'paid_at' => $ledgerDate,
                                 ]
                             );
                         } else {
                             ConsumerLedger::create([
                                 'consumer_zone_id' => $consumerId,
+                                'consumer_payment_id' => $consumerPayment->id,
                                 'schedule_id' => $downloaded ? $downloaded->schedule_id : null,
                                 'downloaded_reading_id' => $downloaded ? $downloaded->id : null,
                                 'trans' => 'PAYMENT',
-                                'date' => $ledgerNow->format('Y-m-d'),
+                                'date' => $ledgerDate->format('Y-m-d'),
                                 'due_date' => null,
                                 'reference' => $orNumber . '-SC',
                                 'reading' => null,
@@ -2420,8 +3380,8 @@ class BillingProcessController extends Controller
                                 'credit' => $scDiscount,
                                 'balance' => round($newBalance - $scDiscount, 2),
                                 'username' => $this->getFormattedUserName(),
-                                'txtime' => $ledgerNow->format('Y-m-d H:i:s'),
-                                'paid_at' => $ledgerNow,
+                                'txtime' => $ledgerDate->format('Y-m-d H:i:s'),
+                                'paid_at' => $ledgerDate,
                             ]);
                         }
                     }
@@ -2537,5 +3497,482 @@ class BillingProcessController extends Controller
         // First word is the first name
         return !empty($nameWords[0]) ? trim($nameWords[0]) : '';
     }
+    
+    /**
+     * Akoang mga Bag ong functions Ayaw Walaa hHahaha
+     * Insert a single DM (Debit Memo) for one consumer (by consumer_zone_id).
+     * Reference is auto-generated (6-digit number) and validated for uniqueness.
+     */
+    public function storeDmLedger(Request $request)
+    {
+        $request->validate([
+            'consumer_zone_id' => 'required|integer|exists:consumer_zone,id',
+            'date' => 'required|date',
+            'amount' => 'required|numeric|min:0',
+        ]);
+
+        $consumer = ConsumerZoneOne::find($request->consumer_zone_id);
+        if (!$consumer) {
+            return response()->json(['success' => false, 'message' => 'Consumer not found.'], 404);
+        }
+
+        $date = Carbon::parse($request->date)->format('Y-m-d');
+        $amount = (float) $request->amount;
+
+        // Strict: do not allow duplicate DM for same consumer on same date
+        $alreadyExists = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+            ->where('date', $date)
+            ->where('trans', 'DM')
+            ->exists();
+        if ($alreadyExists) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This consumer already has a DM for the selected date. Duplicate not allowed.',
+            ], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+            $reference = $this->createOneDmLedgerEntry($consumer, $date, $amount);
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'DM added for ' . ($consumer->account_no ?? '') . ' - ' . ($consumer->account_name ?? ''),
+                'reference' => $reference,
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Store DM failed', [
+                'consumer_zone_id' => $consumer->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to add DM: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Create one DM ledger entry and update consumer balance. Call within a transaction.
+     * Returns the generated 6-digit reference.
+     */
+    private function createOneDmLedgerEntry(ConsumerZoneOne $consumer, string $date, float $amount): string
+    {
+        $reference = $this->generateUniqueDmReference($date);
+        $debit = round($amount, 2);
+        $username = Auth::check() ? (Auth::user()->name ?? 'SYSTEM') : 'SYSTEM';
+        $dateTime = Carbon::parse($date)->startOfDay();
+        $currentBalance = (float) ($consumer->balance ?? 0);
+        $newBalance = round($currentBalance + $debit, 2);
+
+        ConsumerLedger::create([
+            'consumer_zone_id' => $consumer->id,
+            'consumer_payment_id' => null,
+            'schedule_id' => null,
+            'downloaded_reading_id' => null,
+            'penalty_id' => null,
+            'billing_adjustment_id' => null,
+            'trans' => 'DM',
+            'date' => $date,
+            'due_date' => null,
+            'reference' => $reference,
+            'reading' => 0,
+            'volume' => 0,
+            'billamount' => 0,
+            'penalty' => 0,
+            'others' => 0,
+            'debit' => $debit,
+            'credit' => 0,
+            'balance' => $newBalance,
+            'username' => $username,
+            'txtime' => $dateTime,
+        ]);
+
+        $consumer->balance = $newBalance;
+        $consumer->save();
+
+        return $reference;
+    }
+
+    /**
+     * Bulk DM upload via Excel. File must have columns: account_no, amount. Date is fixed to 2026-02-27.
+     */
+    public function storeDmLedgerImport(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+        ]);
+
+        $fixedDate = '2026-02-27';
+        $imported = 0;
+        $failed = 0;
+        $errors = [];
+
+        try {
+            $data = Excel::toArray(new DmLedgerImport(), $request->file('file'));
+            $rows = $data[0] ?? [];
+
+            if (empty($rows)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The file is empty or has no data rows.',
+                    'imported' => 0,
+                    'failed' => 0,
+                    'errors' => [],
+                ], 422);
+            }
+
+            // First row is header (numeric indices). Find column indices for account_no and amount.
+            $header = $rows[0];
+            $accountNoCol = $this->findColumnIndex($header, ['account_no', 'account_number', 'accountnumber', 'account no', 'acct_no', 'acctno']);
+            $amountCol = $this->findColumnIndex($header, ['amount', 'debit', 'amt']);
+
+            if ($accountNoCol === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Excel must have a column for account number (e.g. account_no or account_number).',
+                    'imported' => 0,
+                    'failed' => 0,
+                    'errors' => [],
+                ], 422);
+            }
+            if ($amountCol === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Excel must have a column for amount (e.g. amount or debit).',
+                    'imported' => 0,
+                    'failed' => 0,
+                    'errors' => [],
+                ], 422);
+            }
+
+            $accountNoKeys = ['account_no', 'account_number', 'accountnumber', 'account no', 'acct_no', 'acctno'];
+            $amountKeys = ['amount', 'debit', 'amt'];
+
+            $processedInThisFile = []; // Track account_no to reject duplicates within the same file
+
+            foreach ($rows as $index => $row) {
+                if ($index === 0) {
+                    continue; // Skip header row
+                }
+
+                $rowNum = $index + 1; // 1-based row number in sheet
+
+                // Row may be numeric array (raw) or associative (depends on reader)
+                if (isset($row[$accountNoCol])) {
+                    $accountNo = trim((string) $row[$accountNoCol]);
+                } else {
+                    $accountNo = $this->getRowValueCaseInsensitive(is_array($row) ? $row : [], $accountNoKeys);
+                    $accountNo = $accountNo !== null ? trim((string) $accountNo) : null;
+                }
+                if ($accountNo === '') {
+                    $accountNo = null;
+                }
+
+                if (isset($row[$amountCol])) {
+                    $amountVal = $row[$amountCol];
+                } else {
+                    $amountVal = $this->getRowValueCaseInsensitive(is_array($row) ? $row : [], $amountKeys);
+                }
+                if ($amountVal !== null && $amountVal !== '') {
+                    $amountVal = is_numeric($amountVal) ? (float) $amountVal : null;
+                } else {
+                    $amountVal = null;
+                }
+
+                if (!$accountNo) {
+                    if ($amountVal === null || $amountVal === '') {
+                        continue; // Skip fully empty rows
+                    }
+                    $errors[] = "Row {$rowNum}: Missing account_no.";
+                    $failed++;
+                    continue;
+                }
+                if ($amountVal === null || $amountVal < 0) {
+                    $errors[] = "Row {$rowNum}: Invalid or missing amount.";
+                    $failed++;
+                    continue;
+                }
+
+                $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+                if (!$consumer) {
+                    $consumer = ConsumerZoneOne::whereRaw('TRIM(account_no) = ?', [$accountNo])->first();
+                }
+                if (!$consumer) {
+                    $errors[] = "Row {$rowNum}: Account [{$accountNo}] not found.";
+                    $failed++;
+                    continue;
+                }
+
+                // Strict: duplicate in file – same account_no already processed in this upload
+                if (isset($processedInThisFile[$accountNo])) {
+                    $errors[] = "Row {$rowNum}: Duplicate in file – [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
+                    $failed++;
+                    continue;
+                }
+
+                // Strict: duplicate in DB – consumer already has a DM for this date
+                $alreadyExists = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                    ->where('date', $fixedDate)
+                    ->where('trans', 'DM')
+                    ->exists();
+                if ($alreadyExists) {
+                    $errors[] = "Row {$rowNum}: Duplicate – [{$accountNo}] already has a DM for {$fixedDate}.";
+                    $failed++;
+                    continue;
+                }
+
+                try {
+                    DB::beginTransaction();
+                    $this->createOneDmLedgerEntry($consumer, $fixedDate, $amountVal);
+                    DB::commit();
+                    $imported++;
+                    $processedInThisFile[$accountNo] = $rowNum;
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    $errors[] = "Row {$rowNum}: " . $e->getMessage();
+                    $failed++;
+                }
+            }
+
+            $message = "DM import completed. Imported: {$imported}, Failed: {$failed}.";
+            if ($imported === 0 && $failed === 0 && count($rows) > 1) {
+                $message = 'No data rows were processed. Check that the file has a header row (account_no, amount) and at least one data row with valid account numbers and amounts.';
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'imported' => $imported,
+                'failed' => $failed,
+                'errors' => $errors,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('DM import failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Import failed: ' . $e->getMessage(),
+                'imported' => 0,
+                'failed' => 0,
+                'errors' => [],
+            ], 500);
+        }
+    }
+
+    /**
+     * Get value from row by possible column names (case-insensitive, trimmed keys).
+     */
+    private function getRowValueCaseInsensitive(array $row, array $possibleKeys): mixed
+    {
+        $rowLower = [];
+        foreach ($row as $k => $v) {
+            $rowLower[trim(strtolower(str_replace([' ', '_'], '', (string) $k)))] = $v;
+        }
+        foreach ($possibleKeys as $key) {
+            $normalized = trim(strtolower(str_replace([' ', '_'], '', $key)));
+            if (isset($rowLower[$normalized])) {
+                return $rowLower[$normalized];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Find column index in header row by possible names (case-insensitive).
+     * Header row can be numeric indices 0,1,2... with cell values as column names.
+     */
+    private function findColumnIndex(array $headerRow, array $possibleNames): ?int
+    {
+        $normalizedNames = array_map(function ($name) {
+            return trim(strtolower(str_replace([' ', '_'], '', (string) $name)));
+        }, $possibleNames);
+
+        foreach ($headerRow as $index => $cellValue) {
+            $cellNormalized = trim(strtolower(str_replace([' ', '_'], '', (string) $cellValue)));
+            if (in_array($cellNormalized, $normalizedNames, true)) {
+                return $index;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Generate a unique DM reference: 6-digit number (000001, 000002, ...).
+     * Ensures no duplicate reference in consumer_ledgers.
+     */
+    private function generateUniqueDmReference(string $date): string
+    {
+        $maxAttempts = 100;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $lastRef = ConsumerLedger::where('trans', 'DM')
+                ->whereRaw('reference REGEXP ?', ['^[0-9]{6}$'])
+                ->orderByRaw('CAST(reference AS UNSIGNED) DESC')
+                ->value('reference');
+
+            $seq = 1;
+            if ($lastRef !== null && preg_match('/^\d{1,6}$/', $lastRef)) {
+                $seq = (int) $lastRef + 1;
+            }
+
+            if ($seq > 999999) {
+                throw new \RuntimeException('DM reference sequence exhausted (max 999999).');
+            }
+
+            $reference = str_pad((string) $seq, 6, '0', STR_PAD_LEFT);
+
+            if (!ConsumerLedger::where('reference', $reference)->exists()) {
+                return $reference;
+            }
+        }
+
+        throw new \RuntimeException('Unable to generate unique DM reference after ' . $maxAttempts . ' attempts.');
+    }
+    
+    /**
+     * Save a cancelled OR marker for collection report.
+     */
+    public function storeCancelledOr(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'or_number' => 'required|string|max:50',
+            ]);
+
+            $orNumber = trim((string) $validated['or_number']);
+            if ($orNumber === '') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'OR number is required.',
+                ], 422);
+            }
+
+            $remarksValue = 'Cancelled OR#' . $orNumber;
+            $existing = ConsumerPayment::where('or_number', $orNumber)->first();
+
+            if ($existing) {
+                $isCancelledMarker = strcasecmp(trim((string) ($existing->account_name ?? '')), 'Cancelled') === 0
+                    || str_starts_with((string) ($existing->remarks ?? ''), 'Cancelled OR#');
+
+                if (!$isCancelledMarker) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'OR # ' . $orNumber . ' is already used by an existing payment.',
+                    ], 409);
+                }
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'OR # ' . $orNumber . ' is already marked as cancelled.',
+                    'data' => [
+                        'id' => $existing->id,
+                        'or_number' => $existing->or_number,
+                    ],
+                ]);
+            }
+
+            $cancelled = ConsumerPayment::create([
+                'reading_id' => null,
+                'consumer_id' => null,
+                'account_name' => 'Cancelled',
+                'payment_method' => null,
+                'payment_amount' => 0,
+                'amount_tendered' => 0,
+                'change_amount' => 0,
+                'or_number' => $orNumber,
+                'paid_at' => null,
+                'remarks' => $remarksValue,
+                'created_by' => $this->getFormattedUserName(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Cancelled OR # ' . $orNumber . ' saved.',
+                'data' => [
+                    'id' => $cancelled->id,
+                    'or_number' => $cancelled->or_number,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Save cancelled OR error', [
+                'or_number' => $request->input('or_number'),
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to save cancelled OR: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+    
+    /**
+     * Delete payment by OR number
+     */
+    public function deletePayment(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'or_number' => 'required|string'
+            ]);
+
+            $orNumber = $validated['or_number'];
+            $lroRemarks = 'Payment OR#' . $orNumber;
+            
+            // Find payment by OR number
+            $payment = ConsumerPayment::where('or_number', $orNumber)->first();
+
+            // If no consumer_payment exists, still clean orphan LRO payment rows for this OR.
+            if (!$payment) {
+                $deletedOrphanLroRows = LROLedger::where('type', 'CM')
+                    ->where('remarks', $lroRemarks)
+                    ->delete();
+
+                if ($deletedOrphanLroRows > 0) {
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'No consumer payment found for OR # ' . $orNumber . ', but orphan LRO row(s) were deleted.',
+                    ]);
+                }
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payment with OR # ' . $orNumber . ' not found.'
+                ], 404);
+            }
+
+            // Delete the payment (cascade delete will handle consumer_ledger payment entries).
+            $payment->delete();
+
+            // Always delete corresponding LRO payment rows (CM) tagged by OR in remarks.
+            $deletedLroRows = LROLedger::where('type', 'CM')
+                ->where('remarks', $lroRemarks)
+                ->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Payment with OR # ' . $orNumber . ' has been deleted successfully.',
+                'deleted_lro_rows' => $deletedLroRows,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Delete payment error', [
+                'or_number' => $request->input('or_number'),
+                'error' => $e->getMessage()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete payment: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }
+
+
 

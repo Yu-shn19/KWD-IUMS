@@ -11,50 +11,7 @@
             <div id="content">
                 <!-- Simple Header -->
                 @include('consumer.header')
-                @if($consumer)
-                <script>sessionStorage.setItem('currentConsumer', JSON.stringify(@json($consumer)));</script>
-                @endif
-
-                <!-- Navigation Tabs -->
-                <div class="card-body p-0">
-                    <ul class="nav nav-tabs">
-                        <li class="nav-item">
-                            <a href="{{ route('consumer') }}{{ isset($consumer) && $consumer ? '?account=' . urlencode($consumer->account_no) : '' }}" class="nav-link active" id="consumerDetailsTab">
-                                <i class="fas fa-user me-1"></i>Consumer Details
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('ledger') }}" class="nav-link">
-                                <i class="fas fa-file-invoice me-1"></i>Account Ledger
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('lro-ledger') }}" class="nav-link">
-                                <i class="fas fa-list me-1"></i>LRO Ledger
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('service') }}" class="nav-link">
-                                <i class="fas fa-history me-1"></i>Service History
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('meter') }}" class="nav-link">
-                                <i class="fas fa-tachometer-alt me-1"></i>Meter Reading
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('location') }}" class="nav-link">
-                                <i class="fas fa-map-marker-alt me-1"></i>Location Map
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="{{ route('consumption') }}" class="nav-link">
-                                <i class="fas fa-chart-line me-1"></i>Consumption Graph
-                            </a>
-                        </li>
-                    </ul>
-                </div>
+                @include('consumer.nav-tabs', ['activeTab' => 'consumer'])
 
                 <!-- Simple Action Buttons -->
                 <div class="bg-white px-3 py-2 border-bottom mb-3">
@@ -91,19 +48,89 @@
                 </div>
 
                 <!-- Main Content Area -->
-                <div class="p-3 bg-light">
+                <div class="p-3 bg-light main-consumer-content">
+                    <style>
+                        .main-consumer-content { font-size: 1.05rem; }
+                        .main-consumer-content .card-header h6 { font-size: 1.125rem; }
+                        .main-consumer-content .table { font-size: 1rem; }
+                        .main-consumer-content .table thead th {
+                            font-size: 0.95rem;
+                            color: #0b5ed7;
+                            font-weight: 600;
+                        }
+                        .main-consumer-content .list-group-item { font-size: 1rem; }
+                        .main-consumer-content .list-group-item .text-muted { color: #2563b8 !important; }
+                        .main-consumer-content .list-group-item strong { font-size: 1.05rem; }
+                        .main-consumer-content .card-footer { font-size: 1.05rem; }
+                        .main-consumer-content .card-footer .fs-6 { font-size: 1.15rem !important; }
+                        .main-consumer-content .card.bg-light .card-body { font-size: 1rem; }
+                        .main-consumer-content .card.bg-light h6 { font-size: 1.05rem; }
+                        .main-consumer-content .card.bg-light .fw-bold { font-size: 1.1rem; }
+                        .main-consumer-content .card.bg-light small.text-muted {
+                            font-size: 0.9rem;
+                            color: #2563b8 !important;
+                            font-weight: 600;
+                        }
+                        .main-consumer-content .form-label { color: #0b5ed7; }
+
+                        .consumer-info-card { border-radius: 0.5rem; overflow: hidden; }
+                        .consumer-info-card .card-header { border-bottom: 0; }
+                        .consumer-info-card .card-header h6 { font-size: 1.2rem; }
+                        .consumer-info-card .consumer-info-body { background: linear-gradient(165deg, #e8f1fb 0%, #eef4f9 45%, #f5f7fb 100%); }
+                        .consumer-info-card .consumer-info-panel {
+                            background-color: #fff;
+                            border-radius: 0.5rem;
+                            border: 1px solid rgba(13, 110, 253, 0.12);
+                            box-shadow: 0 0.125rem 0.35rem rgba(15, 60, 120, 0.06);
+                            padding: 1.15rem 1.25rem;
+                            height: 100%;
+                        }
+                        .consumer-info-card .consumer-info-panel .form-label {
+                            font-size: 0.9rem;
+                            text-transform: uppercase;
+                            letter-spacing: 0.02em;
+                            color: #0b5ed7;
+                            margin-bottom: 0.35rem;
+                            font-weight: 600;
+                        }
+                        .consumer-info-card .form-control.form-control-sm,
+                        .consumer-info-card textarea.form-control-sm {
+                            font-size: 1.05rem;
+                            line-height: 1.45;
+                            padding: 0.5rem 0.75rem;
+                            min-height: auto;
+                        }
+                        .consumer-info-card textarea.form-control-sm { min-height: 4.5rem; }
+                        .consumer-info-card .consumer-info-remark {
+                            background-color: #fff;
+                            border-radius: 0.5rem;
+                            border: 1px solid rgba(13, 110, 253, 0.12);
+                            border-left: 4px solid #0d6efd;
+                            box-shadow: 0 0.125rem 0.35rem rgba(15, 60, 120, 0.06);
+                            padding: 1.15rem 1.25rem;
+                        }
+                        .consumer-info-card .consumer-info-remark .form-label {
+                            font-size: 0.95rem;
+                            color: #0b5ed7;
+                        }
+                        .consumer-info-card .consumer-info-remark .form-label .text-primary { color: #0b5ed7 !important; }
+                        .consumer-info-card .consumer-info-empty { min-height: 200px; font-size: 1.05rem; }
+                    </style>
                     <div class="row g-3">
                         <!-- Left Column -->
-                        <div class="col-lg-8">
+                        <div class="col-md-12">
                             <!-- Information Card -->
-                            <div class="card mb-3">
-                                <div class="card-header bg-primary text-white">
-                                    <h6 class="mb-0">Consumer Information</h6>
+                            <div class="card mb-3 consumer-info-card shadow-sm border-0">
+                                <div class="card-header bg-primary text-white py-3 d-flex align-items-center">
+                                    <i class="fas fa-user-circle me-2 opacity-75"></i>
+                                    <h6 class="mb-0 fw-semibold">Consumer Information</h6>
                                 </div>
-                                <div class="card-body" id="consumerInfoCard">
+                                <div class="card-body p-0 consumer-info-body" id="consumerInfoCard">
                                     @if($consumer)
-                                    <div class="row">
+                                    <div class="p-3">
+                                    <div class="row g-3">
                                         <div class="col-md-6">
+                                            <div class="consumer-info-panel">
                                             <div class="mb-3">
                                                 <label class="form-label">Installation Date</label>
                                                 <input type="text" class="form-control form-control-sm" id="installationDate"
@@ -129,8 +156,29 @@
                                                 <input type="text" class="form-control form-control-sm" id="displayCategory"
                                                     value="{{ $consumer->category_code ?? '' }}" readonly>
                                             </div>
+                                            @php
+                                                $billDiscRaw = trim((string) ($consumer->bill_disc_percent ?? ''));
+                                                $billDiscIsSc = strtoupper($billDiscRaw) === 'SC DISCOUNT'
+                                                    || (is_numeric($billDiscRaw) && abs(((float) $billDiscRaw) - 5.0) < 0.001);
+                                                $oscaIdRaw = trim((string) ($consumer->osca_id_no ?? ''));
+                                                $oscaDateDisplay = $consumer->bill_disc_updated_at
+                                                    ? $consumer->bill_disc_updated_at->format('F j, Y')
+                                                    : null;
+                                                $oscaDisplay = $oscaIdRaw !== ''
+                                                    ? ($oscaDateDisplay ? $oscaIdRaw . ' - ' . $oscaDateDisplay : $oscaIdRaw)
+                                                    : '';
+                                            @endphp
+                                            @if($billDiscIsSc)
+                                            <div class="mb-3 mb-md-0">
+                                                <label class="form-label">OSCA ID #</label>
+                                                <input type="text" class="form-control form-control-sm" id="oscaIdNumber"
+                                                    value="{{ $oscaDisplay }}">
+                                            </div>
+                                            @endif
+                                            </div>
                                         </div>
                                         <div class="col-md-6">
+                                            <div class="consumer-info-panel">
                                             <div class="mb-3">
                                                 <label class="form-label">Status</label>
                                                 <input type="text" class="form-control form-control-sm" id="status"
@@ -166,48 +214,121 @@
                                                 <input type="text" class="form-control form-control-sm" id="displayCardNumber"
                                                     value="{{ $consumer->cons_ctrl ?? '' }}" readonly>
                                             </div>
-                                            <div class="mb-3">
+                                            <div class="mb-0">
                                                 <label class="form-label">Balance</label>
                                                 <input type="text" class="form-control form-control-sm" id="balance"
                                                     value="₱ {{ number_format($consumer->balance ?? 0, 2) }}" readonly>
                                             </div>
+                                            </div>
                                         </div>
                                     </div>
+                                    </div>
                                     @else
-                                    <div class="text-center text-muted py-5">
-                                        <i class="fas fa-user-slash fa-3x mb-3"></i>
-                                        <p>No consumer selected. Use the search box to find a consumer.</p>
+                                    <div class="text-center text-muted py-5 px-3 consumer-info-empty d-flex flex-column align-items-center justify-content-center">
+                                        <i class="fas fa-user-slash fa-3x mb-3 opacity-50"></i>
+                                        <p class="mb-0">No consumer selected. Use the search box to find a consumer.</p>
                                     </div>
                                     @endif
-                                </div>
+                                </div>  
                             </div>
 
-                            <!-- Charges Table Card -->
-                            <div class="card mb-3">
-                                <div class="card-header bg-primary text-white">
-                                    <h6 class="mb-0">Charges Entry</h6>
+                            <div class="row g-3 mb-3">
+                                <div class="col-lg-6">
+                                    <!-- Charges Table Card -->
+                                    <div class="card h-100">
+                                        <div class="card-header bg-primary text-white">
+                                            <h6 class="mb-0">Charges Entry</h6>
+                                        </div>
+                                        <div class="card-body p-0">
+                                            <div class="table-responsive">
+                                                <table class="table table-hover mb-0">
+                                                    <thead class="table-light">
+                                                        <tr>
+                                                            <th>Date</th>
+                                                            <th>Description</th>
+                                                            <th class="text-end">Charge</th>
+                                                            <th class="text-end">Amortization</th>
+                                                            <th class="text-end">Balance</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <tr>
+                                                            <td colspan="5" class="text-center text-muted py-4">
+                                                                <i class="fas fa-inbox mb-2 d-block"></i>
+                                                                No charges recorded
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="card-body p-0">
-                                    <div class="table-responsive">
-                                        <table class="table table-hover mb-0">
-                                            <thead class="table-light">
-                                                <tr>
-                                                    <th>Date</th>
-                                                    <th>Description</th>
-                                                    <th class="text-end">Charge</th>
-                                                    <th class="text-end">Amortization</th>
-                                                    <th class="text-end">Balance</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr>
-                                                    <td colspan="5" class="text-center text-muted py-4">
-                                                        <i class="fas fa-inbox mb-2 d-block"></i>
-                                                        No charges recorded
-                                                    </td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
+
+                                @php
+                                    $latestBillMonthLabel = ($latestBill && $latestBill->bill_month)
+                                        ? \Carbon\Carbon::parse($latestBill->bill_month)->format('m-Y')
+                                        : '--';
+                                    $formatLatestCurrency = function ($value) {
+                                        $amount = is_numeric($value) ? (float) $value : 0;
+                                        return '₱ ' . number_format($amount, 2);
+                                    };
+                                    $latestBillCurrentBill = optional($latestBill)->current_bill ?? 0;
+                                    $latestBillMeterRental = optional($latestBill)->meter_rental ?? 0;
+                                    $latestBillArrears = optional($latestBill)->arrears ?? 0;
+                                    $latestBillMaterials = optional($latestBill)->materials ?? 0;
+                                    $latestBillSeptage = optional($latestBill)->septage_fee ?? 0;
+                                    $latestBillOthers = optional($latestBill)->others ?? 0;
+
+                                    // Compute total bill by adding all components
+                                    $latestBillTotal = (float) $latestBillCurrentBill
+                                                    + (float) $latestBillMeterRental
+                                                    + (float) $latestBillArrears
+                                                    + (float) $latestBillMaterials
+                                                    + (float) $latestBillSeptage
+                                                    + (float) $latestBillOthers;
+                                @endphp
+
+                                <div class="col-lg-6">
+                                    <div class="card shadow-sm border-0 h-100">
+                                        <div class="card-header bg-primary text-white py-3">
+                                            <h6 class="mb-0 fw-semibold" id="latestBillHeader">Latest Bill - {{ $latestBillMonthLabel }}</h6>
+                                            <small class="d-block opacity-75 mt-1">Billing breakdown summary</small>
+                                        </div>
+                                        <div class="card-body p-0">
+                                            <div class="list-group list-group-flush">
+                                                <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                                                    <span class="text-muted">Current Bill</span>
+                                                    <strong id="latestBillCurrent">{{ $formatLatestCurrency($latestBillCurrentBill) }}</strong>
+                                                </div>
+                                                <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                                                    <span class="text-muted">Water Maintenance Charge</span>
+                                                    <strong id="latestBillMeterRental">{{ $formatLatestCurrency($latestBillMeterRental) }}</strong>
+                                                </div>
+                                                <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                                                    <span class="text-muted">Arrears</span>
+                                                    <strong id="latestBillArrears">{{ $formatLatestCurrency($latestBillArrears) }}</strong>
+                                                </div>
+                                                <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                                                    <span class="text-muted">Materials</span>
+                                                    <strong id="latestBillMaterials">{{ $formatLatestCurrency($latestBillMaterials) }}</strong>
+                                                </div>
+                                                <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                                                    <span class="text-muted">Septage Fee</span>
+                                                    <strong id="latestBillSeptage">{{ $formatLatestCurrency($latestBillSeptage) }}</strong>
+                                                </div>
+                                                <div class="list-group-item d-flex justify-content-between align-items-center py-3">
+                                                    <span class="text-muted">Others</span>
+                                                    <strong id="latestBillOthers">{{ $formatLatestCurrency($latestBillOthers) }}</strong>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="card-footer bg-light border-top py-3">
+                                            <div class="d-flex justify-content-between align-items-center">
+                                                <span class="fw-bold text-primary mb-0">TOTAL BILL</span>
+                                                <span class="fw-bold text-primary fs-6" id="latestBillTotal">{{ $formatLatestCurrency($latestBillTotal) }}</span>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -264,81 +385,6 @@
                                     </div>
                                 </div>
                             </div>
-
-                        <!-- Right Column - Latest Bill -->
-                        @php
-                            $latestBillMonthLabel = ($latestBill && $latestBill->bill_month)
-                                ? \Carbon\Carbon::parse($latestBill->bill_month)->format('m-Y')
-                                : '--';
-                            $formatLatestCurrency = function ($value) {
-                                $amount = is_numeric($value) ? (float) $value : 0;
-                                return '₱ ' . number_format($amount, 2);
-                            };
-                            $latestBillCurrentBill = optional($latestBill)->current_bill ?? 0;
-                            $latestBillMeterRental = optional($latestBill)->meter_rental ?? 0;
-                            $latestBillArrears = optional($latestBill)->arrears ?? 0;
-                            $latestBillMaterials = optional($latestBill)->materials ?? 0;
-                            $latestBillSeptage = optional($latestBill)->septage_fee ?? 0;
-                            $latestBillOthers = optional($latestBill)->others ?? 0;
-                            
-                            // Compute total bill by adding all components
-                            $latestBillTotal = (float) $latestBillCurrentBill 
-                                             + (float) $latestBillMeterRental 
-                                             + (float) $latestBillArrears 
-                                             + (float) $latestBillMaterials 
-                                             + (float) $latestBillSeptage 
-                                             + (float) $latestBillOthers;
-                        @endphp
-                        <div class="col-lg-4">
-                            <div class="card">
-                                <div class="card-header bg-primary text-white">
-                                    <h6 class="mb-0" id="latestBillHeader">Latest Bill - {{ $latestBillMonthLabel }}</h6>
-                                </div>
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between mb-2">
-                                        <span>Current Bill:</span>
-                                        <input type="text" class="form-control form-control-sm w-auto text-end"
-                                            id="latestBillCurrent" value="{{ $formatLatestCurrency($latestBillCurrentBill) }}" readonly>
-                                    </div>
-                                    <div class="d-flex justify-content-between mb-2">
-                                        <span>Water Maintenance Charge:</span>
-                                        <input type="text" class="form-control form-control-sm w-auto text-end"
-                                            id="latestBillMeterRental" value="{{ $formatLatestCurrency($latestBillMeterRental) }}" readonly>
-                                    </div>
-                                    <div class="d-flex justify-content-between mb-2">
-                                        <span>Arrears:</span>
-                                        <input type="text" class="form-control form-control-sm w-auto text-end"
-                                            id="latestBillArrears" value="{{ $formatLatestCurrency($latestBillArrears) }}" readonly>
-                                    </div>
-                                    <div class="d-flex justify-content-between mb-2">
-                                        <span>Materials:</span>
-                                        <input type="text" class="form-control form-control-sm w-auto text-end"
-                                            id="latestBillMaterials" value="{{ $formatLatestCurrency($latestBillMaterials) }}" readonly>
-                                    </div>
-                                    <div class="d-flex justify-content-between mb-2">
-                                        <span>Septage Fee:</span>
-                                        <input type="text" class="form-control form-control-sm w-auto text-end"
-                                            id="latestBillSeptage" value="{{ $formatLatestCurrency($latestBillSeptage) }}" readonly>
-                                    </div>
-                                    <div class="d-flex justify-content-between mb-2">
-                                        <span>Others:</span>
-                                        <input type="text" class="form-control form-control-sm w-auto text-end"
-                                            id="latestBillOthers" value="{{ $formatLatestCurrency($latestBillOthers) }}" readonly>
-                                    </div>
-                                    <hr>
-                                    <div class="d-flex justify-content-between">
-                                        <span class="fw-bold text-primary">TOTAL BILL:</span>
-                                        <input type="text"
-                                            class="form-control form-control-sm w-auto text-end fw-bold text-primary"
-                                            id="latestBillTotal" value="{{ $formatLatestCurrency($latestBillTotal) }}" readonly>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
         <!---Container Fluid-->
     </div>
     </div>
@@ -390,12 +436,12 @@
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label for="edit_installation_date" class="form-label">Installation Date <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="edit_installation_date" name="installation_date" required>
+                                    <input type="date" class="form-control" id="edit_installation_date" name="installation_date" >
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="edit_account_number" class="form-label">Account Number <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="edit_account_number" name="account_number" readonly required>
+                                    <label for="edit_account_no" class="form-label">Account Number <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="edit_account_no" name="account_no" readonly required>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -446,37 +492,9 @@
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="edit_first_name" class="form-label">First Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="edit_first_name" name="first_name" placeholder="Enter First Name" required>
+                                    <label for="edit_account_name" class="form-label">Account name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="edit_account_name" name="account_name" placeholder="e.g. DELA CRUZ, JUAN M." required>
                                     <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="edit_last_name" class="form-label">Last Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="edit_last_name" name="last_name" placeholder="Enter Last Name" required>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="edit_middle_name" class="form-label">Middle Name</label>
-                                            <input type="text" class="form-control" id="edit_middle_name" name="middle_name" placeholder="Enter Middle Name">
-                                            <div class="invalid-feedback"></div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="edit_extension" class="form-label">Extension</label>
-                                            <select class="form-select" id="edit_extension" name="extension">
-                                                <option value="">None</option>
-                                                <option value="Jr.">Jr.</option>
-                                                <option value="Sr.">Sr.</option>
-                                                <option value="II">II</option>
-                                                <option value="III">III</option>
-                                                <option value="IV">IV</option>
-                                            </select>
-                                            <div class="invalid-feedback"></div>
-                                        </div>
-                                    </div>
                                 </div>
                                 <div class="mb-3">
                                     <label for="edit_contact_number" class="form-label">Contact Number</label>
@@ -516,6 +534,44 @@
                                     <small class="text-muted">Control number (cannot be changed)</small>
                                 </div>
                             </div>
+                            <div class="col-12">
+                                <hr class="border-primary my-3" style="opacity: 0.25;">
+                                <h6 class="text-primary fw-semibold mb-3"><i class="fas fa-percentage me-2"></i>Billing &amp; OSCA</h6>
+                                <div class="row">
+                                    <div class="col-md-4">
+                                        <div class="mb-3">
+                                            <label for="edit_bill_disc_percent" class="form-label">Bill Disc (%)</label>
+                                            <select class="form-control" id="edit_bill_disc_percent" name="bill_disc_percent">
+                                                <option value="">None</option>
+                                                <option value="SC DISCOUNT">SC DISCOUNT</option>
+                                            </select>
+                                            <div class="invalid-feedback"></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="col-md-4" id="edit_osca_wrap">
+                                        <div class="mb-3">
+                                            <label for="edit_osca_id_no" class="form-label">OSCA ID #</label>
+                                            <input type="text" class="form-control" id="edit_osca_id_no" name="osca_id_no" maxlength="100" placeholder="OSCA ID">
+                                            <div class="invalid-feedback"></div>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <div class="row align-items-end">
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label small text-muted mb-1">Bill discount last updated</label>
+                                                <p class="form-control-plaintext border rounded px-3 py-2 mb-0 bg-light small" id="edit_bill_disc_last_updated_display">—</p>
+                                            </div>
+                                            <div class="col-md-6 mb-3" id="edit_bill_disc_updated_at_wrap" style="display: none;">
+                                                <label for="edit_bill_disc_updated_at" class="form-label">Date of bill discount change <span class="text-danger">*</span></label>
+                                                <input type="date" class="form-control" id="edit_bill_disc_updated_at" name="bill_disc_updated_at" autocomplete="off">
+                                                <div class="invalid-feedback"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -530,7 +586,6 @@
             </div>
         </div>
     </div>
-
     <!-- New Consumer Modal -->
     <div class="modal fade" id="newConsumerModal" tabindex="-1" aria-labelledby="newConsumerModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
@@ -548,12 +603,12 @@
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label for="installation_date" class="form-label">Installation Date <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="installation_date" name="installation_date" required>
+                                    <input type="date" class="form-control" id="installation_date" name="installation_date" >
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="account_number" class="form-label">Account Number <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="account_number" name="account_number" readonly required>
+                                    <label for="account_no" class="form-label">Account Number <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="account_no" name="account_no" readonly required>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -561,9 +616,9 @@
                                     <input type="text" class="form-control" id="meter_number" name="meter_number" required>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="address" class="form-label">Address <span class="text-danger">*</span></label>
-                                    <textarea class="form-control" id="address" name="address" rows="3" required></textarea>
+                                 <div class="mb-3">
+                                    <label for="address1" class="form-label">Address <span class="text-danger">*</span></label>
+                                    <textarea class="form-control" id="address1" name="address1" rows="3" required></textarea>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -606,37 +661,9 @@
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="first_name" class="form-label">First Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="first_name" name="first_name" placeholder="Enter First Name" required>
+                                    <label for="account_name" class="form-label">Account name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="account_name" name="account_name" placeholder="e.g. DELA CRUZ, JUAN M." required>
                                     <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="last_name" class="form-label">Last Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="last_name" name="last_name" placeholder="Enter Last Name" required>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="middle_name" class="form-label">Middle Name</label>
-                                            <input type="text" class="form-control" id="middle_name" name="middle_name" placeholder="Enter Middle Name">
-                                            <div class="invalid-feedback"></div>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="extension" class="form-label">Extension</label>
-                                            <select class="form-select" id="extension" name="extension">
-                                                <option value="">None</option>
-                                                <option value="Jr.">Jr.</option>
-                                                <option value="Sr.">Sr.</option>
-                                                <option value="II">II</option>
-                                                <option value="III">III</option>
-                                                <option value="IV">IV</option>
-                                            </select>
-                                            <div class="invalid-feedback"></div>
-                                        </div>
-                                    </div>
                                 </div>
                                 <div class="mb-3">
                                     <label for="contact_number" class="form-label">Contact Number</label>
@@ -896,22 +923,18 @@
             console.log('Card Number Trimmed:', cardNumber);
             
             if (trimmedZone && categoryCode && cardNumber) {
-                // Ensure card number is 4 digits
-                const formattedCardNumber = String(cardNumber).padStart(4, '0');
+                // Use sequence as entered (no padding)
+                const accountNumber = `${trimmedZone}-${categoryCode}-${cardNumber}`;
                 
-                // Generate account number: zone-category-cardNumber
-                const accountNumber = `${trimmedZone}-${categoryCode}-${formattedCardNumber}`;
-                
-                console.log('Formatted Card:', formattedCardNumber);
                 console.log('Final Account Number:', accountNumber);
                 console.log('=================================');
                 
-                $('#account_number').val(accountNumber);
+                $('#account_no').val(accountNumber);
             } else {
                 if (!trimmedZone) console.log('ERROR: Zone not selected');
                 if (!categoryCode) console.log('ERROR: Category not selected');
                 if (!cardNumber) console.log('ERROR: Card number not entered');
-                $('#account_number').val('');
+                $('#account_no').val('');
             }
         }
 
@@ -925,6 +948,97 @@
                 maximumFractionDigits: 2
             });
         }
+
+        function formatPlainAmount(value) {
+            const amount = Number(value);
+            if (!Number.isFinite(amount)) {
+                return '0.0';
+            }
+            return amount.toFixed(1);
+        }
+
+        var SC_DISCOUNT_PERCENT = 'SC DISCOUNT';
+        var SC_DISCOUNT_AMOUNT = 5;
+        var editBillDiscSnapshot = null;
+
+        function normBillDiscPercentVal(v) {
+            if (v === '' || v === null || v === undefined) return null;
+            const s = String(v).trim();
+            if (s === '') return null;
+            // Backward compatibility: handle legacy numeric values.
+            const n = parseFloat(s);
+            if (Number.isFinite(n) && Math.abs(n - 5) < 0.001) return SC_DISCOUNT_PERCENT;
+            if (s.toUpperCase() === 'SC DISCOUNT') return SC_DISCOUNT_PERCENT;
+            return s;
+        }
+
+        function normBillDiscAmountVal(v) {
+            if (v === '' || v === null || v === undefined) return null;
+            const n = parseFloat(String(v).trim());
+            if (!Number.isFinite(n)) return null;
+            return Math.round(n * 10000) / 10000;
+        }
+
+        function isEditBillDiscDirty() {
+            if (!editBillDiscSnapshot) {
+                return false;
+            }
+            return normBillDiscPercentVal($('#edit_bill_disc_percent').val()) !== editBillDiscSnapshot.bill_disc_percent
+                || normBillDiscAmountVal($('#edit_bill_disc_amount').val()) !== editBillDiscSnapshot.bill_disc_amount;
+        }
+
+        function formatBillDiscUpdatedAtDisplay(raw) {
+            if (!raw) {
+                return '—';
+            }
+            const d = new Date(raw);
+            if (Number.isNaN(d.getTime())) {
+                return '—';
+            }
+            return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        function refreshEditBillDiscDateUi() {
+            const dirty = isEditBillDiscDirty();
+            const $wrap = $('#edit_bill_disc_updated_at_wrap');
+            const $input = $('#edit_bill_disc_updated_at');
+            if (dirty) {
+                $wrap.show();
+                $input.prop('required', true);
+            } else {
+                $wrap.hide();
+                $input.prop('required', false).val('').removeClass('is-invalid');
+                $input.siblings('.invalid-feedback').text('');
+            }
+        }
+
+        function applyBillDiscSelectChange(selectEl) {
+            if (!selectEl || !selectEl.length) return;
+            const v = selectEl.val();
+            const id = selectEl.attr('id');
+            if (id === 'edit_bill_disc_percent') {
+                if (v === SC_DISCOUNT_PERCENT) {
+                    $('#edit_bill_disc_amount').val(Number(SC_DISCOUNT_AMOUNT).toFixed(1));
+                } else {
+                    $('#edit_bill_disc_amount').val('');
+                }
+                refreshEditBillDiscDateUi();
+            } else if (id === 'billDiscPercent') {
+                if (v === SC_DISCOUNT_PERCENT) {
+                    $('#billDiscAmount').val(formatPlainAmount(SC_DISCOUNT_AMOUNT));
+                } else {
+                    $('#billDiscAmount').val(formatPlainAmount(0));
+                }
+            }
+        }
+
+        $(document).on('change', '#billDiscPercent, #edit_bill_disc_percent', function() {
+            applyBillDiscSelectChange($(this));
+        });
+
+        $(document).on('input change', '#edit_bill_disc_amount', function() {
+            refreshEditBillDiscDateUi();
+        });
 
         function formatBillMonth(dateString) {
             if (!dateString) {
@@ -952,21 +1066,44 @@
             // Compute total bill by adding all components
             const totalAmount = currentBill + meterRental + arrears + materials + septageFee + others;
 
-            $('#latestBillCurrent').val(formatCurrency(currentBill));
-            $('#latestBillMeterRental').val(formatCurrency(meterRental));
-            $('#latestBillArrears').val(formatCurrency(arrears));
-            $('#latestBillMaterials').val(formatCurrency(materials));
-            $('#latestBillSeptage').val(formatCurrency(septageFee));
-            $('#latestBillOthers').val(formatCurrency(others));
-            $('#latestBillTotal').val(formatCurrency(totalAmount));
+            $('#latestBillCurrent').text(formatCurrency(currentBill));
+            $('#latestBillMeterRental').text(formatCurrency(meterRental));
+            $('#latestBillArrears').text(formatCurrency(arrears));
+            $('#latestBillMaterials').text(formatCurrency(materials));
+            $('#latestBillSeptage').text(formatCurrency(septageFee));
+            $('#latestBillOthers').text(formatCurrency(others));
+            $('#latestBillTotal').text(formatCurrency(totalAmount));
 
             if (latestBill) {
-                sessionStorage.setItem('latestBill', JSON.stringify(latestBill));
+                const owner = latestBill.account_no || latestBill.account_number
+                    || (typeof currentConsumer !== 'undefined' && currentConsumer ? currentConsumer.account_no : '');
+                const payload = owner
+                    ? Object.assign({}, latestBill, { account_no: latestBill.account_no || owner })
+                    : latestBill;
+                sessionStorage.setItem('latestBill', JSON.stringify(payload));
             } else {
                 sessionStorage.removeItem('latestBill');
             }
         }
         window.updateLatestBillCard = updateLatestBillCard;
+
+        function normalizeAccountKey(accountNo) {
+            if (accountNo === null || accountNo === undefined) {
+                return '';
+            }
+            return String(accountNo).replace(/-/g, '').replace(/\s+/g, '').toUpperCase();
+        }
+
+        function storedLatestBillMatchesConsumer(storedBill, consumerAccountNo) {
+            if (!storedBill || !consumerAccountNo) {
+                return false;
+            }
+            const onBill = storedBill.account_no || storedBill.account_number;
+            if (!onBill) {
+                return false;
+            }
+            return normalizeAccountKey(onBill) === normalizeAccountKey(consumerAccountNo);
+        }
 
         function updateMeterReadingCard(meterReading) {
             const fmtDate = function(d) {
@@ -1011,11 +1148,10 @@
             const trimmedZone = zone ? zone.toString().trim() : '';
 
             if (trimmedZone && categoryCode && cardNumber) {
-                const formattedCardNumber = String(cardNumber).padStart(4, '0');
-                const accountNumber = `${trimmedZone}-${categoryCode}-${formattedCardNumber}`;
-                $('#edit_account_number').val(accountNumber);
+                const accountNumber = `${trimmedZone}-${categoryCode}-${cardNumber}`;
+                $('#edit_account_no').val(accountNumber);
             } else {
-                $('#edit_account_number').val('');
+                $('#edit_account_no').val('');
             }
         }
 
@@ -1035,15 +1171,28 @@
         if (initialLatestBill) {
             updateLatestBillCard(initialLatestBill);
         } else {
+            const serverAccount = (typeof currentConsumer !== 'undefined' && currentConsumer && currentConsumer.account_no)
+                ? currentConsumer.account_no
+                : null;
             const storedLatestBill = sessionStorage.getItem('latestBill');
-            if (storedLatestBill) {
+            if (serverAccount && storedLatestBill) {
                 try {
-                    updateLatestBillCard(JSON.parse(storedLatestBill));
+                    const parsed = JSON.parse(storedLatestBill);
+                    if (storedLatestBillMatchesConsumer(parsed, serverAccount)) {
+                        updateLatestBillCard(parsed);
+                    } else {
+                        sessionStorage.removeItem('latestBill');
+                        updateLatestBillCard(null);
+                    }
                 } catch (error) {
                     console.error('Failed to parse stored latest bill:', error);
+                    sessionStorage.removeItem('latestBill');
                     updateLatestBillCard(null);
                 }
             } else {
+                if (storedLatestBill && !serverAccount) {
+                    sessionStorage.removeItem('latestBill');
+                }
                 updateLatestBillCard(null);
             }
         }
@@ -1065,9 +1214,9 @@
             const formData = {
                 _token: $('input[name="_token"]').val(),
                 install_date: $('#installation_date').val(),
-                account_no: $('#account_number').val(),
-                account_name: buildAccountName($('#first_name').val(), $('#middle_name').val(), $('#last_name').val(), $('#extension').val()),
-                address1: $('#address').val(),
+                account_no: $('#account_no').val(),
+                account_name: $('#account_name').val(),
+                address1: $('#address1').val(),
                 zone_code: $('#zone').val(),
                 category_code: $('#category option:selected').data('code'),
                 meter_number: $('#meter_number').val(),
@@ -1096,6 +1245,18 @@
                         
                         // Reset form
                         $('#newConsumerForm')[0].reset();
+
+                        // Avoid showing previous consumer's bill after reload (sessionStorage was keyed without validation)
+                        try {
+                            sessionStorage.removeItem('latestBill');
+                        } catch (e) { /* ignore */ }
+
+                        const created = response.consumer;
+                        if (created && created.account_no) {
+                            try {
+                                sessionStorage.setItem('currentConsumer', JSON.stringify(created));
+                            } catch (e) { /* ignore */ }
+                        }
                         
                         // Show success message with SweetAlert
                         Swal.fire({
@@ -1105,31 +1266,40 @@
                             confirmButtonColor: '#28a745',
                             confirmButtonText: 'OK'
                         }).then((result) => {
-                            // Reload page to show new consumer
-                            location.reload();
+                            // Open this consumer explicitly — location.reload() kept ?account=... and hid the new record
+                            const base = @json(route('consumer'));
+                            if (created && created.account_no) {
+                                window.location.href = base + '?account=' + encodeURIComponent(created.account_no);
+                            } else {
+                                window.location.href = base;
+                            }
                         });
                     }
                 },
                 error: function(xhr) {
                     console.log('Error:', xhr);
                     if (xhr.status === 422) {
-                        // Validation errors
-                        const errors = xhr.responseJSON.errors;
-                        
-                        $.each(errors, function(field, messages) {
-                            const input = $('[name="' + field + '"]');
-                            input.addClass('is-invalid');
-                            input.siblings('.invalid-feedback').text(messages[0]);
-                        });
-                        
-                        // Show validation error alert
-                        Swal.fire({
-                            icon: 'error',
-                            title: 'Validation Error',
-                            text: 'Please check the form fields and try again.',
-                            confirmButtonColor: '#dc3545'
-                        });
-                    } else {
+    // Validation errors
+    const errors = xhr.responseJSON.errors;
+
+    $.each(errors, function(field, messages) {
+        const input = $('[name="' + field + '"]');
+        input.addClass('is-invalid');
+        input.siblings('.invalid-feedback').text(messages[0]);
+    });
+
+    // Use first validation message in Swal (e.g. "Account number already exists.")
+    const firstMessage = errors.account_no && errors.account_no[0]
+        ? errors.account_no[0]
+        : (Object.values(errors)[0] && Object.values(errors)[0][0]) || 'Please check the form fields and try again.';
+
+    Swal.fire({
+        icon: 'error',
+        title: 'Validation Error',
+        text: firstMessage,
+        confirmButtonColor: '#dc3545'
+    });
+} else {
                         // Other errors
                         const message = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'Failed to create consumer';
                         Swal.fire({
@@ -1175,7 +1345,7 @@
             $('.invalid-feedback').text('');
             
             // Clear auto-generated fields
-            $('#account_number').val('');
+            $('#account_no').val('');
             $('#display_cons_ctrl').val('');
             
             // Clear stored cons_ctrl
@@ -1295,11 +1465,27 @@
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2
             });
+            const billDiscPercentRaw = (consumer.bill_disc_percent ?? consumer.bill_disc ?? '');
+            const billDiscPercentStr = String(billDiscPercentRaw ?? '').trim();
+            const billDiscPercentNum = parseFloat(billDiscPercentStr);
+            const isScBillDisc = billDiscPercentStr.toUpperCase() === 'SC DISCOUNT'
+                || (Number.isFinite(billDiscPercentNum) && Math.abs(billDiscPercentNum - 5) < 0.001);
+            const billDiscAmountValue = parseFloat(consumer.bill_disc_amount ?? 0);
+            const displayDiscAmount = isScBillDisc ? SC_DISCOUNT_AMOUNT : (Number.isFinite(billDiscAmountValue) ? billDiscAmountValue : 0);
+            const formattedBillDiscAmount = formatPlainAmount(displayDiscAmount);
+            const remarkRaw = consumer.remark || consumer.remarks || '';
+            const remarkSafe = String(remarkRaw)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
 
             // Update the consumer information card with the new data from consumer_zone table
             const html = `
-                <div class="row">
+                <div class="p-3">
+                <div class="row g-3">
                     <div class="col-md-6">
+                        <div class="consumer-info-panel">
                         <div class="mb-3">
                             <label class="form-label">Installation Date</label>
                             <input type="text" class="form-control form-control-sm" id="installationDate"
@@ -1325,8 +1511,27 @@
                             <input type="text" class="form-control form-control-sm" id="displayCategory"
                                 value="${consumer.category_code || ''}" readonly>
                         </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="billDiscPercent">Bill Disc (%)</label>
+                            <select class="form-control form-control-sm" id="billDiscPercent" name="bill_disc_percent">
+                                <option value="" ${!isScBillDisc ? 'selected' : ''}>None</option>
+                                <option value="SC DISCOUNT" ${isScBillDisc ? 'selected' : ''}>SC DISCOUNT</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="billDiscAmount">Bill Disc Amount</label>
+                            <input type="text" class="form-control form-control-sm" id="billDiscAmount" readonly
+                                value="${formattedBillDiscAmount}">
+                        </div>
+                        <div class="mb-3 mb-md-0">
+                            <label class="form-label">OSCA ID #</label>
+                            <input type="text" class="form-control form-control-sm" id="oscaIdNumber"
+                                value="${consumer.osca_id_no || consumer.osca_id || ''}">
+                        </div>
+                        </div>
                     </div>
                     <div class="col-md-6">
+                        <div class="consumer-info-panel">
                         <div class="mb-3">
                             <label class="form-label">Status</label>
                             <input type="text" class="form-control form-control-sm" id="status"
@@ -1362,12 +1567,22 @@
                             <input type="text" class="form-control form-control-sm" id="displayCardNumber"
                                 value="${consumer.cons_ctrl || ''}" readonly>
                         </div>
-                        <div class="mb-3">
+                        <div class="mb-0">
                             <label class="form-label">Balance</label>
                             <input type="text" class="form-control form-control-sm" id="balance"
                                 value="${formattedBalance}" readonly>
                         </div>
+                        </div>
                     </div>
+                    <div class="col-12">
+                        <div class="consumer-info-remark">
+                            <label class="form-label d-flex align-items-center">
+                                <i class="fas fa-comment-alt text-primary me-2"></i> Remark
+                            </label>
+                            <textarea class="form-control form-control-sm bg-light" id="remark" rows="2" readonly>${remarkSafe}</textarea>
+                        </div>
+                    </div>
+                </div>
                 </div>
             `;
 
@@ -1375,34 +1590,92 @@
         }
         window.updateConsumerInfo = updateConsumerInfo;
 
-        // Update consumer header dynamically
+        // // Update consumer header dynamically
+        // function updateConsumerHeader(consumer) {
+        //     // Use account_name from consumer_zone table
+        //     let fullName = consumer.account_name || '';
+
+        //     // Update header name - use account_no from consumer_zone table
+        //     const headerName = document.getElementById('consumerHeaderName');
+        //     if (headerName) {
+        //         headerName.textContent = (consumer.account_no || '') + ' ' + fullName;
+        //     }
+            
+        //     // Update header address
+        //     const headerAddress = document.getElementById('consumerHeaderAddress');
+        //     if (headerAddress) {
+        //         const addr = [consumer.address1, consumer.address2 || consumer.address_2].filter(Boolean).join(' ').trim();
+        //         headerAddress.textContent = addr || '—';
+        //     }
+
+        //     // Update header status badge - use status_label or status_code
+        //     const headerStatus = document.getElementById('consumerHeaderStatus');
+        //     if (headerStatus) {
+        //         const statusText = consumer.status_label || consumer.status_code || 'N/A';
+        //         headerStatus.textContent = statusText + ' Consumer';
+                
+        //         // Update badge color based on status
+        //         headerStatus.className = 'badge';
+        //         const statusUpper = (statusText || '').toUpperCase();
+        //         if (statusUpper === 'ACTIVE' || statusUpper === 'A') {
+        //             headerStatus.classList.add('bg-success');
+        //         } else if (statusUpper === 'INACTIVE' || statusUpper === 'I') {
+        //             headerStatus.classList.add('bg-warning');
+        //         } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'D') {
+        //             headerStatus.classList.add('bg-danger');
+        //         } else if (statusUpper === 'SUSPENDED' || statusUpper === 'S') {
+        //             headerStatus.classList.add('bg-warning');
+        //         } else {
+        //             headerStatus.classList.add('bg-secondary');
+        //         }
+        //     }
+
+        //     // Store consumer in sessionStorage for other tabs
+        //     sessionStorage.setItem('currentConsumer', JSON.stringify(consumer));
+
+        //     console.log('Header updated:', fullName);
+        //     console.log('Consumer saved to sessionStorage');
+        // }
+         // Update consumer header dynamically
         function updateConsumerHeader(consumer) {
             // Use account_name from consumer_zone table
             let fullName = consumer.account_name || '';
 
-            // Update header name - use account_no from consumer_zone table
+            const statusText = consumer.status_label || consumer.status_code || 'N/A';
+            const statusUpper = (statusText || '').toUpperCase();
+
+            // Update header name (warning/danger text matches status)
             const headerName = document.getElementById('consumerHeaderName');
             if (headerName) {
                 headerName.textContent = (consumer.account_no || '') + ' ' + fullName;
+                headerName.className = 'mb-1';
+                if (statusUpper === 'PENDING' || statusUpper === 'P') {
+                    headerName.classList.add('text-warning', 'fw-semibold');
+                } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'X' || statusUpper === 'D') {
+                    headerName.classList.add('text-danger', 'fw-semibold');
+                }
+            }
+
+            const headerAddress = document.getElementById('consumerHeaderAddress');
+            if (headerAddress) {
+                const a1 = (consumer.address1 || '').trim();
+                const a2 = (consumer.address2 || consumer.address_2 || '').trim();
+                headerAddress.textContent = [a1, a2].filter(Boolean).join(' ') || '—';
             }
 
             // Update header status badge - use status_label or status_code
             const headerStatus = document.getElementById('consumerHeaderStatus');
             if (headerStatus) {
-                const statusText = consumer.status_label || consumer.status_code || 'N/A';
                 headerStatus.textContent = statusText + ' Consumer';
                 
-                // Update badge color based on status
+                // Badge colors: Active / Pending / Disconnected (matches ConsumerZoneOne::status_label)
                 headerStatus.className = 'badge';
-                const statusUpper = (statusText || '').toUpperCase();
                 if (statusUpper === 'ACTIVE' || statusUpper === 'A') {
                     headerStatus.classList.add('bg-success');
-                } else if (statusUpper === 'INACTIVE' || statusUpper === 'I') {
+                } else if (statusUpper === 'PENDING' || statusUpper === 'P') {
                     headerStatus.classList.add('bg-warning');
-                } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'D') {
+                } else if (statusUpper === 'DISCONNECTED' || statusUpper === 'X' || statusUpper === 'D') {
                     headerStatus.classList.add('bg-danger');
-                } else if (statusUpper === 'SUSPENDED' || statusUpper === 'S') {
-                    headerStatus.classList.add('bg-warning');
                 } else {
                     headerStatus.classList.add('bg-secondary');
                 }
@@ -1422,50 +1695,12 @@
                 try {
                     const consumer = JSON.parse(storedConsumer);
                     updateConsumerHeader(consumer);
-                    console.log('Loaded consumer from sessionStorage:', consumer.account_no || consumer.account_number);
+                    console.log('Loaded consumer from sessionStorage:', consumer.account_no);
                 } catch (e) {
                     console.error('Error loading consumer from storage:', e);
                 }
             }
         });
-
-        // Helper function to parse account name into parts
-        function parseAccountName(accountName) {
-            if (!accountName) {
-                return { lastName: '', firstName: '', middleName: '', extension: '' };
-            }
-            
-            // Format: "LASTNAME, FIRSTNAME M." or "LASTNAME, FIRSTNAME MIDDLENAME EXT"
-            const parts = accountName.split(',');
-            let lastName = parts[0] ? parts[0].trim() : '';
-            let firstName = '';
-            let middleName = '';
-            let extension = '';
-            
-            if (parts[1]) {
-                const nameParts = parts[1].trim().split(/\s+/);
-                firstName = nameParts[0] || '';
-                
-                // Check for middle initial (ends with .)
-                if (nameParts.length > 1) {
-                    if (nameParts[1].endsWith('.')) {
-                        middleName = nameParts[1].replace('.', '');
-                    } else {
-                        middleName = nameParts[1];
-                    }
-                }
-                
-                // Check for extension (Jr., Sr., II, III, IV)
-                if (nameParts.length > 2) {
-                    const possibleExt = nameParts[nameParts.length - 1];
-                    if (['JR.', 'SR.', 'II', 'III', 'IV', 'JR', 'SR'].includes(possibleExt.toUpperCase())) {
-                        extension = possibleExt;
-                    }
-                }
-            }
-            
-            return { lastName, firstName, middleName, extension };
-        }
 
         // Edit Consumer Button - requires PIN first
         $('#editConsumerBtn').on('click', function() {
@@ -1494,7 +1729,7 @@
                     $('#edit_installation_date').val(formattedDate);
                 }
                 
-                $('#edit_account_number').val(currentConsumer.account_no || '');
+                $('#edit_account_no').val(currentConsumer.account_no || '');
                 $('#edit_meter_number').val(currentConsumer.meter_number || '');
                 $('#edit_address').val(currentConsumer.address1 || '');
                 
@@ -1510,33 +1745,42 @@
                 
                 $('#edit_status').val(currentConsumer.status_code || 'A');
                 $('#edit_rate_code').val(currentConsumer.rate_code || 'A');
-                
-                const nameParts = parseAccountName(currentConsumer.account_name);
-                $('#edit_first_name').val(nameParts.firstName);
-                $('#edit_last_name').val(nameParts.lastName);
-                $('#edit_middle_name').val(nameParts.middleName);
-                $('#edit_extension').val(nameParts.extension);
+                $('#edit_account_name').val(currentConsumer.account_name || '');
                 
                 $('#edit_contact_number').val('');
                 $('#edit_meter_brand').val(currentConsumer.meter_brand || '');
                 $('#edit_zone').val(currentConsumer.zone_code || '');
                 $('#edit_card_number').val(currentConsumer.sequence || '');
                 $('#edit_cons_ctrl').val(currentConsumer.cons_ctrl || '');
+                const edRaw = String(currentConsumer.bill_disc_percent ?? '').trim();
+                const edNum = parseFloat(edRaw);
+                const edIsSc = edRaw.toUpperCase() === 'SC DISCOUNT'
+                    || (Number.isFinite(edNum) && Math.abs(edNum - 5) < 0.001);
+                $('#edit_bill_disc_percent').val(edIsSc ? 'SC DISCOUNT' : '');
+                $('#edit_bill_disc_amount').val(edIsSc ? Number(SC_DISCOUNT_AMOUNT).toFixed(1) : (function() {
+                    const a = currentConsumer.bill_disc_amount;
+                    if (a === undefined || a === null || a === '') return '';
+                    const n = parseFloat(a);
+                    return Number.isFinite(n) ? n.toFixed(1) : '';
+                })());
+                $('#edit_osca_id_no').val(currentConsumer.osca_id_no || currentConsumer.osca_id || '');
+                $('#edit_remark').val(currentConsumer.remark || currentConsumer.remarks || '');
+
+                $('#edit_bill_disc_last_updated_display').text(
+                    formatBillDiscUpdatedAtDisplay(currentConsumer.bill_disc_updated_at)
+                );
+                editBillDiscSnapshot = {
+                    bill_disc_percent: normBillDiscPercentVal($('#edit_bill_disc_percent').val()),
+                    bill_disc_amount: normBillDiscAmountVal($('#edit_bill_disc_amount').val())
+                };
+                $('#edit_bill_disc_updated_at').val('').removeClass('is-invalid');
+                $('#edit_bill_disc_updated_at').siblings('.invalid-feedback').text('');
+                refreshEditBillDiscDateUi();
 
                 console.log('Edit modal populated with consumer:', currentConsumer.account_no);
                 $('#editConsumerModal').modal('show');
             });
         });
-
-        // Helper function to build account name
-        function buildAccountName(firstName, middleName, lastName, extension) {
-            let name = '';
-            if (lastName) name += lastName.toUpperCase();
-            if (firstName) name += (name ? ', ' : '') + firstName.toUpperCase();
-            if (middleName) name += (name && firstName ? ' ' : '') + middleName.charAt(0).toUpperCase() + '.';
-            if (extension) name += (name ? ' ' : '') + extension;
-            return name.trim();
-        }
 
         // Handle Edit Consumer Form Submission
         $('#editConsumerForm').on('submit', function(e) {
@@ -1558,6 +1802,21 @@
             $('.is-invalid').removeClass('is-invalid');
             $('.invalid-feedback').text('');
             
+            if (isEditBillDiscDirty()) {
+                const bdu = $('#edit_bill_disc_updated_at').val();
+                if (!bdu) {
+                    $('#edit_bill_disc_updated_at').addClass('is-invalid');
+                    $('#edit_bill_disc_updated_at').siblings('.invalid-feedback').text('Please choose the date when the bill discount was changed.');
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Date required',
+                        text: 'Enter the date of the bill discount change.',
+                        confirmButtonColor: '#ffc107'
+                    });
+                    return;
+                }
+            }
+
             // Disable submit button
             $('#updateBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-1"></i>Updating...');
             
@@ -1566,8 +1825,8 @@
                 _token: $('input[name="_token"]').val(),
                 _method: 'PUT',
                 install_date: $('#edit_installation_date').val(),
-                account_no: $('#edit_account_number').val(),
-                account_name: buildAccountName($('#edit_first_name').val(), $('#edit_middle_name').val(), $('#edit_last_name').val(), $('#edit_extension').val()),
+                account_no: $('#edit_account_no').val(),
+                account_name: $('#edit_account_name').val(),
                 address1: $('#edit_address').val(),
                 zone_code: $('#edit_zone').val(),
                 category_code: $('#edit_category option:selected').data('code') || $('#edit_category').val(),
@@ -1575,9 +1834,16 @@
                 meter_brand: $('#edit_meter_brand').val(),
                 rate_code: $('#edit_rate_code').val() || 'A',
                 status_code: $('#edit_status').val(),
-                sequence: $('#edit_card_number').val()
+                sequence: $('#edit_card_number').val(),
+                bill_disc_percent: $('#edit_bill_disc_percent').val(),
+                bill_disc_amount: $('#edit_bill_disc_amount').val(),
+                osca_id_no: $('#edit_osca_id_no').val(),
+                remark: $('#edit_remark').val()
                 // Note: cons_ctrl is not updated during edit to preserve the original value
             };
+            if (isEditBillDiscDirty()) {
+                updateData.bill_disc_updated_at = $('#edit_bill_disc_updated_at').val();
+            }
             
             console.log('Update data prepared:', updateData);
             
@@ -1598,7 +1864,7 @@
                         updateConsumerHeader(response.consumer);
                         
                         // Refresh the consumer info display - use account_no from consumer_zone table
-                        searchConsumer(response.consumer.account_no || response.consumer.account_number);
+                        searchConsumer(response.consumer.account_no);
                         
                         // Show success message
                         Swal.fire({
@@ -1712,8 +1978,10 @@
                             $('#consumerInfoCard').html('<div class="text-center text-muted py-5"><i class="fas fa-user-slash fa-3x mb-3"></i><p>Consumer deleted. Search for another consumer.</p></div>');
                             
                             // Update header to show no consumer
-                            $('#consumerHeaderName').text('No Consumer Selected');
+                              $('#consumerHeaderName').attr('class', 'mb-1').text('No Consumer Selected');
+                            $('#consumerHeaderAddress').text('—');
                             $('#consumerHeaderStatus').removeClass().addClass('badge bg-secondary').text('Please search for a consumer');
+                     
                         });
                     }
                 },
