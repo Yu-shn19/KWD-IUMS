@@ -2620,14 +2620,11 @@
                     return raw || 'UNKNOWN';
                 };
 
-                const isBillPrinting = (currentDataType === 'downloaded');
                 currentBillingData.forEach(record => {
                     const category = resolveCategoryCode(record);
                     const volume = parseFloat(record.volume ?? record.consumption ?? 0) || 0;
                     const currentBill = parseFloat(record.current_bill ?? record.total ?? 0) || 0;
-                    const amount = isBillPrinting
-                        ? currentBill + (currentBill > 0 ? 20.00 : 0.00)
-                        : currentBill;
+                    const amount = currentBill;
 
                     if (!categoryData[category]) {
                         categoryData[category] = {
