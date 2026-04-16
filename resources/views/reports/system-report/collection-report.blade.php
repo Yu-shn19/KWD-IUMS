@@ -44,6 +44,7 @@
         .print-page {
             page-break-after: always;
             break-after: page;
+            margin-top: 10px;
         }
         .print-page.is-last {
             page-break-after: auto;
@@ -607,13 +608,23 @@
         @php
             // Print pagination (fixed rows per printed page).
             // You can override via ?rows_per_page=12 in the URL when printing.
-            // Default is intentionally conservative because the print header is tall.
+            // Default is intentionally conservative because the first page header is tall.
             $rowsPerPage = (int) request('rows_per_page', 14);
             $rowsPerPage = max(1, min($rowsPerPage, 60));
+            // Let page 2+ fit a few more rows than page 1.
+            $rowsPerPageNext = min($rowsPerPage + 9, 60);
 
             $serviceRevByOr = $serviceRevByOr ?? [];
             $detailRecordsArray = $detailRecords instanceof \Illuminate\Support\Collection ? $detailRecords->toArray() : (array) $detailRecords;
-            $pages = array_chunk($detailRecordsArray, $rowsPerPage);
+            $pages = [];
+            if (!empty($detailRecordsArray)) {
+                $firstPage = array_slice($detailRecordsArray, 0, $rowsPerPage);
+                $pages[] = $firstPage;
+                $remainingRecords = array_slice($detailRecordsArray, $rowsPerPage);
+                if (!empty($remainingRecords)) {
+                    $pages = array_merge($pages, array_chunk($remainingRecords, $rowsPerPageNext));
+                }
+            }
             if (empty($pages)) {
                 $pages = [[]];
             }
@@ -665,23 +676,25 @@
                         <col style="width: 6%;">
                     </colgroup>
                     <thead>
-                        <tr>
-                            <td colspan="12" class="print-header-cell">
-                                <div class="print-header-inner">
-                                    <img src="{{ asset('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District" class="print-header-logo">
-                                    <h2>HAGONOY WATER DISTRICT</h2>
-                                    <h3>Guihing, Hagonoy</h3>
-                                    <h4>CASHIER'S COLLECTION REPORT</h4>
-                                    <h4>{{ \Carbon\Carbon::parse($dateFrom)->format('m/d/Y') }} to {{ \Carbon\Carbon::parse($dateTo)->format('m/d/Y') }}</h4>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td colspan="12" class="print-section-title" style="border: 1px solid #000; border-bottom-width: 2px; padding: 8px 12px;">ACCOUNTS CREDITED</td>
-                        </tr>
-                        <tr>
-                            <td colspan="12" class="print-subsection" style="border: 1px solid #000; padding: 8px 12px;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</td>
-                        </tr>
+                        @if($pageIndex === 0)
+                            <tr>
+                                <td colspan="12" class="print-header-cell">
+                                    <div class="print-header-inner">
+                                        <img src="{{ asset('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District" class="print-header-logo">
+                                        <h2>HAGONOY WATER DISTRICT</h2>
+                                        <h3>Guihing, Hagonoy</h3>
+                                        <h4>CASHIER'S COLLECTION REPORT</h4>
+                                        <h4>{{ \Carbon\Carbon::parse($dateFrom)->format('m/d/Y') }} to {{ \Carbon\Carbon::parse($dateTo)->format('m/d/Y') }}</h4>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td colspan="12" class="print-section-title" style="border: 1px solid #000; border-bottom-width: 2px; padding: 8px 12px;">ACCOUNTS CREDITED</td>
+                            </tr>
+                            <tr>
+                                <td colspan="12" class="print-subsection" style="border: 1px solid #000; padding: 8px 12px;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</td>
+                            </tr>
+                        @endif
                         <tr>
                             <th rowspan="2">OR #</th>
                             <th rowspan="2">PAYOR</th>
@@ -861,3 +874,4 @@
 </body>
 </html>
 
+    
