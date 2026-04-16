@@ -1233,15 +1233,19 @@
             }
 
             const updateTotals = () => {
-                // Subtotal = Current Bill + Arrears Current Year + Arrears Previous Year + Penalty + Water Maintenance Charge + Advances − Sr. Citizen Discount
+                // Subtotal = Current Bill + Arrears Current Year + Arrears Previous Year + Penalty + Water Maintenance Charge + Advances
+                // Sr. Citizen Discount is deducted only when checkbox is checked.
                 const subtotalChargeIds = ['fieldCurrentBill', 'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldPenalty', 'fieldMaintenance', 'fieldAdvances'];
                 let subtotal = 0;
                 subtotalChargeIds.forEach(id => {
                     const el = document.getElementById(id);
                     if (el) subtotal += Math.max(parseNumeric(el.value), 0);
                 });
-                const seniorDiscount = Math.max(parseNumeric(document.getElementById('fieldSeniorDiscount')?.value), 0);
-                subtotal = Math.max(subtotal - seniorDiscount, 0);
+                const seniorDiscountEnabled = !!document.getElementById('enableSeniorDiscount')?.checked;
+                if (seniorDiscountEnabled) {
+                    const seniorDiscount = Math.max(parseNumeric(document.getElementById('fieldSeniorDiscount')?.value), 0);
+                    subtotal = Math.max(subtotal - seniorDiscount, 0);
+                }
 
                 subtotalField.value = formatCurrency(subtotal);
 
@@ -1360,8 +1364,20 @@
                 }
 
                 if (enableCheckbox.checked) {
-                    // Same as penalty flow: value comes from backend ledger computation.
-                    setNumberFieldValue(seniorDiscountField, Math.max(parseNumeric(latestServerSeniorDiscount), 0));
+                    let discountValue = 0;
+                    if (currentAccountIsSenior) {
+                        // Senior accounts use backend ledger-based computation.
+                        discountValue = Math.max(parseNumeric(latestServerSeniorDiscount), 0);
+                    } else {
+                        // Non-senior accounts only compute when user manually checks the box.
+                        const effectiveConsumption = Number.isFinite(currentBillConsumption)
+                            ? currentBillConsumption
+                            : 0;
+                        if (effectiveConsumption > 0) {
+                            discountValue = getSeniorDiscountByConsumption(effectiveConsumption, currentAccountCategory);
+                        }
+                    }
+                    setNumberFieldValue(seniorDiscountField, discountValue);
                     // Keep editable so cashier can adjust if needed.
                     seniorDiscountField.readOnly = false;
                 } else {

@@ -4156,41 +4156,95 @@ class MeterReadingController extends Controller
 
         // Senior discount based on unpaid BILLING volume from consumer_ledgers.
         // Rule:
-        // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition).
+        // - Applies automatically only when consumer has SC flag + valid OSCA ID.
+        // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition),
+        //   plus fallback paid detection from PAYMENT rows in same cycle.
         // - unpaid_volume = SUM(volume of those rows)
         // - capped_volume = min(unpaid_volume, 30)
         // - senior_discount = lookup_table[capped_volume] by consumer category
         if (!($orNumberInput !== '' && $orPayment) && $paymentStatus !== 'paid') {
-            try {
+            $billDiscPercentRaw = $consumer->bill_disc_percent ?? null;
+            $billDiscPercentNorm = is_string($billDiscPercentRaw) ? strtoupper(trim($billDiscPercentRaw)) : null;
+            if (is_numeric($billDiscPercentRaw) && abs(((float) $billDiscPercentRaw) - 5.0) < 0.001) {
+                $billDiscPercentNorm = 'SC DISCOUNT';
+            }
+            $oscaId = trim((string) ($consumer->osca_id_no ?? ''));
+            $isSeniorConsumer = $billDiscPercentNorm === 'SC DISCOUNT' && $oscaId !== '';
+
+            if ($isSeniorConsumer) {
+                try {
                 $billingRows = DB::table('consumer_ledgers as cl')
                     ->where('cl.consumer_zone_id', $consumer->id)
                     ->whereIn(DB::raw("UPPER(TRIM(cl.trans))"), ['BILLING', 'BILL'])
                     ->whereNotNull('cl.volume')
                     ->where('cl.volume', '!=', '')
-                    ->select('cl.id', 'cl.schedule_id', 'cl.due_date', 'cl.paid_at', 'cl.volume')
-                    ->get();
+                    ->select('cl.id', 'cl.schedule_id', 'cl.date', 'cl.due_date', 'cl.volume', 'cl.debit', 'cl.billamount', 'cl.others')
+                    ->orderBy('cl.date', 'asc')
+                    ->orderBy('cl.id', 'asc')
+                    ->get()
+                    ->values();
 
                 $unpaidVolume = 0.0;
-                foreach ($billingRows as $billingRow) {
-                    $paidAt = $billingRow->paid_at ?? null;
-                    $isMarkedPaid = !($paidAt === null || (is_string($paidAt) && trim($paidAt) === ''));
+                foreach ($billingRows as $idx => $billingRow) {
+                    // Ledger-only rule (no paid_at):
+                    // A billing cycle is paid when PAYMENT entries with credit exist for that cycle.
+                    $isMarkedPaid = false;
+                    $hasPaymentForSameCycle = DB::table('consumer_ledgers as pay')
+                        ->where('pay.consumer_zone_id', $consumer->id)
+                        ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
+                        ->where(function ($q) use ($billingRow) {
+                            if (!empty($billingRow->schedule_id)) {
+                                $q->orWhere('pay.schedule_id', $billingRow->schedule_id);
+                            }
+                            if (!empty($billingRow->due_date)) {
+                                $q->orWhere('pay.due_date', $billingRow->due_date);
+                            }
+                        })
+                        ->whereRaw('COALESCE(pay.credit, 0) > 0')
+                        ->exists();
+                    $isMarkedPaid = $hasPaymentForSameCycle;
 
+                    // Fallback for legacy rows where PAYMENT entries don't share due_date/schedule_id:
+                    // if a PAYMENT timeline entry exists between this BILLING date and next BILLING date
+                    // and settles balance to zero, treat this cycle as paid (covers -SC paired entries).
                     if (!$isMarkedPaid) {
-                        $hasPaymentForSameCycle = DB::table('consumer_ledgers as pay')
-                            ->where('pay.consumer_zone_id', $consumer->id)
-                            ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
-                            ->where(function ($q) use ($billingRow) {
-                                if (!empty($billingRow->schedule_id)) {
-                                    $q->orWhere('pay.schedule_id', $billingRow->schedule_id);
-                                }
-                                if (!empty($billingRow->due_date)) {
-                                    $q->orWhere('pay.due_date', $billingRow->due_date);
-                                }
-                            })
-                            ->whereRaw('COALESCE(pay.credit, 0) > 0')
-                            ->exists();
+                        $billingDate = !empty($billingRow->date) ? Carbon::parse($billingRow->date) : null;
+                        $nextBillingDate = null;
+                        if (isset($billingRows[$idx + 1]) && !empty($billingRows[$idx + 1]->date)) {
+                            $nextBillingDate = Carbon::parse($billingRows[$idx + 1]->date);
+                        }
+                        if ($billingDate) {
+                            $paymentsInWindowQuery = DB::table('consumer_ledgers as pay')
+                                ->where('pay.consumer_zone_id', $consumer->id)
+                                ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
+                                ->whereRaw('COALESCE(pay.credit, 0) > 0')
+                                ->whereRaw("COALESCE(pay.txtime, pay.date) >= ?", [$billingDate->format('Y-m-d H:i:s')]);
+                            if ($nextBillingDate) {
+                                $paymentsInWindowQuery->whereRaw("COALESCE(pay.txtime, pay.date) < ?", [$nextBillingDate->format('Y-m-d H:i:s')]);
+                            }
 
-                        $isMarkedPaid = $hasPaymentForSameCycle;
+                            $paymentsInWindow = $paymentsInWindowQuery
+                                ->select('pay.balance', 'pay.credit', 'pay.reference', 'pay.date', 'pay.txtime')
+                                ->get();
+
+                            if ($paymentsInWindow->isNotEmpty()) {
+                                $creditSum = (float) $paymentsInWindow->sum(function ($p) {
+                                    return (float) ($p->credit ?? 0);
+                                });
+                                $billingDebit = max(
+                                    0.0,
+                                    (float) ($billingRow->debit ?? 0),
+                                    (float) (($billingRow->billamount ?? 0) + ($billingRow->others ?? 0))
+                                );
+                                $settledToZero = $paymentsInWindow->contains(function ($p) {
+                                    return abs((float) ($p->balance ?? 999999)) < 0.01;
+                                });
+                                $coveredByCredit = $billingDebit > 0.0 && $creditSum + 0.01 >= $billingDebit;
+                                if ($settledToZero || $coveredByCredit) {
+                                    $isMarkedPaid = true;
+                                }
+                            }
+                        }
                     }
 
                     if (!$isMarkedPaid) {
@@ -4222,15 +4276,16 @@ class MeterReadingController extends Controller
                     $discountTable = $categoryCode === '32' ? $commercialDiscountTable : $residentialDiscountTable;
                     $seniorCitizenDiscount = round((float) ($discountTable[$volumeKey] ?? 0), 2);
                 }
-            } catch (\Throwable $e) {
-                // Keep existing seniorCitizenDiscount when lookup fails.
+                } catch (\Throwable $e) {
+                    // Keep existing seniorCitizenDiscount when lookup fails.
+                }
             }
         }
 
         // Final reconciliation for non-explicit-paid-OR flows vs displayed ledger balance:
         // - If breakdown sum > balance: trim buckets (existing behavior).
         // - If breakdown sum < balance: add shortfall to Arrears — CY (partial payments / coverage gaps vs running balance).
-        // Net due = charges − senior discount (matches payment subtotal logic on the form).
+        // Breakdown total excludes senior discount deduction.
         if (!($orNumberInput !== '' && $orPayment)) {
             $currentBalanceCapped = round(max(0, (float) $currentBalance), 2);
             $breakdownTotal = round(
@@ -4239,8 +4294,7 @@ class MeterReadingController extends Controller
                 + max(0.0, (float) $arrearsPy)
                 + max(0.0, (float) $penalty)
                 + max(0.0, (float) $maintenance)
-                + max(0.0, (float) $others)
-                - max(0.0, (float) $seniorCitizenDiscount),
+                + max(0.0, (float) $others),
                 2
             );
 
