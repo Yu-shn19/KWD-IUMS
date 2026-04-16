@@ -1,0 +1,7 @@
+/* Tailwind CSS directives commented out - using Bootstrap instead */
+/* @tailwind base; */
+/* @tailwind components; */
+/* @tailwind utilities; */
+label[for="yearFilter"] {
+    margin-bottom: 0 !important;
+  }
