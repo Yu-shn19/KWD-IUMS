@@ -180,10 +180,10 @@ class MeterReadingController extends Controller
 
         if ($billMonthRaw !== null && $billMonthRaw !== '') {
             try {
-                $bm = Carbon::parse($billMonthRaw)->startOfDay();
-                // Exact billing period: match stored bill_month date only (not whole calendar month)
-                $query->whereDate('bill_month', $bm->toDateString());
-                $billMonthNormalized = $bm->format('Y-m-d');
+                $bm = Carbon::parse($billMonthRaw);
+                $query->whereYear('bill_month', $bm->year)
+                    ->whereMonth('bill_month', $bm->month);
+                $billMonthNormalized = $bm->copy()->startOfMonth()->format('Y-m-d');
             } catch (\Exception $e) {
                 return response()->json([
                     'success' => false,
@@ -197,9 +197,10 @@ class MeterReadingController extends Controller
                 ->value('bill_month');
 
             if ($latestBillMonth) {
-                $lm = Carbon::parse($latestBillMonth)->startOfDay();
-                $query->whereDate('bill_month', $lm->toDateString());
-                $billMonthNormalized = $lm->format('Y-m-d');
+                $lm = Carbon::parse($latestBillMonth);
+                $query->whereYear('bill_month', $lm->year)
+                    ->whereMonth('bill_month', $lm->month);
+                $billMonthNormalized = $lm->copy()->startOfMonth()->format('Y-m-d');
             }
         }
 
@@ -207,7 +208,7 @@ class MeterReadingController extends Controller
             $query->where('zone', $zone);
         }
 
-        $schedules = $query->orderByAccountNumberTail()->get();
+        $schedules = $query->orderBy('sedr_number')->get();
 
         return response()->json([
             'success' => true,
@@ -577,7 +578,7 @@ class MeterReadingController extends Controller
                 $query->where('bill_month', Carbon::parse($request->bill_month)->format('Y-m-d'));
             }
 
-            $schedules = $query->orderByAccountNumberTail()->get();
+            $schedules = $query->orderBy('sedr_number')->get();
 
             if ($schedules->isEmpty()) {
                 return response()->json([
@@ -802,6 +803,7 @@ class MeterReadingController extends Controller
 
         try {
         $reading = null;
+        $orLookupPayment = null;
 
         // Lookup by OR # from consumer_payments table
         if ($orNumberInput !== '') {
@@ -812,6 +814,7 @@ class MeterReadingController extends Controller
                     'message' => 'OR number not found.',
                 ], 404);
             }
+            $orLookupPayment = $payment;
             if ($payment->reading_id) {
                 $dr = DB::table('downloaded_readings')->where('id', $payment->reading_id)->first();
                 if (!$dr) {
@@ -1697,6 +1700,30 @@ class MeterReadingController extends Controller
                 'status' => 'unpaid',
                 'paid_at' => null,
             ];
+        }
+
+        // OR lookup rule: if OR exists in consumer_payments, treat it as a paid reference and
+        // return that exact OR breakdown so the UI status and amounts match the searched OR.
+        if ($orNumberInput !== '' && $orLookupPayment) {
+            $paymentData['status'] = 'paid';
+            $paymentData['reference'] = $orLookupPayment->or_number ?? $orNumberInput;
+            $paymentData['amount'] = round((float) ($orLookupPayment->payment_amount ?? $paymentData['amount'] ?? 0), 2);
+            $paymentData['tendered'] = (float) ($orLookupPayment->amount_tendered ?? $paymentData['tendered'] ?? 0);
+            $paymentData['change'] = (float) ($orLookupPayment->change_amount ?? $paymentData['change'] ?? 0);
+            $paymentData['method'] = $orLookupPayment->payment_method ?? ($paymentData['method'] ?? null);
+            $paymentData['remarks'] = $orLookupPayment->remarks ?? ($paymentData['remarks'] ?? null);
+            $paymentData['paid_at'] = $orLookupPayment->paid_at
+                ? Carbon::parse($orLookupPayment->paid_at)->format('Y-m-d H:i:s')
+                : ($paymentData['paid_at'] ?? null);
+
+            $paymentData['current_bill'] = round((float) ($orLookupPayment->current_bill ?? 0), 2);
+            $paymentData['penalty'] = round((float) ($orLookupPayment->penalty ?? 0), 2);
+            $paymentData['meter_maintenance'] = round((float) ($orLookupPayment->meter_maintenance ?? 0), 2);
+            $paymentData['arrears_cy'] = round((float) ($orLookupPayment->arrears_cy ?? 0), 2);
+            $paymentData['arrears_py'] = round((float) ($orLookupPayment->arrears_py ?? 0), 2);
+            $paymentData['advances'] = round((float) ($orLookupPayment->advances ?? 0), 2);
+            $paymentData['senior_citizen_discount'] = round((float) ($orLookupPayment->senior_citizen_discount ?? 0), 2);
+            $paymentData['others'] = round((float) ($orLookupPayment->others ?? 0), 2);
         }
 
         // Prepare downloaded reading details
@@ -3065,6 +3092,7 @@ class MeterReadingController extends Controller
                     'others' => (float)($ledger->others ?? 0),
                     'paid_at' => $paidAtValue,
                     'ledger_id' => $ledger->id ?? null, // For debugging
+                    'schedule_id' => $ledger->schedule_id ?? null,
                 ];
             }
             $hasBillingEntriesInRange = !empty($billingForDateRange);
@@ -3193,13 +3221,99 @@ class MeterReadingController extends Controller
             }
             $penaltyUnpaidSum = round($penaltyUnpaidSum, 2);
 
-            // Water Maintenance = unpaid billing months × ₱20 (fixed)
-            $unpaidWmcMonths = 0;
-            foreach ($billingForDateRange as $b) {
-                if (!$isChargeUnpaid($b)) continue;
-                $unpaidWmcMonths++;
+            // Water Maintenance verification:
+            // Determine outstanding WMC per billing row from payment breakdown first
+            // (consumer_payments.meter_maintenance by schedule_id). This avoids
+            // re-charging WMC in later months when WMC was already paid previously.
+            // Fallback to paid_at and default WMC only for legacy/incomplete data.
+            $paidWmcBySchedule = [];
+            $scheduleIdsForWmc = array_values(array_unique(array_filter(array_map(function ($b) {
+                return isset($b['schedule_id']) ? (int)$b['schedule_id'] : 0;
+            }, $billingForDateRange), function ($id) {
+                return $id > 0;
+            })));
+            if (!empty($scheduleIdsForWmc)) {
+                $paidWmcRows = DB::table('consumer_payments as cp')
+                    ->join('downloaded_readings as dr', 'dr.id', '=', 'cp.reading_id')
+                    ->whereIn('dr.schedule_id', $scheduleIdsForWmc)
+                    ->whereNotNull('cp.paid_at')
+                    ->selectRaw('dr.schedule_id as schedule_id, COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
+                    ->groupBy('dr.schedule_id')
+                    ->get();
+                foreach ($paidWmcRows as $wmcRow) {
+                    $sid = (int)($wmcRow->schedule_id ?? 0);
+                    if ($sid > 0) {
+                        $paidWmcBySchedule[$sid] = round((float)($wmcRow->paid_wmc ?? 0), 2);
+                    }
+                }
             }
-            $wmcUnpaidSum = round($unpaidWmcMonths * 20.00, 2);
+
+            // Fallback pool for payments not tied to schedule_id (legacy/misaligned data):
+            // use consumer-level paid WMC up to selected as-of date.
+            $consumerPaidWmcPool = 0.0;
+            if (!empty($consumer->id)) {
+                $consumerPaidWmcPool = (float) DB::table('consumer_payments as cp')
+                    ->where('cp.consumer_id', $consumer->id)
+                    ->whereNotNull('cp.paid_at')
+                    ->whereRaw('COALESCE(cp.paid_at, cp.created_at) <= ?', [$toMonthDate->format('Y-m-d H:i:s')])
+                    ->selectRaw('COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
+                    ->value('paid_wmc');
+            }
+
+            $wmcRows = [];
+            $allocatedBySchedule = 0.0;
+            foreach ($billingForDateRange as $b) {
+                if (!$isChargeUnpaid($b)) {
+                    continue;
+                }
+                $rowWmc = (float)($b['others'] ?? 0);
+                if ($rowWmc <= 0) {
+                    $rowWmc = 20.00;
+                }
+                $scheduleId = isset($b['schedule_id']) ? (int)$b['schedule_id'] : 0;
+                $paidWmcForRow = $scheduleId > 0 ? (float)($paidWmcBySchedule[$scheduleId] ?? 0) : 0.0;
+                $outstandingWmc = max(0.0, round($rowWmc - $paidWmcForRow, 2));
+                $allocatedBySchedule += min($rowWmc, $paidWmcForRow);
+                $wmcRows[] = [
+                    'date' => $b['date'] ?? null,
+                    'outstanding' => $outstandingWmc,
+                ];
+            }
+
+            // Apply any unmatched paid WMC to oldest unpaid WMC rows.
+            $unallocatedPool = max(0.0, round($consumerPaidWmcPool - $allocatedBySchedule, 2));
+            if ($unallocatedPool > 0 && !empty($wmcRows)) {
+                usort($wmcRows, function ($a, $b) {
+                    $da = $a['date'] instanceof Carbon ? $a['date']->getTimestamp() : 0;
+                    $db = $b['date'] instanceof Carbon ? $b['date']->getTimestamp() : 0;
+                    return $da <=> $db;
+                });
+                foreach ($wmcRows as &$wmcRow) {
+                    if ($unallocatedPool <= 0) {
+                        break;
+                    }
+                    $currentOutstanding = (float)($wmcRow['outstanding'] ?? 0);
+                    if ($currentOutstanding <= 0) {
+                        continue;
+                    }
+                    $applied = min($currentOutstanding, $unallocatedPool);
+                    $wmcRow['outstanding'] = round($currentOutstanding - $applied, 2);
+                    $unallocatedPool = round($unallocatedPool - $applied, 2);
+                }
+                unset($wmcRow);
+            }
+
+            $unpaidWmcMonths = 0;
+            $wmcUnpaidSum = 0.0;
+            foreach ($wmcRows as $wmcRow) {
+                $outstanding = (float)($wmcRow['outstanding'] ?? 0);
+                if ($outstanding <= 0) {
+                    continue;
+                }
+                $unpaidWmcMonths++;
+                $wmcUnpaidSum += $outstanding;
+            }
+            $wmcUnpaidSum = round($wmcUnpaidSum, 2);
 
             // When date is in a single month: for December view always show only December's arrears (195, Period 2). For other months, when only 1 overdue use same-month; when 2+ overdue (e.g. Jan 23) use full list so Period 4 shows Arrears CY 390.
             $rangeInSingleMonth = ($fromMonthDate->format('n') === $toMonthDate->format('n') && $fromMonthDate->format('Y') === $toMonthDate->format('Y'));
@@ -3782,6 +3896,91 @@ class MeterReadingController extends Controller
         $maintenance = (float) ($dbBreakdown['water_maintenance_charge'] ?? 0);
         $arrearsCy = (float) ($dbBreakdown['arrears_cy'] ?? 0);
         $arrearsPy = (float) ($dbBreakdown['arrears_py'] ?? 0);
+        $hasDbCurrentBillForSelectedMonth = !empty($selectedBillMonthYmd) && round($currentBill, 2) > 0;
+
+        // Carry credit from latest balance before selected range start
+        // (e.g. previous month PAYMENT leaves -0.10, next month bill should reduce by 0.10).
+        $carryCreditBeforeRange = 0.0;
+        try {
+            $rangeStart = $fromMonthDate->copy()->startOfDay();
+            $latestBeforeRange = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                ->whereNotNull('balance')
+                ->whereRaw('COALESCE(txtime, date) < ?', [$rangeStart->format('Y-m-d H:i:s')])
+                ->orderByRaw('COALESCE(txtime, date) DESC')
+                ->orderBy('id', 'desc')
+                ->first();
+            // Treat prior negative balance as usable carry-credit only when current displayed balance
+            // is also non-positive; if current balance is positive, do not consume current bill.
+            if (
+                $latestBeforeRange
+                && (float)($latestBeforeRange->balance ?? 0) < 0
+                && (float)$currentBalance <= 0
+            ) {
+                $carryCreditBeforeRange = abs(round((float)($latestBeforeRange->balance ?? 0), 2));
+            }
+        } catch (\Throwable $e) {
+            $carryCreditBeforeRange = 0.0;
+        }
+
+        // PRE-DUE credit handling:
+        // If past balance is negative (credit), consume Current Bill first, then Maintenance.
+        // Example: -377.06 credit, Current Bill 726.80 => Current Bill becomes 349.74.
+        if ($viewType === 'pre_due') {
+            $credit = 0.0;
+            if ($balanceEndOfPreviousYear < 0) {
+                $credit = abs(round((float) $balanceEndOfPreviousYear, 2));
+            }
+            $credit = max($credit, $carryCreditBeforeRange);
+            if ($credit > 0) {
+                $appliedToCurrentBill = min($credit, max(0.0, $currentBill));
+                $currentBill = round(max(0.0, $currentBill - $appliedToCurrentBill), 2);
+                $credit = round($credit - $appliedToCurrentBill, 2);
+
+                if ($credit > 0) {
+                    $appliedToMaintenance = min($credit, max(0.0, $maintenance));
+                    $maintenance = round(max(0.0, $maintenance - $appliedToMaintenance), 2);
+                }
+            }
+
+            // If selected-month charges already consume the displayed current balance,
+            // there is no remaining past balance to place into arrears.
+            $remainingAfterSelected = round($currentBalance - $currentBill - $penalty - $maintenance, 2);
+            if ($remainingAfterSelected <= 0) {
+                $arrearsCy = 0.0;
+                $arrearsPy = 0.0;
+            }
+        }
+
+        // POST-DUE credit handling:
+        // For overdue month view, principal is often shown in Arrears CY.
+        // Apply available credit to principal first and display remaining principal as Current Bill.
+        if ($viewType === 'post_due') {
+            $credit = 0.0;
+            if ($balanceEndOfPreviousYear < 0) {
+                $credit = abs(round((float) $balanceEndOfPreviousYear, 2));
+            }
+            $credit = max($credit, $carryCreditBeforeRange);
+            // Also derive credit from reconciliation gap:
+            // if (principal + penalty + maintenance + PY) is greater than displayed current balance,
+            // the difference is an available credit that should reduce principal.
+            $computedBreakdownTotal = round(
+                max(0.0, $currentBill)
+                + max(0.0, $arrearsCy)
+                + max(0.0, $arrearsPy)
+                + max(0.0, $penalty)
+                + max(0.0, $maintenance),
+                2
+            );
+            $derivedCredit = round(max(0.0, $computedBreakdownTotal - max(0.0, (float) $currentBalance)), 2);
+            $credit = max($credit, $derivedCredit);
+
+            $principalBucket = round(max(0.0, $currentBill) + max(0.0, $arrearsCy), 2);
+            if ($credit > 0 && $principalBucket > 0) {
+                $principalAfterCredit = round(max(0.0, $principalBucket - $credit), 2);
+                $currentBill = $principalAfterCredit;
+                $arrearsCy = 0.0;
+            }
+        }
 
         // PY fallback: if the DB found no prior-year billing rows (arrears_py = 0) but the ledger
         // shows a prior-year balance, fill arrears_py from whatever balance remains after accounting
@@ -3804,6 +4003,11 @@ class MeterReadingController extends Controller
         // so the same formula (year-based PY, year+month for CY) is used regardless of which month is selected.
         $dbHasArrears = (round($arrearsCy, 2) + round($arrearsPy, 2)) > 0;
         $applyBalanceSplit = ($isNoBillingInMonth || $schedulesInRange->isEmpty()) && $currentBalance > 0 && !$dbHasArrears;
+        // If DB breakdown already found a current bill for the selected month,
+        // never reclassify it into arrears via fallback balance split.
+        if ($hasDbCurrentBillForSelectedMonth) {
+            $applyBalanceSplit = false;
+        }
         if ($applyBalanceSplit) {
             $currentBill = 0;
             $remainder = round($currentBalance - $currentBill - $penalty - $maintenance, 2);
@@ -3811,23 +4015,54 @@ class MeterReadingController extends Controller
             $arrearsPy = min(max(0, round($balanceEndOfPreviousYear, 2)), $remainder);
             $arrearsCy = max(0, round($remainder - $arrearsPy, 2));
         }
-        // 1-month carried balance: only overwrite PY/CY when dbBreakdown returned both zero (so we reconcile from balance). Otherwise trust dbBreakdown for same logic as search-by-ID/pre-due/post-due.
+        // 1-month carried balance: only overwrite PY/CY when dbBreakdown returned both zero
+        // (so we reconcile from displayed current balance).
+        // NOTE: single bill-month requests are normalized into dateRangeMode earlier,
+        // so allow this fallback when a single bill month key is selected.
+        $isSingleBillMonthSelection = ($billMonthFromKey !== null && $billMonthFromKey === $billMonthToKey);
         if (
             !$applyBalanceSplit
-            && !$dateRangeMode
+            && (!$dateRangeMode || $isSingleBillMonthSelection)
             && $schedulesInRange->isNotEmpty()
             && $currentBill > 0
             && round($arrearsCy, 2) == 0
             && round($arrearsPy, 2) == 0
             && $currentBalance > $currentBill
+            && !$hasDbCurrentBillForSelectedMonth
         ) {
-            $carried = round($currentBalance - $currentBill, 2);
+            // Carried balance should only be the remainder after selected-month charges
+            // (current bill + penalty + maintenance), not just current bill alone.
+            $carried = round($currentBalance - $currentBill - $penalty - $maintenance, 2);
+            $carried = max(0, $carried);
             $arrearsPy = min(max(0, round($balanceEndOfPreviousYear, 2)), $carried);
             $arrearsCy = max(0, round($carried - $arrearsPy, 2));
         }
 
-        // When selected month is paid, use breakdown from consumer_payments table instead of zeros
-        if ($paymentStatus === 'paid' && $schedulesInRange->isNotEmpty()) {
+        $orNumberInput = trim((string) $request->input('or_number', ''));
+        $orPayment = null;
+        if ($orNumberInput !== '') {
+            $orPayment = ConsumerPayment::where('or_number', $orNumberInput)
+                ->where('consumer_id', $consumer->id)
+                ->first();
+            // Fallback for legacy/misaligned records where consumer_id is null/wrong but OR is valid.
+            if (!$orPayment) {
+                $orPayment = ConsumerPayment::where('or_number', $orNumberInput)
+                    ->orderBy('paid_at', 'desc')
+                    ->orderBy('id', 'desc')
+                    ->first();
+            }
+        }
+
+        // Paid-month fallback from consumer_payments:
+        // apply only when remaining balance is effectively zero.
+        // If balance remains, keep ledger/date-based computed breakdown (no paid_at takeover).
+        // Skip this fallback when OR was explicitly provided; explicit OR should control the breakdown.
+        if (
+            $orNumberInput === ''
+            && $paymentStatus === 'paid'
+            && $schedulesInRange->isNotEmpty()
+            && round((float) $currentBalance, 2) <= 0.009
+        ) {
             $readingsInRange = DB::table('downloaded_readings')->whereIn('schedule_id', $schedulesInRange)->pluck('id');
             if ($readingsInRange->isNotEmpty()) {
                 $paidPayment = ConsumerPayment::whereIn('reading_id', $readingsInRange)
@@ -3845,22 +4080,139 @@ class MeterReadingController extends Controller
             }
         }
 
-        // When OR # is provided, look up consumer_payments by or_number for this consumer and use its breakdown
-        $orNumberInput = trim((string) $request->input('or_number', ''));
+        // Preserve computed ledger WMC so OR mode can fallback when OR row has no WMC.
+        $ledgerComputedMaintenance = (float) $maintenance;
+
+        // When OR # is provided, use only that OR's payment breakdown for this consumer.
+        // If OR is not found, keep the computed month breakdown and only mark unpaid.
+        // This keeps new/unused OR flow aligned with bill-month/date computation.
         if ($orNumberInput !== '') {
-            $orPayment = ConsumerPayment::where('or_number', $orNumberInput)
-                ->where('consumer_id', $consumer->id)
-                ->first();
             if ($orPayment) {
                 $paymentStatus = 'paid';
                 $currentBill = (float)($orPayment->current_bill ?? 0);
                 $penalty = (float)($orPayment->penalty ?? 0);
-                $maintenance = (float)($orPayment->meter_maintenance ?? 0);
+                $orMaintenance = (float)($orPayment->meter_maintenance ?? 0);
+                // OR fallback rule: if paid OR has zero WMC but ledger breakdown has one, keep ledger WMC.
+                $maintenance = ($orMaintenance <= 0.009 && $ledgerComputedMaintenance > 0.009)
+                    ? round($ledgerComputedMaintenance, 2)
+                    : $orMaintenance;
                 $arrearsCy = (float)($orPayment->arrears_cy ?? 0);
                 $arrearsPy = (float)($orPayment->arrears_py ?? 0);
                 $seniorCitizenDiscount = (float)($orPayment->senior_citizen_discount ?? 0);
                 $others = (float)($orPayment->others ?? 0);
+
+                // Reclassification rule (same intent as penalty split):
+                // when OR has zero WMC but ledger contributes WMC, do not inflate total due.
+                // Move the fallback WMC amount out of DM/arrears bucket.
+                if ($orMaintenance <= 0.009 && $maintenance > 0.009) {
+                    $wmcTransferredFromDm = min(round($maintenance, 2), round(max(0.0, (float) $arrearsCy), 2));
+                    if ($wmcTransferredFromDm > 0.009) {
+                        $arrearsCy = round(max(0.0, (float) $arrearsCy - $wmcTransferredFromDm), 2);
+                    }
+                }
+            } else {
+                // Unused/new OR: use balance-only allocation.
+                // Keep a single payable bucket in Current Bill so breakdown matches the remaining ledger balance.
+                $paymentStatus = 'unpaid';
+                $currentBill = round(max(0, (float) $currentBalance), 2);
+                $penalty = 0.0;
+                $maintenance = 0.0;
+                $others = 0.0;
+                $arrears = 0.0;
+                $arrearsCy = 0.0;
+                $arrearsPy = 0.0;
+                $seniorCitizenDiscount = 0.0;
             }
+        }
+
+        // Non-OR flow safeguard:
+        // if WMC is missing in computed breakdown but latest unpaid BILLING carries "others",
+        // restore WMC from ledger and reclassify it from CY arrears (do not inflate total due).
+        if (!($orNumberInput !== '' && $orPayment) && $maintenance <= 0.009) {
+            try {
+                $latestUnpaidBillingWithOthers = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                    ->whereIn('trans', ['BILLING', 'BILL'])
+                    ->where(function ($q) {
+                        $q->whereNull('paid_at')->orWhere('paid_at', '');
+                    })
+                    ->whereRaw('COALESCE(others, 0) > 0')
+                    ->orderByRaw('COALESCE(date, txtime) DESC')
+                    ->orderBy('id', 'desc')
+                    ->first();
+
+                $ledgerWmc = round((float) ($latestUnpaidBillingWithOthers->others ?? 0), 2);
+                if ($ledgerWmc > 0.009) {
+                    $maintenance = $ledgerWmc;
+                    $wmcFromCy = min($ledgerWmc, round(max(0.0, (float) $arrearsCy), 2));
+                    if ($wmcFromCy > 0.009) {
+                        $arrearsCy = round(max(0.0, (float) $arrearsCy - $wmcFromCy), 2);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Keep original computed values when ledger fallback lookup fails.
+            }
+        }
+
+        // Final reconciliation for non-explicit-paid-OR flows vs displayed ledger balance:
+        // - If breakdown sum > balance: trim buckets (existing behavior).
+        // - If breakdown sum < balance: add shortfall to Arrears — CY (partial payments / coverage gaps vs running balance).
+        // Net due = charges − senior discount (matches payment subtotal logic on the form).
+        if (!($orNumberInput !== '' && $orPayment)) {
+            $currentBalanceCapped = round(max(0, (float) $currentBalance), 2);
+            $breakdownTotal = round(
+                max(0.0, (float) $currentBill)
+                + max(0.0, (float) $arrearsCy)
+                + max(0.0, (float) $arrearsPy)
+                + max(0.0, (float) $penalty)
+                + max(0.0, (float) $maintenance)
+                + max(0.0, (float) $others)
+                - max(0.0, (float) $seniorCitizenDiscount),
+                2
+            );
+
+            if ($breakdownTotal > $currentBalanceCapped) {
+                $excess = round($breakdownTotal - $currentBalanceCapped, 2);
+                // Prefer reclassification from CY arrears before trimming WMC:
+                // when WMC belongs to current billing, keep it visible and reduce carry/DM bucket first.
+                if ($excess > 0.009 && $maintenance > 0.009 && $arrearsCy > 0.009) {
+                    $reclassFromCy = min(round($excess, 2), round((float) $arrearsCy, 2));
+                    if ($reclassFromCy > 0.009) {
+                        $arrearsCy = round(max(0.0, (float) $arrearsCy - $reclassFromCy), 2);
+                        $excess = round($excess - $reclassFromCy, 2);
+                    }
+                }
+                foreach (['maintenance', 'penalty', 'others', 'arrearsCy', 'arrearsPy', 'currentBill'] as $field) {
+                    if ($excess <= 0) {
+                        break;
+                    }
+                    $value = (float) $$field;
+                    if ($value <= 0) {
+                        continue;
+                    }
+                    $deduct = min($value, $excess);
+                    $$field = round(max(0.0, $value - $deduct), 2);
+                    $excess = round($excess - $deduct, 2);
+                }
+            } elseif ($currentBalanceCapped > 0.009 && $breakdownTotal + 0.009 < $currentBalanceCapped) {
+                $shortfall = round($currentBalanceCapped - $breakdownTotal, 2);
+                if ($shortfall > 0.009) {
+                    $arrearsCy = round($arrearsCy + $shortfall, 2);
+                }
+            }
+        }
+
+        // Hard rule: when current balance is zero, breakdown fields must be zero.
+        // Exception: explicit paid OR lookup should keep that OR's saved breakdown.
+        $hasExplicitOrPaidBreakdown = ($orNumberInput !== '' && $orPayment);
+        if (round((float) $currentBalance, 2) <= 0 && !$hasExplicitOrPaidBreakdown) {
+            $currentBill = 0.0;
+            $penalty = 0.0;
+            $maintenance = 0.0;
+            $others = 0.0;
+            $arrears = 0.0;
+            $arrearsCy = 0.0;
+            $arrearsPy = 0.0;
+            $seniorCitizenDiscount = 0.0;
         }
 
         // Resolve downloaded_reading id for the selected bill month so the frontend can submit payment for that month (avoids "Payment already exists" when paying December after November).

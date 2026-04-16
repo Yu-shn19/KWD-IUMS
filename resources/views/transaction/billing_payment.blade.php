@@ -402,6 +402,7 @@
                                                     <option value="check">Check</option>
                                                     <option value="gcash">GCash</option>
                                                     <option value="bank">Bank Transfer</option>
+                                                    <option value="palawan">Palawan Pay-OTC</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -745,6 +746,25 @@
             let latestBillMonth = null; // Store the latest/current bill month
             let isLoadingFromMonthSelector = false; // Flag to prevent populateFromLookup from overwriting penalty
             let arrearsPreviousManuallyEdited = false; // Flag to track if user manually edited Arrears — Previous Month
+            
+            const disableWheelStepChange = (input) => {
+                if (!input || input.type !== 'number') return;
+                input.addEventListener('wheel', (event) => {
+                    // Prevent native number-input wheel increment/decrement.
+                    event.preventDefault();
+                }, { passive: false });
+            };
+
+            const wheelProtectedNumberInputs = [
+                ...chargeInputs,
+                ...discountInputs,
+                cashTenderedField
+            ];
+            wheelProtectedNumberInputs.forEach(disableWheelStepChange);
+            // Only include OR number in breakdown endpoint when user explicitly loaded by OR.
+            let useOrForBreakdownLookup = false;
+            // When true, keep breakdown exactly from the paid OR payload and prevent recompute/zero overwrite.
+            let lockPaidOrBreakdown = false;
             const viewLedgerBtn = document.getElementById('viewLedgerBtn');
             const ledgerModal = $('#ledgerModal');
             const ledgerIframe = document.getElementById('ledgerIframe');
@@ -1379,7 +1399,7 @@
                 }
                 const orFieldForDetails = document.getElementById('officialReceipt');
                 const orValueForDetails = orFieldForDetails ? String(orFieldForDetails.value || '').trim() : '';
-                if (orValueForDetails) {
+                if (useOrForBreakdownLookup && orValueForDetails) {
                     url += `&or_number=${encodeURIComponent(orValueForDetails)}`;
                 }
                 try {
@@ -1398,8 +1418,10 @@
                             const orNumber = (document.getElementById('officialReceipt') || {}).value?.trim();
                             deletePaymentBtn.disabled = !orNumber;
                         }
-                        if (typeof setPaymentStatusForMonth === 'function') {
-                            setPaymentStatusForMonth((orValueForDetails && data.payment_status === 'paid') ? 'paid' : 'unpaid');
+                        // Do not override status while OR field has a value.
+                        // OR status is handled by OR lookup flow (used OR = paid, unused OR = unpaid).
+                        if (typeof setPaymentStatusForMonth === 'function' && !orValueForDetails) {
+                            setPaymentStatusForMonth(data.payment_status === 'paid' ? 'paid' : 'unpaid');
                         }
                         setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_bill || 0);
                         const penaltyField = document.getElementById('fieldPenalty');
@@ -1419,6 +1441,9 @@
                         const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
                         if (enableSeniorDiscountCheckbox) {
                             enableSeniorDiscountCheckbox.checked = (parseFloat(data.senior_citizen_discount) || 0) > 0;
+                        }
+                        if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown) {
+                            clearPaymentBreakdown();
                         }
                         updateTotals();
                     }
@@ -1704,10 +1729,27 @@
                 }
                 updateSundryTotals();
 
-                // Payment status: from consumer_payment only. Paid when this bill month has a payment record (official_receipt_number or payment.reference from consumer_payments); otherwise Unpaid.
-                const orValue = (downloaded_reading && downloaded_reading.official_receipt_number != null && String(downloaded_reading.official_receipt_number).trim() !== '')
-                    || (payment && payment.reference != null && String(payment.reference).trim() !== '');
-                const isPaid = !!orValue;
+                // Payment status priority:
+                // 1) In explicit OR lookup mode, mark Paid only when that exact OR matches lookup payload.
+                // 2) In account lookup mode, ignore generated/typed OR and use bill-month payment record state.
+                const typedOrNumber = String((document.getElementById('officialReceipt') || {}).value || '').trim();
+                const downloadedOr = (downloaded_reading && downloaded_reading.official_receipt_number != null)
+                    ? String(downloaded_reading.official_receipt_number).trim()
+                    : '';
+                const paymentRefOr = (payment && payment.reference != null) ? String(payment.reference).trim() : '';
+                const hasMonthPaidRecord = downloadedOr !== '' || paymentRefOr !== '';
+                const hasExactOrMatch = typedOrNumber !== '' && (typedOrNumber === downloadedOr || typedOrNumber === paymentRefOr);
+                const isExplicitOrLookup = useOrForBreakdownLookup === true;
+                const isPaid = isExplicitOrLookup ? hasExactOrMatch : hasMonthPaidRecord;
+                const hasPaymentBreakdown = payment && (payment.current_bill !== undefined || payment.penalty !== undefined || payment.meter_maintenance !== undefined);
+                const hasCurrentBalance = (parseFloat(currentBalanceValue) || 0) > 0.009;
+                // Keep saved paid breakdown for paid-month account lookup (including zero balance).
+                // For remaining-balance + explicit OR flow, `isPaid` is false until OR matches, so API recompute still runs.
+                const keepPaidMonthOrBreakdown = isPaid && hasPaymentBreakdown;
+                if (keepPaidMonthOrBreakdown) {
+                    // Paid in selected month + still has balance: keep the saved OR/payment breakdown.
+                    lockPaidOrBreakdown = true;
+                }
                 let displayedBillMonthKey = billing.bill_month_input || (billing.bill_month ? (() => {
                     const s = String(billing.bill_month).trim();
                     if (/^\d{4}-\d{2}/.test(s)) {
@@ -1720,7 +1762,7 @@
                 if (!displayedBillMonthKey && billMonthField && billMonthField.value) {
                     displayedBillMonthKey = String(billMonthField.value).trim();
                 }
-                if (account.number && (displayedBillMonthKey || transactionDateField?.value)) {
+                if (!keepPaidMonthOrBreakdown && !lockPaidOrBreakdown && account.number && (displayedBillMonthKey || transactionDateField?.value)) {
                     // Always use bill month for date-meaning methods; only fall back to date-range when bill month is missing.
                     const txDate = transactionDateField?.value?.trim();
                     let url = `{{ route('billing-payment.bill-month-details') }}?account_number=${encodeURIComponent(account.number)}`;
@@ -1739,7 +1781,7 @@
                     }
                     const orFieldForLookup = document.getElementById('officialReceipt');
                     const orValueForLookup = orFieldForLookup ? String(orFieldForLookup.value || '').trim() : '';
-                    if (orValueForLookup) {
+                    if (useOrForBreakdownLookup && orValueForLookup) {
                         url += `&or_number=${encodeURIComponent(orValueForLookup)}`;
                     }
                     fetch(url)
@@ -1769,6 +1811,9 @@
                                 const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
                                 if (enableSeniorDiscountCheckbox) {
                                     enableSeniorDiscountCheckbox.checked = (parseFloat(result.data.senior_citizen_discount) || 0) > 0;
+                                }
+                                if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown) {
+                                    clearPaymentBreakdown();
                                 }
                                 if (typeof updateTotals === 'function') updateTotals();
                             }
@@ -1803,7 +1848,24 @@
                         setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                         setNumberFieldValue(document.getElementById('fieldFees'), 0);
                         setNumberFieldValue(document.getElementById('fieldInspection'), 0);
+                        
+                        // Paid month with remaining balance:
+                        // - if bill <= balance: keep bill in Current Bill, put remainder in Arrears CY
+                        // - if bill > balance: put full balance in Arrears CY and set Current Bill to 0
+                        const balanceNow = parseNumeric(currentBalanceValue);
+                        const monthBill = parseNumeric(payment.current_bill ?? 0);
+                        if (balanceNow > 0.009) {
+                            if (monthBill > 0 && monthBill <= balanceNow) {
+                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), monthBill);
+                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), balanceNow - monthBill);
+                            } else if (monthBill > balanceNow) {
+                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), 0);
+                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), balanceNow);
+                            }
+                        }
                     }
+                    
+                    
                     // When paid but no breakdown in payload: leave billing-populated values (don't force 0)
                     updateTotals();
 
@@ -1824,9 +1886,15 @@
                         paymentTotalField.value = formatCurrency(0);
                     }
                     
-                    // Generate new OR number only when field is empty (keep user's value when they searched by OR #)
+                    // OR behavior for paid month:
+                    // - zero balance: show the paid OR from record (bill-month result)
+                    // - with remaining balance: keep current/new OR for next payment entry
                     const orField = document.getElementById('officialReceipt');
-                    if (orField && (!orField.value || orField.value.trim() === '')) {
+                    const isZeroBalancePaidMonth = (parseFloat(currentBalanceValue) || 0) <= 0.009;
+                    if (orField && isZeroBalancePaidMonth && existingOrNumber && existingOrNumber !== 'N/A') {
+                        orField.value = String(existingOrNumber).trim();
+                        useOrForBreakdownLookup = false;
+                    } else if (orField && (!orField.value || orField.value.trim() === '')) {
                         generateOrNumber();
                     }
                     
@@ -1842,7 +1910,7 @@
                 } else {
                     // No payment exists: Populate payment fields normally
                 const method = (payment.method || '').toLowerCase();
-                if (['cash', 'check', 'gcash', 'bank'].includes(method)) {
+                if (['cash', 'check', 'gcash', 'bank','palawan'].includes(method)) {
                     paymentTypeField.value = method;
                 } else {
                     paymentTypeField.value = 'cash';
@@ -1900,7 +1968,7 @@
                 updateTotals();
 
                 // Final safety: if current balance is zero, force Payment Breakdown to 0.00
-                if (currentBalanceValue <= 0.009) {
+                if (currentBalanceValue <= 0.009 && !lockPaidOrBreakdown) {
                     clearPaymentBreakdown();
                 }
             };
@@ -1909,12 +1977,18 @@
                 const accountNumber = getAccountNumber();
                 const accountName = getAccountName();
                 const billMonthRaw = billMonthField?.value?.trim() || '';
+                const currentOrValue = String((document.getElementById('officialReceipt') || {}).value || '').trim();
+                if (paymentRemarksField) {
+                    paymentRemarksField.value = '';
+                }
 
                 // If Account Number field has a value, use it to search both account_number and account_name
                 // If Account Name field has a value (and Account Number is empty), use it to search account_name
                 const searchValue = accountNumber || accountName;
                 
                 if (!searchValue) {
+                    useOrForBreakdownLookup = false;
+                    lockPaidOrBreakdown = false;
                     updateLookupStatus('Enter account number or account name to load billing data.', 'muted');
                     setPaymentStatusForMonth(null);
                     lastLookupKey = null;
@@ -1930,7 +2004,7 @@
                     lastLookupKey = null; // Reset lookup key to allow new search
                 }
 
-                const lookupKey = `${searchValue}|${billMonthRaw || 'AUTO'}`;
+                const lookupKey = `${searchValue}|${billMonthRaw || 'AUTO'}|${currentOrValue || 'NO_OR'}`;
                 if (lookupKey === lastLookupKey && lastLookupKey !== null) {
                     return; // Skip if same lookup, but allow if lastLookupKey was reset
                 }
@@ -1940,6 +2014,10 @@
                 }
 
                 currentLookupController = new AbortController();
+                lockPaidOrBreakdown = false;
+                // Keep OR-based breakdown mode only when user explicitly searched by OR #.
+                // A generated/typed OR value alone should not override bill-month breakdown.
+                useOrForBreakdownLookup = useOrForBreakdownLookup && currentOrValue !== '';
                 updateLookupStatus(`Looking up billing for ${searchValue}…`, 'info');
 
                 // Clear name and address so they refresh with the new account (avoid showing previous account's location)
@@ -1989,8 +2067,22 @@
                         lastLookupKey = null;
                         return;
                     }
+                    
+                    const paidWithBreakdownForMonth = payload.data?.payment?.status === 'paid'
+                        && (payload.data?.payment?.current_bill !== undefined
+                            || payload.data?.payment?.penalty !== undefined
+                            || payload.data?.payment?.meter_maintenance !== undefined);
+                    const balanceFromPayload = parseNumeric(payload.data?.account?.current_balance);
+                    const hasOutstandingBalance = (parseFloat(balanceFromPayload) || 0) > 0.009;
+                    const shouldUseOrBreakdownForPaidMonth = currentOrValue !== '' && paidWithBreakdownForMonth && hasOutstandingBalance;
+                    useOrForBreakdownLookup = shouldUseOrBreakdownForPaidMonth;
+                    // Keep paid payload lock only when we are NOT intentionally switching to OR-based breakdown.
+                    lockPaidOrBreakdown = !shouldUseOrBreakdownForPaidMonth && paidWithBreakdownForMonth && hasOutstandingBalance;
 
                     populateFromLookup(payload.data);
+                    if (paymentRemarksField) {
+                        paymentRemarksField.value = '';
+                    }
 
                     const resolvedBillMonth = payload.data?.billing?.bill_month_input || '';
                     const resolvedBillMonthDisplay = payload.data?.billing?.bill_month_display || resolvedBillMonth;
@@ -2010,11 +2102,12 @@
 
                     updateLookupStatus(statusMessage, toneBase);
                     lastLookupKey = `${searchValue}|${effectiveBillMonth || 'AUTO'}`;
-                    
-                    
                     // Load full breakdown after account lookup - use same logic as date picker
                     // Use setTimeout to ensure populateFromLookup has finished setting transaction date
                     setTimeout(() => {
+                        if (lockPaidOrBreakdown) {
+                            return;
+                        }
                         if (resolvedAccount) {
                             const dateVal = transactionDateField?.value?.trim();
                             if (!dateVal) return;
@@ -2059,7 +2152,12 @@
             const performLookupByOr = async () => {
                 const orField = document.getElementById('officialReceipt');
                 const orNumber = orField ? String(orField.value || '').trim() : '';
+                if (paymentRemarksField) {
+                    paymentRemarksField.value = '';
+                }
                 if (!orNumber) {
+                    useOrForBreakdownLookup = false;
+                    lockPaidOrBreakdown = false;
                     updateLookupStatus('Enter an OR number to search.', 'muted');
                     return;
                 }
@@ -2082,18 +2180,28 @@
                     const response = await fetch(url, { signal: currentLookupController.signal });
                     const payload = await response.json().catch(() => null);
                     if (!response.ok || !payload) {
+                        useOrForBreakdownLookup = false;
+                        lockPaidOrBreakdown = false;
                         updateLookupStatus(payload?.message || 'Unable to fetch billing record.', 'danger');
                         setPaymentStatusForMonth('unpaid');
                         lastLookupKey = null;
                         return;
                     }
                     if (!payload.success) {
+                        useOrForBreakdownLookup = false;
+                        lockPaidOrBreakdown = false;
                         updateLookupStatus(payload.message || 'OR number not found.', 'warning');
                         setPaymentStatusForMonth('unpaid'); // OR # not in consumer_payment = unused → Unpaid
                         lastLookupKey = null;
                         return;
                     }
+                    useOrForBreakdownLookup = true;
+                    const paidWithBreakdown = payload.data?.payment?.status === 'paid' && (payload.data?.payment?.current_bill !== undefined || payload.data?.payment?.penalty !== undefined);
+                    lockPaidOrBreakdown = !!paidWithBreakdown;
                     populateFromLookup(payload.data);
+                    if (paymentRemarksField) {
+                        paymentRemarksField.value = '';
+                    }
                     // Keep the OR # the user entered (e.g. 100017) instead of overwriting with generated or server value
                     const orFieldAfter = document.getElementById('officialReceipt');
                     if (orFieldAfter) orFieldAfter.value = orNumber;
@@ -2102,7 +2210,6 @@
                     updateLookupStatus(payload.message || `Billing record loaded for OR # ${orNumber} (${resolvedAccount}).`, 'success');
                     lastLookupKey = `${orNumber}|OR|${resolvedAccount}`;
                     // When paid with breakdown from OR # search, skip loadBillMonthDetails to avoid modal and overwriting breakdown
-                    const paidWithBreakdown = payload.data?.payment?.status === 'paid' && (payload.data?.payment?.current_bill !== undefined || payload.data?.payment?.penalty !== undefined);
                     if (!paidWithBreakdown) {
                         setTimeout(() => {
                             if (resolvedAccount) {
@@ -2122,6 +2229,8 @@
                     }
                 } catch (e) {
                     if (e.name === 'AbortError') return;
+                    useOrForBreakdownLookup = false;
+                    lockPaidOrBreakdown = false;
                     console.error('Lookup by OR error:', e);
                     updateLookupStatus('Error looking up by OR number.', 'danger');
                     setPaymentStatusForMonth('unpaid');
@@ -2166,6 +2275,8 @@
                 currentDownloadedId = null; // Clear downloaded_id on reset
                 latestBillMonth = null; // Reset latest bill month
                 arrearsPreviousManuallyEdited = false; // Reset manual edit flag
+                useOrForBreakdownLookup = false;
+                lockPaidOrBreakdown = false;
                 
                 // Disable Update Payment when form is cleared (no loaded record)
                 if (updatePaymentBtn) {

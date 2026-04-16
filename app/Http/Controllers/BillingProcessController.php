@@ -576,40 +576,22 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Compute billing breakdown (PRE-DUE or POST-DUE) from consumer_ledgers.
+     * Billing breakdown from consumer_ledgers + consumer_payments.
      *
-     * Source of truth:
-     *   - Payment status = paid_at only (NULL = UNPAID, NOT NULL = PAID)
-     *   - BILLING rows:
-     *       date       = billing_date  (start of billing)
-     *       due_date   = end of PRE-DUE window
-     *       billamount = Current Bill (principal)
-     *       others     = Water Maintenance / Meter Rental
-     *   - PENALTY rows:
-     *       trans      = 'PENALTY'
-     *       date       = penalty_date (starts the day AFTER billing due_date)
-     *       amount     = 10% of billamount (₱19.50); no explicit due_date
-     *
-     * PRE-DUE (Billing Date → Billing Due Date):
-     *   - Current Bill            = current month principal (₱195)
-     *   - Water Maintenance       = meter rental for all unpaid months (1 → 20, 2 → 40, 3 → 60, …)
-     *   - Penalty                 = only for past‑due unpaid months (penalty rows already created for earlier bills)
-     *   - Arrears — Current Year  = 0
-     *   - Arrears — Previous Year = sum of prior unpaid principal (billing_month < current_month, paid_at IS NULL)
-     *
-     * POST-DUE (Billing Due Date → Current Billing Month):
-     *   - Current Bill            = 0
-     *   - Water Maintenance       = meter rental for all unpaid months
-     *   - Penalty                 = all unpaid PENALTY rows whose billing due_date has passed
-     *   - Arrears — Current Year  = unpaid principal where billing_year = current_year
-     *   - Arrears — Previous Year = unpaid principal where billing_year < current_year
+     * A charge row is unpaid until covered by a consumer_payments record (reading_id / schedule).
+     * Isolate latest unpaid BILLING first: billamount → Current Bill; others on that row only → WMC.
+     * Unpaid PENALTY → Penalty (skip if already paid).
+     * All other unpaid amounts → Arrears CY/PY by year (older billings’ billamount+others, DM debits, etc.).
+     * DM: unpaid debit → Arrears CY or PY by row date year.
+     * PENALTY: unpaid PENALTY rows (penalties.paid_at or payment penalty allocation when applicable).
+     * viewType is kept for API compatibility; classification uses calendar year vs latest unpaid billing date.
      *
      * @param int $consumerId consumer_zone_id
-     * @param string $viewType 'pre_due'|'post_due'
-     * @param \Carbon\Carbon|null $asOfDate effective "today" for determining past‑due (default: now)
-     * @param int|null $payMonths 1, 2, or 3 for "Pay N months" amount; null = full breakdown only
-     * @param string|null $selectedBillMonthYmd selected bill month in Y-m format (e.g. 2025-12); when set, breakdown is for that month (Arrears PY = prior unpaid months)
-     * @return array { current_bill, penalty, water_maintenance_charge, arrears_cy, arrears_py, unpaid_count, past_due_count, amount_due? }
+     * @param string $viewType legacy: pre_due|post_due
+     * @param \Carbon\Carbon|null $asOfDate payment / billing date context
+     * @param int|null $payMonths optional Pay N months amount
+     * @param string|null $selectedBillMonthYmd selected bill month Y-m (cutoff = end of that month when set)
+     * @return array { current_bill, penalty, water_maintenance_charge, arrears_cy, arrears_py, advances, unpaid_count, past_due_count, amount_due? }
      */
     /**
      * Resolve bill month from a ledger row: schedule.bill_month, else due_date, else date.
@@ -628,138 +610,376 @@ class BillingProcessController extends Controller
         }
         return null;
     }
+    
+    /**
+     * True when a payment in consumer_payments (paid_at set) covers this schedule/reading.
+     */
+    private function isScheduleCoveredByConsumerPayment(int $consumerZoneId, ?int $downloadedReadingId, ?int $scheduleId): bool
+    {
+        if ($downloadedReadingId) {
+            $coveredByReading = ConsumerPayment::where('consumer_id', $consumerZoneId)
+                ->where('reading_id', $downloadedReadingId)
+                ->whereNotNull('paid_at')
+                ->exists();
+            if ($coveredByReading) {
+                return true;
+            }
+            $reading = DownloadedReading::find($downloadedReadingId);
+            $derivedScheduleId = $reading ? (int) ($reading->schedule_id ?? 0) : 0;
+            if ($derivedScheduleId > 0 && $this->hasNullReadingPaymentForScheduleMonth($consumerZoneId, $derivedScheduleId)) {
+                return true;
+            }
+            return false;
+        }
+        if ($scheduleId) {
+            $readingIds = DownloadedReading::where('schedule_id', $scheduleId)->pluck('id');
+            if ($readingIds->isNotEmpty()) {
+                $coveredByReading = ConsumerPayment::where('consumer_id', $consumerZoneId)
+                    ->whereIn('reading_id', $readingIds)
+                    ->whereNotNull('paid_at')
+                    ->exists();
+                if ($coveredByReading) {
+                    return true;
+                }
+            }
+
+            return $this->hasNullReadingPaymentForScheduleMonth($consumerZoneId, (int) $scheduleId);
+        }
+
+        return false;
+    }
+
+    /**
+     * Legacy payment fallback: treat null-reading payments as coverage for the same schedule month.
+     */
+    private function hasNullReadingPaymentForScheduleMonth(int $consumerZoneId, int $scheduleId): bool
+    {
+        [$start, $end] = $this->getScheduleMonthRange($scheduleId);
+        if (!$start || !$end) {
+            return false;
+        }
+
+        return ConsumerPayment::where('consumer_id', $consumerZoneId)
+            ->whereNull('reading_id')
+            ->whereNotNull('paid_at')
+            ->whereBetween('paid_at', [$start->format('Y-m-d 00:00:00'), $end->format('Y-m-d 23:59:59')])
+            ->exists();
+    }
+
+    /**
+     * Legacy payment fallback for penalty allocation: sum penalty on null-reading payments in schedule month.
+     */
+    private function getNullReadingPenaltyPaidForScheduleMonth(int $consumerZoneId, int $scheduleId, ?Carbon $penaltyDate = null): float
+    {
+        [$start, $end] = $this->getScheduleMonthRange($scheduleId);
+        if (!$start || !$end) {
+            return 0.0;
+        }
+
+        $query = ConsumerPayment::where('consumer_id', $consumerZoneId)
+            ->whereNull('reading_id')
+            ->whereNotNull('paid_at')
+            ->whereBetween('paid_at', [$start->format('Y-m-d 00:00:00'), $end->format('Y-m-d 23:59:59')]);
+        if ($penaltyDate) {
+            $query->where('paid_at', '>=', $penaltyDate->copy()->startOfDay()->format('Y-m-d H:i:s'));
+        }
+
+        return (float) $query->sum('penalty');
+    }
+
+    /**
+     * Returns [monthStart, monthEnd] based on schedule bill_month (fallback: due_date/date).
+     */
+    private function getScheduleMonthRange(int $scheduleId): array
+    {
+        $schedule = MeterReadingSchedule::find($scheduleId);
+        if (!$schedule) {
+            return [null, null];
+        }
+
+        try {
+            if (!empty($schedule->bill_month)) {
+                $m = Carbon::parse($schedule->bill_month)->startOfMonth();
+                return [$m->copy()->startOfMonth(), $m->copy()->endOfMonth()];
+            }
+            if (!empty($schedule->due_date)) {
+                $m = Carbon::parse($schedule->due_date)->startOfMonth();
+                return [$m->copy()->startOfMonth(), $m->copy()->endOfMonth()];
+            }
+            if (!empty($schedule->date)) {
+                $m = Carbon::parse($schedule->date)->startOfMonth();
+                return [$m->copy()->startOfMonth(), $m->copy()->endOfMonth()];
+            }
+        } catch (\Throwable $e) {
+            return [null, null];
+        }
+
+        return [null, null];
+    }
+
+    /**
+     * BILLING/BILL row is unpaid until covered by a consumer_payments row (same reading or schedule).
+     */
+    private function isBillingRowUnpaid(ConsumerLedger $row, int $consumerZoneId): bool
+    {
+        if (! in_array((string) ($row->trans ?? ''), ['BILLING', 'BILL'], true)) {
+            return false;
+        }
+        if (((float) ($row->billamount ?? 0)) <= 0 && ((float) ($row->debit ?? 0)) <= 0) {
+            return false;
+        }
+
+        return ! $this->isScheduleCoveredByConsumerPayment(
+            $consumerZoneId,
+            $row->downloaded_reading_id ? (int) $row->downloaded_reading_id : null,
+            $row->schedule_id ? (int) $row->schedule_id : null
+        );
+    }
+
+    /**
+     * PENALTY row is unpaid unless penalties.paid_at is set or a payment recorded penalty for the schedule.
+     */
+    private function isPenaltyLedgerRowUnpaid(ConsumerLedger $row, int $consumerZoneId): bool
+    {
+        if ((string) ($row->trans ?? '') !== 'PENALTY') {
+            return false;
+        }
+        $amt = (float) ($row->penalty ?? 0);
+            if ($amt <= 0) {
+            $amt = (float) ($row->debit ?? 0);
+            }
+            if ($amt <= 0) {
+            return false;
+        }
+        if ($row->penalty_id) {
+            $pen = Penalty::find($row->penalty_id);
+            if ($pen && $pen->paid_at) {
+                return false;
+            }
+        }
+        if ($row->schedule_id) {
+            $readingIds = DownloadedReading::where('schedule_id', $row->schedule_id)->pluck('id');
+            $penaltyDate = null;
+            try {
+                if (!empty($row->date)) {
+                    $penaltyDate = Carbon::parse($row->date);
+                }
+            } catch (\Throwable $e) {
+                $penaltyDate = null;
+            }
+            $paidPenalty = 0.0;
+            if ($readingIds->isNotEmpty()) {
+                $readingPenaltyQuery = ConsumerPayment::where('consumer_id', $consumerZoneId)
+                    ->whereIn('reading_id', $readingIds)
+                    ->whereNotNull('paid_at');
+                if ($penaltyDate) {
+                    $readingPenaltyQuery->where('paid_at', '>=', $penaltyDate->copy()->startOfDay()->format('Y-m-d H:i:s'));
+                }
+                $paidPenalty += (float) $readingPenaltyQuery->sum('penalty');
+            }
+            $paidPenalty += $this->getNullReadingPenaltyPaidForScheduleMonth($consumerZoneId, (int) $row->schedule_id, $penaltyDate);
+            if ($paidPenalty + 0.005 >= $amt) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * DM debit is unpaid carried balance until the same schedule has a recorded payment (as BILLING).
+     */
+    private function isDmRowUnpaid(ConsumerLedger $row, int $consumerZoneId): bool
+    {
+        if ((string) ($row->trans ?? '') !== 'DM') {
+                        return false;
+                    }
+        if (((float) ($row->debit ?? 0)) <= 0) {
+            return false;
+        }
+
+        return ! $this->isScheduleCoveredByConsumerPayment(
+            $consumerZoneId,
+            $row->downloaded_reading_id ? (int) $row->downloaded_reading_id : null,
+            $row->schedule_id ? (int) $row->schedule_id : null
+        );
+    }
 
     private function getBillingBreakdownForConsumer(int $consumerId, string $viewType, $asOfDate = null, ?int $payMonths = null, ?string $selectedBillMonthYmd = null): array
     {
         $today = $asOfDate ? Carbon::parse($asOfDate) : Carbon::now();
-
-        // Unpaid BILLING rows (principal + meter rental)
-        $billingRows = ConsumerLedger::where('consumer_zone_id', $consumerId)
-            ->whereIn('trans', ['BILLING', 'BILL'])
-            ->where('billamount', '>', 0)
-            ->with('schedule:id,bill_month,due_date')
-            ->orderBy('date', 'asc')
-            ->orderBy('id', 'asc')
-            ->get();
-
-        $unpaid = $billingRows->whereNull('paid_at');
-        $unpaidCount = $unpaid->count();
-        // "Past-due" BILLING = due_date < asOfDate
-        $pastDueUnpaid = $unpaid->filter(function ($row) use ($today) {
-            $due = $row->due_date ? Carbon::parse($row->due_date) : null;
-            return $due && $today->greaterThan($due);
-        });
-        $pastDueCount = $pastDueUnpaid->count();
-
-        // Current month for breakdown: use selected bill month when provided (e.g. from "Select Bill Month to Pay"), else latest billing month
-        if ($selectedBillMonthYmd !== null && $selectedBillMonthYmd !== '') {
-            $currentMonth = $selectedBillMonthYmd;
-        } else {
-            $currentMonth = $billingRows->isEmpty() ? null : $billingRows->max(function ($row) {
-                $billMonth = $this->getBillMonthFromRow($row);
-                return $billMonth ? $billMonth->format('Y-m') : null;
-            });
-        }
-        $currentYear = $billingRows->isEmpty()
-            ? (int) $today->format('Y')
-            : (int) max(array_map(function ($row) {
-                /** @var ConsumerLedger $row */
-                $billMonth = $this->getBillMonthFromRow($row);
-                return $billMonth ? (int) $billMonth->format('Y') : (int) date('Y');
-            }, $billingRows->all()));
-
-        $monthlyPrincipal = (float) self::MONTHLY_PRINCIPAL;
-        $wmcPerMonth = (float) self::WMC_PER_MONTH;
-
-        // Unpaid PENALTY: ConsumerLedger PENALTY rows + Penalty model rows
-        $penaltyRows = ConsumerLedger::where('consumer_zone_id', $consumerId)
-            ->where('trans', 'PENALTY')
-            ->whereNull('paid_at')
-            ->orderBy('date', 'asc')
-            ->get();
-        $penaltyTotal = 0.0;
-        foreach ($penaltyRows as $prow) {
-            $amt = (float) ($prow->penalty ?? 0);
-            if ($amt <= 0) {
-                $amt = (float) ($prow->debit ?? 0);
+        $currentYear = (int) $today->format('Y');
+        $todayYmd = $today->format('Y-m-d');
+        $selectedMonthStart = null;
+        $selectedMonthEnd = null;
+        if (!empty($selectedBillMonthYmd)) {
+            try {
+                $selectedMonthStart = Carbon::createFromFormat('Y-m', $selectedBillMonthYmd)->startOfMonth();
+                $selectedMonthEnd = $selectedMonthStart->copy()->endOfMonth();
+            } catch (\Throwable $e) {
+                $selectedMonthStart = null;
+                $selectedMonthEnd = null;
             }
-            if ($amt <= 0) {
+        }
+        // Cycle reset (no paid_at): if latest PAYMENT before selected month has zero balance,
+        // treat that point as a new cycle and exclude older rows from arrears/current computations.
+        $cycleResetDateYmd = null;
+        if ($selectedMonthStart) {
+            $cycleResetEntry = ConsumerLedger::where('consumer_zone_id', $consumerId)
+                ->where('trans', 'PAYMENT')
+                ->whereNotNull('balance')
+                ->whereRaw('ABS(balance) < 0.01')
+                ->whereDate('date', '<', $selectedMonthStart->format('Y-m-d'))
+                ->orderBy('date', 'desc')
+                ->orderBy('id', 'desc')
+                ->first();
+            if ($cycleResetEntry && !empty($cycleResetEntry->date)) {
+                $cycleResetDateYmd = Carbon::parse($cycleResetEntry->date)->format('Y-m-d');
+            }
+        }
+        // When a bill month is explicitly selected, compute using that month's range
+        // instead of transaction_date cutoff so selected-month current bill is never excluded.
+        $calculationCutoffYmd = $selectedMonthEnd
+            ? $selectedMonthEnd->format('Y-m-d')
+            : $todayYmd;
+
+        /*
+         * Breakdown is NOT built from one total then split.
+         * 1) Latest unpaid BILLING only → Current Bill (billamount).
+         * 2) WMC = SUM(unpaid BILLING others) across all unpaid months.
+         * 3) Unpaid PENALTY rows → Penalty (excluded if already paid via consumer_payments / penalties.paid_at).
+         * 4) Arrears CY/PY = unpaid principal/carry only (older billing billamount + DM), no WMC/Penalty duplication.
+         * Payment history is reflected via which rows are still “unpaid” (consumer_payments coverage).
+         */
+        $ledgerQuery = ConsumerLedger::where('consumer_zone_id', $consumerId)
+            ->whereRaw('COALESCE(date, txtime) <= ?', [$calculationCutoffYmd . ' 23:59:59'])
+            ->orderBy('date', 'asc')
+            ->orderBy('id', 'asc');
+        if ($cycleResetDateYmd) {
+            $ledgerQuery->whereRaw('DATE(COALESCE(txtime, date)) > ?', [$cycleResetDateYmd]);
+        }
+        $ledgerRows = $ledgerQuery->get();
+
+        $currentBill = 0.0;
+        $arrearsCurrentYear = 0.0;
+        $arrearsPreviousYear = 0.0;
+        $waterMaintenanceCharge = 0.0;
+        $penalty = 0.0;
+
+        $unpaidBillingRows = $ledgerRows->filter(function (ConsumerLedger $row) use ($consumerId) {
+            return $this->isBillingRowUnpaid($row, $consumerId);
+        })->values();
+
+        if ($unpaidBillingRows->isNotEmpty()) {
+            $latestUnpaidDate = null;
+            foreach ($unpaidBillingRows as $row) {
+                $d = $row->date ? Carbon::parse($row->date)->format('Y-m-d') : null;
+                if ($d === null) {
+                    continue;
+                }
+                if ($latestUnpaidDate === null || $d > $latestUnpaidDate) {
+                    $latestUnpaidDate = $d;
+                }
+            }
+
+            // Latest unpaid billing only → Current Bill (principal only).
+            foreach ($unpaidBillingRows as $row) {
+                $rowDate = $row->date ? Carbon::parse($row->date)->format('Y-m-d') : null;
+                if ($rowDate === null || $latestUnpaidDate === null) {
+                    continue;
+                }
+                if ($rowDate !== $latestUnpaidDate) {
+                    continue;
+                }
+                $currentBill += round((float) ($row->billamount ?? 0), 2);
+            }
+
+            // WMC is the sum of "others" from ALL unpaid billing rows.
+            foreach ($unpaidBillingRows as $row) {
+                $waterMaintenanceCharge += round((float) ($row->others ?? 0), 2);
+            }
+
+            // Older unpaid billings → arrears principal only, by year.
+            // "others" is already represented in WMC, so do not duplicate in arrears.
+            foreach ($unpaidBillingRows as $row) {
+                $rowDate = $row->date ? Carbon::parse($row->date)->format('Y-m-d') : null;
+                if ($rowDate === null || $latestUnpaidDate === null) {
+                    $ba = (float) ($row->billamount ?? 0);
+                    if ($ba > 0) {
+                        $arrearsCurrentYear += round($ba, 2);
+                    }
+
+                    continue;
+                }
+                if ($rowDate === $latestUnpaidDate) {
+                    continue;
+                }
+                $ba = (float) ($row->billamount ?? 0);
+                $chunk = round($ba, 2);
+                if ($chunk <= 0) {
+                    continue;
+                }
+                if ((int) Carbon::parse($rowDate)->format('Y') === $currentYear) {
+                    $arrearsCurrentYear += $chunk;
+        } else {
+                    $arrearsPreviousYear += $chunk;
+                }
+            }
+        }
+
+        foreach ($ledgerRows as $row) {
+            if (! $row instanceof ConsumerLedger) {
                 continue;
             }
-            $penaltyTotal += $amt;
-        }
-        $unpaidPenaltyModels = Penalty::where('consumer_zone_id', $consumerId)->whereNull('paid_at')->get();
-        foreach ($unpaidPenaltyModels as $p) {
-            $penaltyTotal += (float) ($p->penalty_amount ?? 0);
-        }
-
-        if ($viewType === 'pre_due') {
-            // PRE-DUE:
-            // - Current Bill = actual billing amount for selected month from unpaid rows
-            // - Arrears — Current Year = unpaid principal where billing_year = current_year AND bill_month != currentMonth (exclude selected month)
-            // - Arrears — Previous Year = unpaid principal where billing_year < current_year
-            // - Penalty = all unpaid penalty rows
-            // - Water Maintenance Charge = unpaid months (same 1–3 month patterns as examples)
-            // Get actual bill amount for selected month from unpaid billing rows
-            $currentBill = 0.00;
-            if ($currentMonth !== null) {
-                $currentBillRow = $unpaid->first(function ($row) use ($currentMonth) {
-                    $billMonth = $this->getBillMonthFromRow($row);
-                    if (!$billMonth) {
-                        return false;
-                    }
-                    $billMonthYmd = $billMonth->format('Y-m');
-                    return $billMonthYmd === $currentMonth;
-                });
-                if ($currentBillRow) {
-                    $currentBill = (float) ($currentBillRow->billamount ?? 0);
+            if ($this->isDmRowUnpaid($row, $consumerId)) {
+                $dm = (float) ($row->debit ?? 0);
+                if ($dm <= 0) {
+                    continue;
+                }
+                $rowDate = $row->date ? Carbon::parse($row->date)->format('Y-m-d') : $calculationCutoffYmd;
+                if ((int) Carbon::parse($rowDate)->format('Y') === $currentYear) {
+                    $arrearsCurrentYear += round($dm, 2);
+                } else {
+                    $arrearsPreviousYear += round($dm, 2);
                 }
             }
-            // Penalty rows already exist only for past‑due bills, and our window (asOfDate)
-            // ensures we only include penalties that are "active" as of today.
-            $penalty = round($penaltyTotal, 2);
-            // Example patterns:
-            // 1 unpaid month → 20.00
-            // 2 unpaid months → 40.00
-            // 3 unpaid months → 60.00
-            $waterMaintenanceCharge = round($wmcPerMonth * $unpaidCount, 2);
-            // Year-based arrears: CY = current year (excluding selected month), PY = past years (e.g. 2016-2025 → PY, 2026 → CY)
-            $arrearsCurrentYear = round($unpaid->sum(function ($row) use ($currentYear, $currentMonth) {
-                $billMonth = $this->getBillMonthFromRow($row);
-                if (!$billMonth) {
-                    return 0;
-                }
-                $year = (int) $billMonth->format('Y');
-                $billMonthYmd = $billMonth->format('Y-m');
-                // Include only if: year === currentYear AND bill_month !== currentMonth (exclude selected month from arrears)
-                return ($year === $currentYear && $billMonthYmd !== $currentMonth) ? (float) ($row->billamount ?? 0) : 0;
-            }), 2);
-            $arrearsPreviousYear = round($unpaid->sum(function ($row) use ($currentYear) {
-                $billMonth = $this->getBillMonthFromRow($row);
-                $year = $billMonth ? (int) $billMonth->format('Y') : $currentYear;
-                return $year < $currentYear ? (float) ($row->billamount ?? 0) : 0;
-            }), 2);
-        } else {
-            // POST-DUE:
-            // - Current Bill            = 0
-            // - Water Maintenance       = unpaid months
-            // - Penalty                 = all unpaid penalty rows for past‑due bills
-            // - Arrears — Current Year  = unpaid principal where billing_year = current_year
-            // - Arrears — Previous Year = unpaid principal where billing_year < current_year
-            $currentBill = 0.00;
-            $penalty = round($penaltyTotal, 2);
-            $waterMaintenanceCharge = round($wmcPerMonth * $unpaidCount, 2);
-            $arrearsCurrentYear = round($unpaid->sum(function ($row) use ($currentYear) {
-                $billMonth = $this->getBillMonthFromRow($row);
-                $year = $billMonth ? (int) $billMonth->format('Y') : $currentYear;
-                return $year === $currentYear ? (float) ($row->billamount ?? 0) : 0;
-            }), 2);
-            $arrearsPreviousYear = round($unpaid->sum(function ($row) use ($currentYear) {
-                $billMonth = $this->getBillMonthFromRow($row);
-                $year = $billMonth ? (int) $billMonth->format('Y') : $currentYear;
-                return $year < $currentYear ? (float) ($row->billamount ?? 0) : 0;
-            }), 2);
         }
+
+        foreach ($ledgerRows as $row) {
+            if (! $row instanceof ConsumerLedger) {
+                continue;
+            }
+            if (! $this->isPenaltyLedgerRowUnpaid($row, $consumerId)) {
+                continue;
+            }
+            $p = (float) ($row->penalty ?? 0);
+            if ($p <= 0) {
+                $p = (float) ($row->debit ?? 0);
+            }
+            if ($p > 0) {
+                $penalty += round($p, 2);
+            }
+        }
+
+        $currentBill = round($currentBill, 2);
+        $arrearsCurrentYear = round(max(0, $arrearsCurrentYear), 2);
+        $arrearsPreviousYear = round(max(0, $arrearsPreviousYear), 2);
+        $waterMaintenanceCharge = round(max(0, $waterMaintenanceCharge), 2);
+        $penalty = round(max(0, $penalty), 2);
+
+        $advancesAgg = DB::table('consumer_ledgers')
+            ->where('consumer_zone_id', $consumerId)
+            ->whereRaw('COALESCE(date, txtime) <= ?', [$calculationCutoffYmd . ' 23:59:59']);
+        if ($cycleResetDateYmd) {
+            $advancesAgg->whereRaw('DATE(COALESCE(txtime, date)) > ?', [$cycleResetDateYmd]);
+        }
+        $advancesRow = $advancesAgg->selectRaw(
+            'CASE WHEN SUM(COALESCE(credit,0)) > SUM(COALESCE(debit,0)) THEN SUM(COALESCE(credit,0)) - SUM(COALESCE(debit,0)) ELSE 0 END as adv'
+        )->first();
+        $advances = round((float) ($advancesRow->adv ?? 0), 2);
+
+        $unpaidCount = $unpaidBillingRows->count();
+        $pastDueCount = 0;
 
         $result = [
             'current_bill' => round($currentBill, 2),
@@ -767,18 +987,17 @@ class BillingProcessController extends Controller
             'water_maintenance_charge' => $waterMaintenanceCharge,
             'arrears_cy' => $arrearsCurrentYear,
             'arrears_py' => $arrearsPreviousYear,
+            'advances' => $advances,
             'unpaid_count' => $unpaidCount,
             'past_due_count' => $pastDueCount,
             'view_type' => $viewType,
         ];
 
         if ($payMonths !== null && $payMonths >= 1 && $payMonths <= 3) {
-            $principalPay = $payMonths * $monthlyPrincipal;
-            $result['amount_due'] = round($principalPay + $penalty + $waterMaintenanceCharge, 2);
+            $result['amount_due'] = round($currentBill + $arrearsCurrentYear + $arrearsPreviousYear + $penalty + $waterMaintenanceCharge - $advances, 2);
             $result['pay_months'] = $payMonths;
-            $remainingPrincipal = max(0, $unpaidCount - $payMonths) * $monthlyPrincipal;
-            $result['arrears_cy_after_pay'] = round($remainingPrincipal, 2);
-            $result['arrears_py_after_pay'] = 0.00;
+            $result['arrears_cy_after_pay'] = round($arrearsCurrentYear, 2);
+            $result['arrears_py_after_pay'] = round($arrearsPreviousYear, 2);
         }
 
         return $result;
@@ -786,7 +1005,7 @@ class BillingProcessController extends Controller
 
     /**
      * Public entry point for breakdown data (used by MeterReadingController::getBillMonthDetails).
-     * Returns same array as getBillingBreakdownForConsumer so payment form always uses database (paid_at only).
+     * Latest unpaid BILLING → current bill + WMC; unpaid penalty; remainder → arrears by year (payment history via coverage).
      * @param string|null $selectedBillMonthYmd selected bill month in Y-m format (e.g. 2025-12); when set, Arrears PY = prior unpaid months for that month (1st/2nd/3rd month format)
      */
     public function getBillingBreakdownData(int $consumerId, string $viewType, $asOfDate = null, ?int $payMonths = null, ?string $selectedBillMonthYmd = null): array
@@ -1043,9 +1262,171 @@ class BillingProcessController extends Controller
         $request->validate([
             'format' => 'required|in:excel,pdf',
             'zone' => 'nullable|string',
+            'process_type' => 'nullable|string',
+            'reading_date' => 'nullable|date',
         ]);
 
         $zone = $request->input('zone');
+        $processType = $request->input('process_type');
+        $readingDateInput = $request->input('reading_date');
+
+        // Bill Printing export must match the on-screen Bill Printing table exactly.
+        if ($processType === 'Bill Printing') {
+            if (!$zone || $zone === 'all') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Zone is required for Bill Printing export.',
+                ], 422);
+            }
+            if (!$readingDateInput) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Reading Date is required for Bill Printing export.',
+                ], 422);
+            }
+
+            $readingDate = Carbon::parse($readingDateInput)->format('Y-m-d');
+
+            $downloadedRows = DB::table('downloaded_readings as dr')
+                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+                ->select([
+                    'dr.id as downloaded_id',
+                    DB::raw('COALESCE(mrs.account_number, dr.account_number) as account_number'),
+                    DB::raw('COALESCE(mrs.account_name, dr.account_name) as account_name'),
+                    'mrs.meter_number',
+                    'dr.consumption as volume',
+                    'dr.current_bill as downloaded_current_bill',
+                ])
+                ->where(function($query) use ($zone) {
+                    $query->where(function($qq) use ($zone) {
+                        $qq->where('dr.zone', $zone)
+                           ->orWhereRaw('LPAD(dr.zone, 3, "0") = ?', [$zone])
+                           ->orWhereRaw('TRIM(LEADING "0" FROM dr.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
+                    })
+                    ->orWhere(function($qq) use ($zone) {
+                        $qq->whereNotNull('mrs.zone')
+                           ->where(function($qqq) use ($zone) {
+                               $qqq->where('mrs.zone', $zone)
+                                   ->orWhereRaw('LPAD(mrs.zone, 3, "0") = ?', [$zone])
+                                   ->orWhereRaw('TRIM(LEADING "0" FROM mrs.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
+                           });
+                    });
+                })
+                ->whereDate('dr.reading_date', $readingDate)
+                ->orderByDesc('dr.id')
+                ->get();
+
+            // Match table behavior: latest downloaded row per account, then account-tail ascending.
+            $rowsByAccount = collect($downloadedRows)
+                ->unique(function ($row) {
+                    return strtoupper(trim((string) ($row->account_number ?? '')));
+                })
+                ->values();
+
+            $tailNumber = function ($accountNumber) {
+                $parts = explode('-', (string) $accountNumber);
+                $tail = trim((string) end($parts));
+                return is_numeric($tail) ? (int) $tail : PHP_INT_MAX;
+            };
+
+            $sortedRows = $rowsByAccount->sort(function ($a, $b) use ($tailNumber) {
+                $na = $tailNumber($a->account_number ?? '');
+                $nb = $tailNumber($b->account_number ?? '');
+                if ($na === $nb) {
+                    return strnatcasecmp((string) ($a->account_number ?? ''), (string) ($b->account_number ?? ''));
+                }
+                return $na <=> $nb;
+            })->values();
+
+            $records = $sortedRows->map(function ($item) {
+                $currentBill = (float) ($item->downloaded_current_bill ?? 0);
+                $maintenanceCharge = $currentBill > 0 ? 20.00 : 0.00;
+                $totalAmount = $currentBill + $maintenanceCharge;
+
+                return [
+                    'Account #' => $item->account_number ?? '',
+                    'Account Name' => $item->account_name ?? '',
+                    'Meter #' => $item->meter_number ?? '',
+                    'Consumption' => number_format((float) ($item->volume ?? 0), 0),
+                    'Current Bill' => number_format($currentBill, 2),
+                    'Water Maintenance Charge' => number_format($maintenanceCharge, 2),
+                    'Total Amount' => number_format($totalAmount, 2),
+                ];
+            });
+
+            if ($records->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No bill printing records found to export for the selected zone and reading date.',
+                ], 404);
+            }
+
+            $zoneText = "Zone-{$zone}";
+            $dateText = Carbon::parse($readingDate)->format('Ymd');
+            $filename = "Bill-Printing-{$zoneText}-{$dateText}-" . Carbon::now()->format('His') . '.xlsx';
+
+            if (class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
+                return \Maatwebsite\Excel\Facades\Excel::download(
+                    new class($records) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle {
+                        protected $data;
+
+                        public function __construct($data)
+                        {
+                            $this->data = collect($data);
+                        }
+
+                        public function collection()
+                        {
+                            return $this->data;
+                        }
+
+                        public function headings(): array
+                        {
+                            return [
+                                'Account #',
+                                'Account Name',
+                                'Meter #',
+                                'Consumption',
+                                'Current Bill',
+                                'Water Maintenance Charge',
+                                'Total Amount',
+                            ];
+                        }
+
+                        public function title(): string
+                        {
+                            return 'Bill Printing';
+                        }
+                    },
+                    $filename
+                );
+            }
+
+            $csvFilename = str_replace('.xlsx', '.csv', $filename);
+            $headers = [
+                'Content-Type' => 'text/csv',
+                'Content-Disposition' => "attachment; filename=\"{$csvFilename}\"",
+            ];
+
+            $callback = function () use ($records) {
+                $file = fopen('php://output', 'w');
+                fputcsv($file, [
+                    'Account #',
+                    'Account Name',
+                    'Meter #',
+                    'Consumption',
+                    'Current Bill',
+                    'Water Maintenance Charge',
+                    'Total Amount',
+                ]);
+                foreach ($records as $record) {
+                    fputcsv($file, array_values($record));
+                }
+                fclose($file);
+            };
+
+            return response()->stream($callback, 200, $headers);
+        }
 
         // Build base query for schedules in the selected zone (or all zones)
         $query = MeterReadingSchedule::query()
@@ -1066,7 +1447,7 @@ class BillingProcessController extends Controller
             ], 404);
         }
 
- // Map schedules to flat array for export (only required columns)
+              // Map schedules to flat array for export (only required columns)
         $records = $schedules->map(function (MeterReadingSchedule $item) {
             $currentBill = $item->current_bill !== null ? (float) $item->current_bill : 0.0;
             $arrears = $item->arrears !== null ? (float) $item->arrears : 0.0;
@@ -1272,7 +1653,7 @@ class BillingProcessController extends Controller
             $query->where('bill_month', Carbon::parse($billMonth)->format('Y-m-d'));
         }
 
-        $schedules = $query->orderByAccountNumberTail()->get();
+        $schedules = $query->orderBy('sedr_number')->get();
 
         return response()->json([
             'success' => true,
@@ -2633,6 +3014,110 @@ class BillingProcessController extends Controller
     /**
      * Show consumer master list with filters
      */
+    // public function consumerMasterList(Request $request)
+    // {
+    //     $filters = $request->only([
+    //         'search',
+    //         'zone',
+    //         'status',
+    //         'senior_citizen',
+    //         'meter_number',
+    //         'address',
+    //         'meter_location',
+    //         'ledger_status',
+    //     ]);
+
+    //     $zones = ConsumerZoneOne::select('zone_code')
+    //         ->distinct()
+    //         ->orderBy('zone_code')
+    //         ->pluck('zone_code');
+
+    //     $baseQuery = ConsumerZoneOne::query();
+
+    //     if (!empty($filters['search'])) {
+    //         $searchTerm = $filters['search'];
+    //         $baseQuery->where(function ($q) use ($searchTerm) {
+    //             $q->where('account_name', 'like', '%' . $searchTerm . '%')
+    //               ->orWhere('account_no', 'like', '%' . $searchTerm . '%');
+    //         });
+    //     }
+
+    //     if (!empty($filters['zone'])) {
+    //         $baseQuery->where('zone_code', $filters['zone']);
+    //     }
+
+    //     if (!empty($filters['status'])) {
+    //         $statusValue = $filters['status'];
+
+    //         $statusMap = [
+    //             'Active' => ['A', 'ACTIVE', 'Active', 'A - ACTIVE'],
+    //              'Pending' => ['P', 'PENDING', 'Pending'],
+    //              'Disconnected' => ['X', 'DISCONNECTED', 'Disconnected', 'D'],
+    //         ];
+
+    //         if (isset($statusMap[$statusValue])) {
+    //             $baseQuery->whereIn('status_code', $statusMap[$statusValue]);
+    //         } else {
+    //             $baseQuery->where('status_code', $statusValue);
+    //         }
+    //     }
+
+    //     if (!empty($filters['senior_citizen']) && Schema::hasColumn('consumer_zone', 'is_senior_citizen')) {
+    //         $baseQuery->where('is_senior_citizen', true);
+    //     }
+
+    //     if (!empty($filters['meter_number'])) {
+    //         $baseQuery->where('meter_number', 'like', '%' . $filters['meter_number'] . '%');
+    //     }
+
+    //     if (!empty($filters['address'])) {
+    //         $baseQuery->where(function ($q) use ($filters) {
+    //             $q->where('address1', 'like', '%' . $filters['address'] . '%');
+
+    //             if (Schema::hasColumn('consumer_zone', 'address_2')) {
+    //                 $q->orWhere('address_2', 'like', '%' . $filters['address'] . '%');
+    //             }
+    //         });
+    //     }
+
+    //     if (!empty($filters['meter_location']) && Schema::hasColumn('consumer_zone', 'meter_location')) {
+    //         $baseQuery->where('meter_location', 'like', '%' . $filters['meter_location'] . '%');
+    //     }
+
+    //     if (!empty($filters['ledger_status'])) {
+    //         if ($filters['ledger_status'] === 'missing') {
+    //             $baseQuery->whereDoesntHave('ledgers');
+    //         } elseif ($filters['ledger_status'] === 'imported') {
+    //             $baseQuery->whereHas('ledgers');
+    //         }
+    //     }
+
+    //     $consumersQuery = (clone $baseQuery)->orderBy('zone_code');
+
+    //     if (Schema::hasColumn('consumer_zone', 'route')) {
+    //         $consumersQuery->orderBy('route');
+    //     }
+
+    //     if (Schema::hasColumn('consumer_zone', 'sequence')) {
+    //         $consumersQuery->orderBy('sequence');
+    //     }
+
+    //     // Eager load ledger count to check if consumer has imported ledger entries
+    //     $consumers = $consumersQuery->withCount('ledgers')->get();
+
+    //     $summaryByZone = (clone $baseQuery)
+    //         ->select('zone_code as zone', DB::raw('COUNT(*) as total'))
+    //         ->groupBy('zone_code')
+    //         ->orderBy('zone_code')
+    //         ->get();
+
+    //     return view('reports.system-report.consumer-master-list', [
+    //         'zones' => $zones,
+    //         'consumers' => $consumers,
+    //         'summaryByZone' => $summaryByZone,
+    //         'filters' => $filters,
+    //     ]);
+    // }
     public function consumerMasterList(Request $request)
     {
         $filters = $request->only([
@@ -3024,11 +3509,27 @@ class BillingProcessController extends Controller
                     ]);
                 }
 
-                // Apply payment to unpaid charge rows (paid_at is the only truth)
-                // Skip on update: only for new payments so we don't touch already-paid ledger rows.
+                // Separate sundries from the water-bill amount.
+                // paid_at reconciliation should use bill-only amount to avoid over-marking.
+                $sundriesTotal = 0;
+                foreach ($validated['sundries'] ?? [] as $s) {
+                    $sundriesTotal += round((float)($s['amount'] ?? 0), 2);
+                }
+                $billPaymentAmount = max(0, round(($validated['amount_due'] ?? 0) - $sundriesTotal, 2));
+
+                // Separate sundries from the water-bill amount.
+                // paid_at reconciliation should use bill-only amount to avoid over-marking.
+                $sundriesTotal = 0;
+                foreach ($validated['sundries'] ?? [] as $s) {
+                    $sundriesTotal += round((float)($s['amount'] ?? 0), 2);
+                }
+                $billPaymentAmount = max(0, round(($validated['amount_due'] ?? 0) - $sundriesTotal, 2));
+
+                // Apply payment to unpaid charge rows (paid_at is the only truth).
+                // Run for both new and update so legacy records with missing paid_at can be reconciled.
                 // Order: PY (previous year) billing first, then penalty (ledger + Penalty model), then CY (current year) billing (respect pay_months).
-                if (!$isUpdate && $consumerId) {
-                    $remaining = (float)($validated['amount_due'] ?? 0);
+                if ($consumerId) {
+                    $remaining = $billPaymentAmount;
                     $payMonths = isset($validated['pay_months']) ? (int) $validated['pay_months'] : null;
                     $maxBillingRowsToMark = ($payMonths >= 1 && $payMonths <= 3) ? $payMonths : PHP_INT_MAX;
 
@@ -3042,13 +3543,32 @@ class BillingProcessController extends Controller
                         ->get();
                     $currentYear = $unpaidBillingRows->isEmpty()
                         ? (int) Carbon::now()->format('Y')
-                        : (int) $unpaidBillingRows->max(fn ($row) => $this->getBillMonthFromRow($row) ? (int) $this->getBillMonthFromRow($row)->format('Y') : (int) date('Y'));
-                    $pyBilling = $unpaidBillingRows->filter(fn ($row) => ($this->getBillMonthFromRow($row)?->format('Y') ?? $currentYear) < $currentYear);
-                    $cyBilling = $unpaidBillingRows->filter(fn ($row) => ($this->getBillMonthFromRow($row)?->format('Y') ?? $currentYear) >= $currentYear);
+                        : (int) $unpaidBillingRows->max(function ($row) {
+                            if ($row instanceof ConsumerLedger) {
+                                $billMonth = $this->getBillMonthFromRow($row);
+                                return $billMonth ? (int) $billMonth->format('Y') : (int) date('Y');
+                            }
+                            return (int) date('Y');
+                        });
+                    $pyBilling = $unpaidBillingRows->filter(function ($row) use ($currentYear) {
+                        if ($row instanceof ConsumerLedger) {
+                            return (($this->getBillMonthFromRow($row)?->format('Y')) ?? $currentYear) < $currentYear;
+                        }
+                        return false;
+                    });
+                    $cyBilling = $unpaidBillingRows->filter(function ($row) use ($currentYear) {
+                        if ($row instanceof ConsumerLedger) {
+                            return (($this->getBillMonthFromRow($row)?->format('Y')) ?? $currentYear) >= $currentYear;
+                        }
+                        return false;
+                    });
 
                     // 1) PY: set paid_at for previous-year unpaid BILLING rows when fully covered
                     /** @var ConsumerLedger $billingRow */
                     foreach ($pyBilling as $billingRow) {
+                        if (!($billingRow instanceof ConsumerLedger)) {
+                            continue;
+                        }
                         $principal = (float)($billingRow->billamount ?? 0);
                         $wmc = (float)($billingRow->others ?? 0);
                         $totalCharge = $principal + $wmc;
@@ -3073,6 +3593,9 @@ class BillingProcessController extends Controller
                         ->orderBy('id', 'asc')
                         ->get();
                     foreach ($unpaidPenaltyRows as $penaltyRow) {
+                        if (!($penaltyRow instanceof ConsumerLedger)) {
+                            continue;
+                        }
                         $amt = (float)($penaltyRow->penalty ?? 0);
                         if ($amt <= 0) $amt = (float)($penaltyRow->debit ?? 0);
                         if ($amt <= 0) continue;
@@ -3088,11 +3611,13 @@ class BillingProcessController extends Controller
                     // 3) Penalty model: set paid_at when fully covered
                     $unpaidPenaltyModels = Penalty::where('consumer_zone_id', $consumerId)->whereNull('paid_at')->orderBy('date', 'asc')->orderBy('id', 'asc')->get();
                     foreach ($unpaidPenaltyModels as $p) {
+                        if (!($p instanceof Penalty)) {
+                            continue;
+                        }
                         $amt = (float)($p->penalty_amount ?? 0);
                         if ($amt <= 0) continue;
                         if ($remaining + 0.009 >= $amt) {
-                            $p->paid_at = $paidAt;
-                            $p->save();
+                            Penalty::where('id', $p->id)->update(['paid_at' => $paidAt]);
                             $remaining -= $amt;
                         } else {
                             break;
@@ -3102,6 +3627,9 @@ class BillingProcessController extends Controller
                     // 4) CY: set paid_at for current-year unpaid BILLING rows (respect pay_months)
                     $billingRowsMarked = 0;
                     foreach ($cyBilling as $billingRow) {
+                        if (!($billingRow instanceof ConsumerLedger)) {
+                            continue;
+                        }
                         if ($billingRowsMarked >= $maxBillingRowsToMark) break;
                         $principal = (float)($billingRow->billamount ?? 0);
                         $wmc = (float)($billingRow->others ?? 0);
@@ -3214,13 +3742,8 @@ class BillingProcessController extends Controller
                 }
                 }
 
-                // Separate sundries total from the water-bill payment so only the
-                // bill portion is credited to consumer_ledgers; sundries go to lro_ledger only.
-                $sundriesTotal = 0;
-                foreach ($validated['sundries'] ?? [] as $s) {
-                    $sundriesTotal += round((float)($s['amount'] ?? 0), 2);
-                }
-                $billPaymentAmount = max(0, round($validated['amount_due'] - $sundriesTotal, 2));
+                // billPaymentAmount already computed above (amount_due - sundriesTotal)
+                // and reused here for the PAYMENT ledger row credit.
 
                 // Create or update ConsumerLedger PAYMENT (bill portion only; skip for sundry-only payments)
                 if ($consumerId && $billPaymentAmount > 0) {
