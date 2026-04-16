@@ -1444,6 +1444,7 @@ class MeterReadingController extends Controller
             'name' => $reading->account_name ?? $reading->schedule_account_name ?? '',
             'zone' => $reading->zone ?? '',
             'category' => $reading->category ?? '',
+            'consumer_category' => $consumerForAddress?->category_code,
             'address' => $consumerForAddress?->address1 ?? ($reading->address ?? ''),
             'bill_disc_percent' => $consumerForAddress?->bill_disc_percent,
             'osca_id_no' => $consumerForAddress?->osca_id_no,
@@ -4153,6 +4154,79 @@ class MeterReadingController extends Controller
             }
         }
 
+        // Senior discount based on unpaid BILLING volume from consumer_ledgers.
+        // Rule:
+        // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition).
+        // - unpaid_volume = SUM(volume of those rows)
+        // - capped_volume = min(unpaid_volume, 30)
+        // - senior_discount = lookup_table[capped_volume] by consumer category
+        if (!($orNumberInput !== '' && $orPayment) && $paymentStatus !== 'paid') {
+            try {
+                $billingRows = DB::table('consumer_ledgers as cl')
+                    ->where('cl.consumer_zone_id', $consumer->id)
+                    ->whereIn(DB::raw("UPPER(TRIM(cl.trans))"), ['BILLING', 'BILL'])
+                    ->whereNotNull('cl.volume')
+                    ->where('cl.volume', '!=', '')
+                    ->select('cl.id', 'cl.schedule_id', 'cl.due_date', 'cl.paid_at', 'cl.volume')
+                    ->get();
+
+                $unpaidVolume = 0.0;
+                foreach ($billingRows as $billingRow) {
+                    $paidAt = $billingRow->paid_at ?? null;
+                    $isMarkedPaid = !($paidAt === null || (is_string($paidAt) && trim($paidAt) === ''));
+
+                    if (!$isMarkedPaid) {
+                        $hasPaymentForSameCycle = DB::table('consumer_ledgers as pay')
+                            ->where('pay.consumer_zone_id', $consumer->id)
+                            ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
+                            ->where(function ($q) use ($billingRow) {
+                                if (!empty($billingRow->schedule_id)) {
+                                    $q->orWhere('pay.schedule_id', $billingRow->schedule_id);
+                                }
+                                if (!empty($billingRow->due_date)) {
+                                    $q->orWhere('pay.due_date', $billingRow->due_date);
+                                }
+                            })
+                            ->whereRaw('COALESCE(pay.credit, 0) > 0')
+                            ->exists();
+
+                        $isMarkedPaid = $hasPaymentForSameCycle;
+                    }
+
+                    if (!$isMarkedPaid) {
+                        $unpaidVolume += (float) $billingRow->volume;
+                    }
+                }
+
+                if ($unpaidVolume > 0.0) {
+                    $cappedVolume = min(max($unpaidVolume, 0.0), 30.0);
+                    $volumeKey = (int) floor($cappedVolume + 1e-6);
+
+                    $residentialDiscountTable = [
+                        0 => 9.75, 1 => 9.75, 2 => 9.75, 3 => 9.75, 4 => 9.75, 5 => 9.75,
+                        6 => 9.75, 7 => 9.75, 8 => 9.75, 9 => 9.75, 10 => 9.75,
+                        11 => 10.83, 12 => 11.91, 13 => 12.99, 14 => 14.07, 15 => 15.15,
+                        16 => 16.23, 17 => 17.31, 18 => 18.39, 19 => 19.47, 20 => 20.55,
+                        21 => 21.74, 22 => 22.92, 23 => 24.11, 24 => 25.30, 25 => 26.49,
+                        26 => 27.68, 27 => 28.86, 28 => 30.05, 29 => 31.24, 30 => 32.42,
+                    ];
+                    $commercialDiscountTable = [
+                        0 => 12.19, 1 => 12.19, 2 => 12.19, 3 => 12.19, 4 => 12.19, 5 => 12.19,
+                        6 => 12.19, 7 => 12.19, 8 => 12.19, 9 => 12.19, 10 => 12.19,
+                        11 => 13.54, 12 => 14.89, 13 => 16.24, 14 => 17.59, 15 => 18.94,
+                        16 => 20.29, 17 => 21.64, 18 => 22.99, 19 => 24.34, 20 => 25.69,
+                        21 => 27.17, 22 => 28.66, 23 => 30.14, 24 => 31.62, 25 => 33.11,
+                        26 => 34.59, 27 => 36.08, 28 => 37.56, 29 => 39.05, 30 => 40.53,
+                    ];
+                    $categoryCode = trim((string) ($consumer->category_code ?? ''));
+                    $discountTable = $categoryCode === '32' ? $commercialDiscountTable : $residentialDiscountTable;
+                    $seniorCitizenDiscount = round((float) ($discountTable[$volumeKey] ?? 0), 2);
+                }
+            } catch (\Throwable $e) {
+                // Keep existing seniorCitizenDiscount when lookup fails.
+            }
+        }
+
         // Final reconciliation for non-explicit-paid-OR flows vs displayed ledger balance:
         // - If breakdown sum > balance: trim buckets (existing behavior).
         // - If breakdown sum < balance: add shortfall to Arrears — CY (partial payments / coverage gaps vs running balance).
@@ -4217,10 +4291,14 @@ class MeterReadingController extends Controller
 
         // Resolve downloaded_reading id for the selected bill month so the frontend can submit payment for that month (avoids "Payment already exists" when paying December after November).
         $downloadedId = null;
+        $selectedConsumption = null;
         if (!empty($schedulesInRange) && $schedulesInRange->isNotEmpty()) {
             $firstReading = \App\Models\DownloadedReading::whereIn('schedule_id', $schedulesInRange)->first();
             if ($firstReading) {
                 $downloadedId = $firstReading->id;
+                if (isset($firstReading->consumption) && $firstReading->consumption !== null && $firstReading->consumption !== '') {
+                    $selectedConsumption = (float) $firstReading->consumption;
+                }
             }
         }
 
@@ -4239,6 +4317,7 @@ class MeterReadingController extends Controller
                 'arrears_cy' => round($arrearsCy, 2),
                 'arrears_py' => round($arrearsPy, 2),
                 'senior_citizen_discount' => round($seniorCitizenDiscount, 2),
+                'current_consumption' => $selectedConsumption,
                 'payment_status' => $paymentStatus,
                 'downloaded_id' => $downloadedId,
             ], $dateRangeMode ? [

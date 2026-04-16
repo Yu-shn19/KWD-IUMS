@@ -743,8 +743,12 @@
             let currentDownloadedId = null;
             let currentBalanceValue = 0;
             let latestBillMonth = null; // Store the latest/current bill month
+            let currentBillConsumption = null; // Consumption of the loaded bill month (resets when a different month is loaded)
+            let currentAccountCategory = null; // Consumer category code from consumer_zone (12=residential, 32=commercial)
+            let latestServerSeniorDiscount = 0; // Ledger-based senior discount returned by backend
             let isLoadingFromMonthSelector = false; // Flag to prevent populateFromLookup from overwriting penalty
             let arrearsPreviousManuallyEdited = false; // Flag to track if user manually edited Arrears — Previous Month
+            const SENIOR_DISCOUNT_LIMIT_CONSUMPTION = 30;
 
             const disableWheelStepChange = (input) => {
                 if (!input || input.type !== 'number') return;
@@ -840,6 +844,50 @@
                 return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
             };
 
+            const getConsumptionFromPayload = (...sources) => {
+                const candidateKeys = [
+                    'consumption',
+                    'current_consumption',
+                    'monthly_consumption',
+                    'bill_consumption',
+                    'cubic_meter_used',
+                    'usage',
+                    'cu_m'
+                ];
+
+                for (const source of sources) {
+                    if (!source || typeof source !== 'object') continue;
+                    for (const key of candidateKeys) {
+                        const value = source[key];
+                        const numeric = parseFloat(value);
+                        if (Number.isFinite(numeric) && numeric >= 0) {
+                            return numeric;
+                        }
+                    }
+                }
+                return null;
+            };
+
+            const getSeniorDiscountByConsumption = (consumption, categoryCodeRaw) => {
+                const normalizedConsumption = Math.max(Math.floor(parseFloat(consumption) || 0), 0);
+                const cappedConsumption = Math.min(normalizedConsumption, SENIOR_DISCOUNT_LIMIT_CONSUMPTION);
+                const categoryCode = String(categoryCodeRaw ?? '').trim();
+
+                const residentialTable = {
+                    0: 9.75, 1: 9.75, 2: 9.75, 3: 9.75, 4: 9.75, 5: 9.75, 6: 9.75, 7: 9.75, 8: 9.75, 9: 9.75, 10: 9.75,
+                    11: 10.83, 12: 11.91, 13: 12.99, 14: 14.07, 15: 15.15, 16: 16.23, 17: 17.31, 18: 18.39, 19: 19.47, 20: 20.55,
+                    21: 21.74, 22: 22.92, 23: 24.11, 24: 25.30, 25: 26.49, 26: 27.68, 27: 28.86, 28: 30.05, 29: 31.24, 30: 32.42
+                };
+                const commercialTable = {
+                    0: 12.19, 1: 12.19, 2: 12.19, 3: 12.19, 4: 12.19, 5: 12.19, 6: 12.19, 7: 12.19, 8: 12.19, 9: 12.19, 10: 12.19,
+                    11: 13.54, 12: 14.89, 13: 16.24, 14: 17.59, 15: 18.94, 16: 20.29, 17: 21.64, 18: 22.99, 19: 24.34, 20: 25.69,
+                    21: 27.17, 22: 28.66, 23: 30.14, 24: 31.62, 25: 33.11, 26: 34.59, 27: 36.08, 28: 37.56, 29: 39.05, 30: 40.53
+                };
+
+                const table = categoryCode === '32' ? commercialTable : residentialTable;
+                return Math.max(parseFloat(table[cappedConsumption]) || 0, 0);
+            };
+
             const renderScDiscountLedgerText = (account) => {
                 if (!scDiscountLedgerText) return;
                 const rawPercent = String(account?.bill_disc_percent ?? '').trim();
@@ -856,6 +904,18 @@
                 const dateDisplay = formatLongDate(account?.bill_disc_updated_at);
                 scDiscountLedgerText.textContent = dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
                 scDiscountLedgerText.classList.remove('d-none');
+            };
+
+            // Track Senior eligibility for the currently loaded account.
+            let currentAccountIsSenior = false;
+            const isSeniorConsumerAccount = (account) => {
+                const rawPercent = String(account?.bill_disc_percent ?? '').trim();
+                const normalizedPercent = rawPercent.toUpperCase();
+                const percentNum = parseFloat(rawPercent);
+                const isSc = normalizedPercent === 'SC DISCOUNT'
+                    || (Number.isFinite(percentNum) && Math.abs(percentNum - 5) < 0.001);
+                const oscaId = String(account?.osca_id_no ?? account?.osca_id ?? '').trim();
+                return !!(isSc && oscaId);
             };
 
             if (openBamSearchModalBtn) {
@@ -910,6 +970,8 @@
                         lastLookupKey = null;
                         currentDownloadedId = null;
                         latestBillMonth = null;
+                        currentBillConsumption = null;
+                        latestServerSeniorDiscount = 0;
                         isLoadingFromMonthSelector = false;
                         arrearsPreviousManuallyEdited = false;
                         if (updatePaymentBtn) updatePaymentBtn.disabled = true;
@@ -1225,6 +1287,9 @@
                 }
                 
                 bamSearchAccountName = null;
+                currentBillConsumption = null;
+                currentAccountCategory = null;
+                latestServerSeniorDiscount = 0;
                 updateTotals();
             };
 
@@ -1283,52 +1348,22 @@
                 }
             });
 
-            // Manual Senior Citizen Discount (5% of eligible water charges only)
-            // User must enable it via checkbox - not all consumers are senior citizens
+            // Senior Citizen Discount: enable/disable and auto-compute when checked.
+            // If backend already provided `senior_citizen_discount`, keep it.
+            // Otherwise, compute from consumption lookup/cap on the client.
             const applySeniorCitizenDiscount = () => {
                 const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
-                const currentBillField = document.getElementById('fieldCurrentBill');
                 const enableCheckbox = document.getElementById('enableSeniorDiscount');
                 
-                if (!seniorDiscountField || !currentBillField || !enableCheckbox) {
+                if (!seniorDiscountField || !enableCheckbox) {
                     return;
                 }
 
-                // Base for Senior Citizen Discount:
-                // Apply ONLY to:
-                // - Current Bill
-                // - Arrears — Current Year
-                // - Arrears — Previous Year
-                //
-                // Do NOT apply discount to:
-                // - Penalty
-                // - Water Maintenance Charge
-                // - Advances
-                // - Other fees/materials/charges
-                const discountBaseIds = [
-                    'fieldCurrentBill',
-                    'fieldArrearsCurrent',
-                    'fieldArrearsPrevious'
-                ];
-
                 if (enableCheckbox.checked) {
-                    let discountBaseTotal = 0;
-                    discountBaseIds.forEach(id => {
-                        const el = document.getElementById(id);
-                        if (el) {
-                            discountBaseTotal += Math.max(parseNumeric(el.value), 0);
-                        }
-                    });
-
-                    if (discountBaseTotal > 0) {
-                        // Calculate 5% of the computed total charges
-                        const discountAmount = discountBaseTotal * 0.05;
-                    setNumberFieldValue(seniorDiscountField, discountAmount);
-                    seniorDiscountField.readOnly = false; // Allow manual adjustment
-                    } else {
-                        setNumberFieldValue(seniorDiscountField, 0);
-                        seniorDiscountField.readOnly = true;
-                    }
+                    // Same as penalty flow: value comes from backend ledger computation.
+                    setNumberFieldValue(seniorDiscountField, Math.max(parseNumeric(latestServerSeniorDiscount), 0));
+                    // Keep editable so cashier can adjust if needed.
+                    seniorDiscountField.readOnly = false;
                 } else {
                     // Set to 0 when disabled
                     setNumberFieldValue(seniorDiscountField, 0);
@@ -1407,6 +1442,7 @@
                     
                     if (result.success && result.data) {
                         const data = result.data;
+                        currentBillConsumption = getConsumptionFromPayload(data);
                         if (data.downloaded_id) {
                             currentDownloadedId = data.downloaded_id;
                             if (updatePaymentBtn) updatePaymentBtn.disabled = false;
@@ -1432,14 +1468,25 @@
                         setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
                         setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.arrears_cy ?? 0);
                         setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.arrears_py ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), data.senior_citizen_discount ?? 0);
+                        latestServerSeniorDiscount = parseNumeric(data.senior_citizen_discount ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
                         setNumberFieldValue(document.getElementById('fieldOthers'), data.others || 0);
                         setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                         setNumberFieldValue(document.getElementById('fieldFees'), 0);
                         setNumberFieldValue(document.getElementById('fieldInspection'), 0);
                         const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
                         if (enableSeniorDiscountCheckbox) {
-                            enableSeniorDiscountCheckbox.checked = (parseFloat(data.senior_citizen_discount) || 0) > 0;
+                            const shouldEnableSeniorDiscount = currentAccountIsSenior;
+                            enableSeniorDiscountCheckbox.checked = shouldEnableSeniorDiscount;
+                            if (shouldEnableSeniorDiscount && typeof applySeniorCitizenDiscount === 'function') {
+                                applySeniorCitizenDiscount();
+                            } else {
+                                // Keep computed value in cache, but do not apply discount when unchecked.
+                                setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), 0);
+                                const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
+                                if (seniorDiscountField) seniorDiscountField.readOnly = true;
+                                if (typeof updateTotals === 'function') updateTotals();
+                            }
                         }
                         if (
                             (parseFloat(currentBalanceValue) || 0) <= 0.009
@@ -1472,6 +1519,10 @@
                 }
 
                 const { account = {}, billing = {}, payment = {}, downloaded_reading = {}, sundries = [], lro_entries_by_or = [] } = data;
+                currentBillConsumption = getConsumptionFromPayload(billing, downloaded_reading, data);
+                currentAccountIsSenior = isSeniorConsumerAccount(account);
+                currentAccountCategory = account.consumer_category ?? account.category ?? null;
+                latestServerSeniorDiscount = parseNumeric(payment?.senior_citizen_discount ?? billing?.senior_citizen_discount ?? 0);
                 
                 // Store downloaded_id for payment submission
                 currentDownloadedId = downloaded_reading.id || data.downloaded_id || null;
@@ -1809,14 +1860,25 @@
                                 setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
                                 setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), result.data.arrears_cy ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), result.data.arrears_py ?? 0);
-                                setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), result.data.senior_citizen_discount ?? 0);
+                                latestServerSeniorDiscount = parseNumeric(result.data.senior_citizen_discount ?? 0);
+                                setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
                                 setNumberFieldValue(document.getElementById('fieldOthers'), result.data.others ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
                                 setNumberFieldValue(document.getElementById('fieldInspection'), 0);
                                 const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
                                 if (enableSeniorDiscountCheckbox) {
-                                    enableSeniorDiscountCheckbox.checked = (parseFloat(result.data.senior_citizen_discount) || 0) > 0;
+                                    const shouldEnableSeniorDiscount = currentAccountIsSenior;
+                                    enableSeniorDiscountCheckbox.checked = shouldEnableSeniorDiscount;
+                                    if (shouldEnableSeniorDiscount && typeof applySeniorCitizenDiscount === 'function') {
+                                        applySeniorCitizenDiscount();
+                                    } else {
+                                        // Keep computed value in cache, but do not apply discount when unchecked.
+                                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), 0);
+                                        const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
+                                        if (seniorDiscountField) seniorDiscountField.readOnly = true;
+                                        if (typeof updateTotals === 'function') updateTotals();
+                                    }
                                 }
                                 if (
                                     (parseFloat(currentBalanceValue) || 0) <= 0.009
@@ -1849,7 +1911,8 @@
                         setNumberFieldValue(document.getElementById('fieldAdvances'), payment.advances ?? 0);
                         setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), payment.arrears_cy ?? 0);
                         setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), payment.arrears_py ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), payment.senior_citizen_discount ?? 0);
+                        latestServerSeniorDiscount = parseNumeric(payment.senior_citizen_discount ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
                         setNumberFieldValue(document.getElementById('fieldOthers'), payment.others ?? 0);
                         const enableSeniorDiscountCheckboxPaid = document.getElementById('enableSeniorDiscount');
                         if (enableSeniorDiscountCheckboxPaid) {
@@ -2004,6 +2067,8 @@
                     setPaymentStatusForMonth(null);
                     lastLookupKey = null;
                     latestBillMonth = null; // Reset when account changes
+                    currentBillConsumption = null;
+                    latestServerSeniorDiscount = 0;
                     return;
                 }
 
@@ -2012,6 +2077,8 @@
                 const currentAccount = searchValue;
                 if (previousAccount && previousAccount !== currentAccount) {
                     latestBillMonth = null; // Reset when switching accounts
+                    currentBillConsumption = null;
+                    latestServerSeniorDiscount = 0;
                     lastLookupKey = null; // Reset lookup key to allow new search
                 }
 
@@ -2285,6 +2352,8 @@
                 lastLookupKey = null;
                 currentDownloadedId = null; // Clear downloaded_id on reset
                 latestBillMonth = null; // Reset latest bill month
+                currentBillConsumption = null;
+                latestServerSeniorDiscount = 0;
                 arrearsPreviousManuallyEdited = false; // Reset manual edit flag
                 useOrForBreakdownLookup = false;
                 lockPaidOrBreakdown = false;
