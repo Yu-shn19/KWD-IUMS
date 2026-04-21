@@ -86,6 +86,67 @@
     #bamListPanel .table tbody tr:nth-child(even) {
         background-color: #f8f9fa;
     }
+    .bam-list-header {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        column-gap: 0.5rem;
+        row-gap: 0.5rem;
+    }
+    .bam-list-title-wrap { justify-self: start; }
+    .bam-list-search-wrap { justify-self: center; width: 150%; max-width: 820px; }
+    .bam-list-records-wrap { justify-self: end; }
+    .bam-list-search-group {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        background: #e5e7eb;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .bam-list-search-group:focus-within {
+        border-color: #94a3b8;
+        box-shadow: 0 0 0 0.2rem rgba(148, 163, 184, 0.2);
+    }
+    .bam-list-search-icon {
+        color: #94a3b8;
+        font-size: 1rem;
+        padding: 0 0.9rem;
+        display: inline-flex;
+        align-items: center;
+    }
+    .bam-list-search-icon-right {
+        margin-left: auto;
+    }
+    .bam-list-search {
+        width: 100%;
+        border: none;
+        box-shadow: none !important;
+        background: transparent;
+        color: #6b7280;
+        font-size: 1.05rem;
+        padding: 0.55rem 0.35rem 0.55rem 0.95rem;
+    }
+    .bam-list-search:focus {
+        outline: none;
+    }
+    .bam-list-search::placeholder {
+        color: #94a3b8;
+    }
+    @media (max-width: 768px) {
+        .bam-list-header {
+            grid-template-columns: 1fr;
+        }
+        .bam-list-title-wrap,
+        .bam-list-search-wrap,
+        .bam-list-records-wrap {
+            justify-self: stretch;
+        }
+        .bam-list-records-wrap {
+            text-align: right;
+        }
+    }
 </style>
 
 <body id="page-top">
@@ -205,11 +266,21 @@
                     {{-- List of all billing adjustment transactions (old feature, data only) --}}
                     @if(isset($billingAdjustments))
                     <div class="card shadow-sm border-0 mt-3 d-none" id="bamListPanel">
-                        <div class="card-header py-3 d-flex justify-content-between align-items-center">
-                            <h6 class="m-0 font-weight-bold text-primary">
-                                <i class="fas fa-list mr-2"></i>All Billing Adjustment Transactions
-                            </h6>
-                            <span class="badge badge-primary badge-pill">{{ $billingAdjustments->count() + (isset($lroEntries) ? $lroEntries->count() : 0) }} record(s)</span>
+                        <div class="card-header py-3 bam-list-header">
+                            <div class="bam-list-title-wrap">
+                                <h6 class="m-0 font-weight-bold text-primary">
+                                    <i class="fas fa-list mr-2"></i>All Billing Adjustment Transactions
+                                </h6>
+                            </div>
+                            <div class="bam-list-search-wrap">
+                                <div class="bam-list-search-group">
+                                    <input type="text" id="bamListSearch" class="form-control form-control-sm bam-list-search" placeholder="Search Account No, Account Name, or Reference No.">
+                                    <span class="bam-list-search-icon bam-list-search-icon-right"><i class="fas fa-search"></i></span>
+                                </div>
+                            </div>
+                            <div class="bam-list-records-wrap">
+                                <span class="badge badge-primary badge-pill">{{ $billingAdjustments->count() + (isset($lroEntries) ? $lroEntries->count() : 0) }} record(s)</span>
+                            </div>
                         </div>
                         <div class="card-body p-0">
                             <div class="table-responsive">
@@ -289,6 +360,9 @@
                                                 <td colspan="9" class="text-center text-muted py-4">No billing adjustment transactions recorded yet.</td>
                                             </tr>
                                         @endforelse
+                                        <tr id="bamListNoMatchRow" class="d-none">
+                                            <td colspan="9" class="text-center text-muted py-4">No matching records found.</td>
+                                        </tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -331,7 +405,7 @@
             var entry = @json($billingAdjustment);
             bamPopulateForm({
                 type:            entry.type,
-                date:            entry.date,
+                date:            @json(optional($billingAdjustment->date)->format('Y-m-d')),
                 account:         entry.account_no,
                 name:            entry.consumer_zone ? entry.consumer_zone.account_name : (entry.account_name || ''),
                 bam_no:          entry.bam_no,
@@ -372,6 +446,13 @@
             for (var i = 0; i < el.options.length; i++) {
                 if (el.options[i].value === val) { el.selectedIndex = i; return; }
             }
+        }
+        function bamLocalTodayYmd() {
+            var d = new Date();
+            var y = d.getFullYear();
+            var m = String(d.getMonth() + 1).padStart(2, '0');
+            var day = String(d.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + day;
         }
         
         // Apply Type-specific UI rules (e.g. Others)
@@ -416,7 +497,7 @@
         function bamPopulateForm(entry, ledger) {
             bamSetSelected('bamType', entry.type || 'CM');
             bamSetSelected('bamAr', ledger || 'AR');
-            bamSetVal('bamDate', entry.date ? entry.date.substring(0, 10) : '');
+            bamSetVal('bamDate', entry.date ? String(entry.date).substring(0, 10) : '');
             bamSetVal('bamAccount', entry.account || '');
             bamSetVal('bamAccountName', entry.name || '');
             bamSetVal('bamNo', entry.bam_no || '');
@@ -432,7 +513,7 @@
         function bamResetForm(nextBamNo) {
             bamSetSelected('bamType', 'CM');
             bamSetSelected('bamAr', 'AR');
-            bamSetVal('bamDate', new Date().toISOString().substring(0, 10));
+            bamSetVal('bamDate', bamLocalTodayYmd());
             bamSetVal('bamAccount', '');
             bamSetVal('bamAccountName', '');
             bamSetVal('bamNo', nextBamNo || '');
@@ -470,6 +551,42 @@
             }
             if (tabEntry) tabEntry.addEventListener('click', function(e) { e.preventDefault(); showEntry(); });
             if (tabList)  tabList.addEventListener('click',  function(e) { e.preventDefault(); showList(); });
+        })();
+
+        // ─── List search (Account No, Account Name, Reference) ─────────────────
+        (function() {
+            var searchInput = document.getElementById('bamListSearch');
+            var tableBody = document.querySelector('#bamListTable tbody');
+            var noMatchRow = document.getElementById('bamListNoMatchRow');
+            if (!searchInput || !tableBody || !noMatchRow) return;
+
+            function normalize(value) {
+                return String(value || '').toLowerCase().trim();
+            }
+
+            function filterRows() {
+                var query = normalize(searchInput.value);
+                var rows = tableBody.querySelectorAll('tr');
+                var visibleCount = 0;
+
+                rows.forEach(function(row) {
+                    if (row.id === 'bamListNoMatchRow') return;
+                    var cells = row.querySelectorAll('td');
+                    if (cells.length < 9) return;
+
+                    var accountNo = normalize(cells[3].textContent);
+                    var accountName = normalize(cells[4].textContent);
+                    var reference = normalize(cells[6].textContent);
+                    var matches = !query || accountNo.indexOf(query) !== -1 || accountName.indexOf(query) !== -1 || reference.indexOf(query) !== -1;
+
+                    row.style.display = matches ? '' : 'none';
+                    if (matches) visibleCount++;
+                });
+
+                noMatchRow.classList.toggle('d-none', visibleCount > 0 || !query);
+            }
+
+            searchInput.addEventListener('input', filterRows);
         })();
 
         // ─── Save button ─────────────────────────────────────────────────────────
