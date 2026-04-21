@@ -1779,7 +1779,6 @@ class ReportController extends Controller
                 ROUND(SUM(unpaid_amount), 2) AS total_balance
             FROM unpaid
             GROUP BY consumer_zone_id, account_no
-            HAVING ROUND(SUM(unpaid_amount), 2) > 0
             ORDER BY account_no
         ";
 
@@ -2239,7 +2238,6 @@ class ReportController extends Controller
                     ROUND(SUM(unpaid_amount), 2) AS total_balance
                 FROM unpaid
                 GROUP BY consumer_zone_id, account_no
-                HAVING ROUND(SUM(unpaid_amount), 2) > 0
                 ORDER BY account_no
             ";
 
