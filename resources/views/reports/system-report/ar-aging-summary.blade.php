@@ -48,6 +48,15 @@
                                                 </select>
                                             </div>
 
+                                            <!-- Balance Filter -->
+                                            <div class="col-md-2">
+                                                <label class="small font-weight-bold mb-1">Balance Filter</label>
+                                                <select name="balance_filter" class="form-control form-control-sm">
+                                                    <option value="" {{ ($selectedBalanceFilter ?? '') == '' ? 'selected' : '' }}>All Data</option>
+                                                    <option value="with_balance" {{ ($selectedBalanceFilter ?? '') == 'with_balance' ? 'selected' : '' }}>With Balance</option>
+                                                </select>
+                                            </div>
+
                                             <!-- Zone/Route -->
                                             <div class="col-md-2">
                                                 <label class="small font-weight-bold mb-1">Zone / Route</label>
