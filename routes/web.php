@@ -11,6 +11,7 @@ use App\Http\Controllers\MeterReadingController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\DisconnectionController;
+use App\Http\Controllers\DisconnectionNotificationController;
 use App\Http\Controllers\PricingTierController;
 use App\Http\Controllers\CollectionController;
 use App\Http\Controllers\BillingAdjustmentController;
@@ -366,6 +367,8 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::post('/disconnection/save-and-assign', [DisconnectionController::class, 'saveAndAssign'])->name('disconnection.save-and-assign');
     Route::get('/disconnection/assignments', [DisconnectionController::class, 'assignments'])->name('disconnection.assignments');
     Route::post('/disconnection/assign-orders', [DisconnectionController::class, 'assignOrders'])->name('disconnection.assign-orders');
+    Route::get('/disconnection/notifications/newly-disconnected', [DisconnectionNotificationController::class, 'index'])
+        ->name('disconnection.notifications.newly-disconnected');
 
     // Pricing Tiers Management routes
     Route::resource('pricing-tiers', PricingTierController::class);

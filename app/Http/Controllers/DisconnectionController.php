@@ -1384,7 +1384,12 @@ class DisconnectionController extends Controller
             $orders->where('disconnector_id', $request->input('disconnector_id'));
         }
 
-        $orders = $orders->paginate(20);
+        // Filter by disconnected date (YYYY-MM-DD)
+        if ($request->filled('date_saved')) {
+            $orders->whereDate('disconnected_at', $request->input('date_saved'));
+        }
+
+        $orders = $orders->paginate(20)->withQueryString();
 
         // Get all zones
         $zones = DisconnectionOrder::select('zone_code')

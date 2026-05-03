@@ -145,11 +145,7 @@ class BillingProcessController extends Controller
           //  $arrears = (float) ($previousReading['arrears'] ?? 0);
                // Must match consumer ledger footer Current Balance (same year as bill month)
            // $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
-               $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
-            // Meter Reading Preparation (zone) and (Single Consumer): arrears must not be negative; Multiple Consumers path unchanged
-            if (!$isMultiple) {
-                $arrears = max(0.0, (float) $arrears);
-            }  
+            $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
             $total = $currentBill + $wmc + $arrears;
             $data[] = [
                 'sedr' => (string) $sedr++,
