@@ -4112,24 +4112,49 @@ class MeterReadingController extends Controller
                     }
                 }
             } else {
-                // Unused/new OR: use balance-only allocation.
-                // Keep a single payable bucket in Current Bill so breakdown matches the remaining ledger balance.
+                // Unused/new OR: keep computed ledger breakdown and only mark unpaid.
+                // Do not collapse all amounts into Current Bill; preserve month split (bill/penalty/wmc/arrears).
                 $paymentStatus = 'unpaid';
-                $currentBill = round(max(0, (float) $currentBalance), 2);
-                $penalty = 0.0;
-                $maintenance = 0.0;
-                $others = 0.0;
-                $arrears = 0.0;
-                $arrearsCy = 0.0;
-                $arrearsPy = 0.0;
-                $seniorCitizenDiscount = 0.0;
+            }
+        }
+
+        // For unpaid next-breakdown view (no explicit paid OR), when a payment exists inside the
+        // currently selected billing cycle window, treat WMC as already covered in that cycle's split.
+        // Keep total due unchanged by moving the same amount to Arrears CY.
+        $wmcCoveredInCycle = false;
+        if (!($orNumberInput !== '' && $orPayment) && $maintenance > 0.009 && $paymentStatus !== 'paid') {
+            try {
+                $cycleStart = isset($fromMonthDate) && $fromMonthDate instanceof Carbon
+                    ? $fromMonthDate->copy()->startOfDay()
+                    : null;
+                $cycleEnd = isset($toMonthDate) && $toMonthDate instanceof Carbon
+                    ? $toMonthDate->copy()->endOfDay()
+                    : null;
+
+                if ($cycleStart && $cycleEnd) {
+                    $paymentExistsInCycle = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                        ->where(DB::raw("UPPER(TRIM(trans))"), 'PAYMENT')
+                        ->whereRaw('COALESCE(credit, 0) > 0')
+                        ->whereRaw('COALESCE(txtime, date) >= ?', [$cycleStart->format('Y-m-d H:i:s')])
+                        ->whereRaw('COALESCE(txtime, date) <= ?', [$cycleEnd->format('Y-m-d H:i:s')])
+                        ->exists();
+
+                    if ($paymentExistsInCycle) {
+                        $wmcShift = round((float) $maintenance, 2);
+                        $maintenance = 0.0;
+                        $arrearsCy = round((float) $arrearsCy + $wmcShift, 2);
+                        $wmcCoveredInCycle = true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Keep original split when cycle-payment check fails.
             }
         }
 
         // Non-OR flow safeguard:
         // if WMC is missing in computed breakdown but latest unpaid BILLING carries "others",
         // restore WMC from ledger and reclassify it from CY arrears (do not inflate total due).
-        if (!($orNumberInput !== '' && $orPayment) && $maintenance <= 0.009) {
+        if (!($orNumberInput !== '' && $orPayment) && $maintenance <= 0.009 && !$wmcCoveredInCycle) {
             try {
                 $latestUnpaidBillingWithOthers = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
                     ->whereIn('trans', ['BILLING', 'BILL'])
@@ -4154,7 +4179,7 @@ class MeterReadingController extends Controller
             }
         }
 
-        // Senior discount based on unpaid BILLING volume from consumer_ledgers.
+        // Senior discount based on ledger/billing volume.
         // Rule:
         // - Applies automatically only when consumer has SC flag + valid OSCA ID.
         // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition),
@@ -4184,101 +4209,102 @@ class MeterReadingController extends Controller
                     ->get()
                     ->values();
 
-                $unpaidVolume = 0.0;
-                foreach ($billingRows as $idx => $billingRow) {
-                    // Ledger-only rule (no paid_at):
-                    // A billing cycle is paid when PAYMENT entries with credit exist for that cycle.
-                    $isMarkedPaid = false;
-                    $hasPaymentForSameCycle = DB::table('consumer_ledgers as pay')
-                        ->where('pay.consumer_zone_id', $consumer->id)
-                        ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
-                        ->where(function ($q) use ($billingRow) {
-                            if (!empty($billingRow->schedule_id)) {
-                                $q->orWhere('pay.schedule_id', $billingRow->schedule_id);
-                            }
-                            if (!empty($billingRow->due_date)) {
-                                $q->orWhere('pay.due_date', $billingRow->due_date);
-                            }
-                        })
-                        ->whereRaw('COALESCE(pay.credit, 0) > 0')
-                        ->exists();
-                    $isMarkedPaid = $hasPaymentForSameCycle;
+                $paymentRows = DB::table('consumer_ledgers as pay')
+                    ->where('pay.consumer_zone_id', $consumer->id)
+                    ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
+                    ->whereRaw('COALESCE(pay.credit, 0) > 0')
+                    ->select('pay.date', 'pay.id', 'pay.credit')
+                    ->orderBy('pay.date', 'asc')
+                    ->orderBy('pay.id', 'asc')
+                    ->get()
+                    ->values();
 
-                    // Fallback for legacy rows where PAYMENT entries don't share due_date/schedule_id:
-                    // if a PAYMENT timeline entry exists between this BILLING date and next BILLING date
-                    // and settles balance to zero, treat this cycle as paid (covers -SC paired entries).
+                $residentialDiscountTable = [
+                    0 => 9.75, 1 => 9.75, 2 => 9.75, 3 => 9.75, 4 => 9.75, 5 => 9.75,
+                    6 => 9.75, 7 => 9.75, 8 => 9.75, 9 => 9.75, 10 => 9.75,
+                    11 => 10.83, 12 => 11.91, 13 => 12.99, 14 => 14.07, 15 => 15.15,
+                    16 => 16.23, 17 => 17.31, 18 => 18.39, 19 => 19.47, 20 => 20.55,
+                    21 => 21.74, 22 => 22.92, 23 => 24.11, 24 => 25.30, 25 => 26.49,
+                    26 => 27.68, 27 => 28.86, 28 => 30.05, 29 => 31.24, 30 => 32.42,
+                ];
+                $commercialDiscountTable = [
+                    0 => 12.19, 1 => 12.19, 2 => 12.19, 3 => 12.19, 4 => 12.19, 5 => 12.19,
+                    6 => 12.19, 7 => 12.19, 8 => 12.19, 9 => 12.19, 10 => 12.19,
+                    11 => 13.54, 12 => 14.89, 13 => 16.24, 14 => 17.59, 15 => 18.94,
+                    16 => 20.29, 17 => 21.64, 18 => 22.99, 19 => 24.34, 20 => 25.69,
+                    21 => 27.17, 22 => 28.66, 23 => 30.14, 24 => 31.62, 25 => 33.11,
+                    26 => 34.59, 27 => 36.08, 28 => 37.56, 29 => 39.05, 30 => 40.53,
+                ];
+                $categoryCode = trim((string) ($consumer->category_code ?? ''));
+                $discountTable = $categoryCode === '32' ? $commercialDiscountTable : $residentialDiscountTable;
+
+                $seniorDiscountTotal = 0.0;
+                // Allocate PAYMENT credits to BILLING charges FIFO by ledger date.
+                // A billing cycle is treated paid when its billing charge is fully covered by prior/available payments.
+                $remainingPaymentCredit = (float) $paymentRows->sum(function ($p) {
+                    return (float) ($p->credit ?? 0);
+                });
+
+                foreach ($billingRows as $billingRow) {
+                    $billingDebit = max(
+                        0.0,
+                        (float) ($billingRow->debit ?? 0),
+                        (float) (($billingRow->billamount ?? 0) + ($billingRow->others ?? 0))
+                    );
+
+                    $covered = min($billingDebit, max(0.0, $remainingPaymentCredit));
+                    $remainingPaymentCredit = max(0.0, $remainingPaymentCredit - $covered);
+                    $billingRemaining = max(0.0, $billingDebit - $covered);
+
+                    $isMarkedPaid = $billingRemaining <= 0.01;
                     if (!$isMarkedPaid) {
-                        $billingDate = !empty($billingRow->date) ? Carbon::parse($billingRow->date) : null;
-                        $nextBillingDate = null;
-                        if (isset($billingRows[$idx + 1]) && !empty($billingRows[$idx + 1]->date)) {
-                            $nextBillingDate = Carbon::parse($billingRows[$idx + 1]->date);
-                        }
-                        if ($billingDate) {
-                            $paymentsInWindowQuery = DB::table('consumer_ledgers as pay')
-                                ->where('pay.consumer_zone_id', $consumer->id)
-                                ->where(DB::raw("UPPER(TRIM(pay.trans))"), 'PAYMENT')
-                                ->whereRaw('COALESCE(pay.credit, 0) > 0')
-                                ->whereRaw("COALESCE(pay.txtime, pay.date) >= ?", [$billingDate->format('Y-m-d H:i:s')]);
-                            if ($nextBillingDate) {
-                                $paymentsInWindowQuery->whereRaw("COALESCE(pay.txtime, pay.date) < ?", [$nextBillingDate->format('Y-m-d H:i:s')]);
-                            }
-
-                            $paymentsInWindow = $paymentsInWindowQuery
-                                ->select('pay.balance', 'pay.credit', 'pay.reference', 'pay.date', 'pay.txtime')
-                                ->get();
-
-                            if ($paymentsInWindow->isNotEmpty()) {
-                                $creditSum = (float) $paymentsInWindow->sum(function ($p) {
-                                    return (float) ($p->credit ?? 0);
-                                });
-                                $billingDebit = max(
-                                    0.0,
-                                    (float) ($billingRow->debit ?? 0),
-                                    (float) (($billingRow->billamount ?? 0) + ($billingRow->others ?? 0))
-                                );
-                                $settledToZero = $paymentsInWindow->contains(function ($p) {
-                                    return abs((float) ($p->balance ?? 999999)) < 0.01;
-                                });
-                                $coveredByCredit = $billingDebit > 0.0 && $creditSum + 0.01 >= $billingDebit;
-                                if ($settledToZero || $coveredByCredit) {
-                                    $isMarkedPaid = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (!$isMarkedPaid) {
-                        $unpaidVolume += (float) $billingRow->volume;
+                        $monthVolume = max(0.0, (float) ($billingRow->volume ?? 0));
+                        $monthVolumeKey = (int) floor(min($monthVolume, 30.0) + 1e-6);
+                        $seniorDiscountTotal += (float) ($discountTable[$monthVolumeKey] ?? 0);
                     }
                 }
-
-                if ($unpaidVolume > 0.0) {
-                    $cappedVolume = min(max($unpaidVolume, 0.0), 30.0);
-                    $volumeKey = (int) floor($cappedVolume + 1e-6);
-
-                    $residentialDiscountTable = [
-                        0 => 9.75, 1 => 9.75, 2 => 9.75, 3 => 9.75, 4 => 9.75, 5 => 9.75,
-                        6 => 9.75, 7 => 9.75, 8 => 9.75, 9 => 9.75, 10 => 9.75,
-                        11 => 10.83, 12 => 11.91, 13 => 12.99, 14 => 14.07, 15 => 15.15,
-                        16 => 16.23, 17 => 17.31, 18 => 18.39, 19 => 19.47, 20 => 20.55,
-                        21 => 21.74, 22 => 22.92, 23 => 24.11, 24 => 25.30, 25 => 26.49,
-                        26 => 27.68, 27 => 28.86, 28 => 30.05, 29 => 31.24, 30 => 32.42,
-                    ];
-                    $commercialDiscountTable = [
-                        0 => 12.19, 1 => 12.19, 2 => 12.19, 3 => 12.19, 4 => 12.19, 5 => 12.19,
-                        6 => 12.19, 7 => 12.19, 8 => 12.19, 9 => 12.19, 10 => 12.19,
-                        11 => 13.54, 12 => 14.89, 13 => 16.24, 14 => 17.59, 15 => 18.94,
-                        16 => 20.29, 17 => 21.64, 18 => 22.99, 19 => 24.34, 20 => 25.69,
-                        21 => 27.17, 22 => 28.66, 23 => 30.14, 24 => 31.62, 25 => 33.11,
-                        26 => 34.59, 27 => 36.08, 28 => 37.56, 29 => 39.05, 30 => 40.53,
-                    ];
-                    $categoryCode = trim((string) ($consumer->category_code ?? ''));
-                    $discountTable = $categoryCode === '32' ? $commercialDiscountTable : $residentialDiscountTable;
-                    $seniorCitizenDiscount = round((float) ($discountTable[$volumeKey] ?? 0), 2);
-                }
+                $seniorCitizenDiscount = round(max(0.0, $seniorDiscountTotal), 2);
                 } catch (\Throwable $e) {
                     // Keep existing seniorCitizenDiscount when lookup fails.
                 }
+            }
+        }
+
+        // Post-due split rule:
+        // If selected/as-of date is after billing due date, move Current Bill to Arrears CY.
+        // Example target: Current Bill 0.00, Arrears CY includes former current bill amount.
+        if (!($orNumberInput !== '' && $orPayment) && (float) $currentBill > 0.009) {
+            $asOfDate = isset($toMonthDate) && $toMonthDate instanceof Carbon
+                ? $toMonthDate->copy()->startOfDay()
+                : Carbon::today()->startOfDay();
+
+            $dueDate = null;
+            if (isset($currentBillEntry) && is_array($currentBillEntry) && !empty($currentBillEntry['due_date'])) {
+                $dueDate = $currentBillEntry['due_date'] instanceof Carbon
+                    ? $currentBillEntry['due_date']->copy()->startOfDay()
+                    : Carbon::parse($currentBillEntry['due_date'])->startOfDay();
+            } else {
+                // Fallback when currentBillEntry is unavailable in this path:
+                // use latest BILLING due date from ledger for this consumer up to as-of date.
+                $latestBillingRowForDue = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                    ->whereIn(DB::raw("UPPER(TRIM(trans))"), ['BILLING', 'BILL'])
+                    ->where(function ($q) {
+                        $q->where('debit', '>', 0)->orWhere('billamount', '>', 0);
+                    })
+                    ->whereRaw('COALESCE(date, txtime) <= ?', [$asOfDate->format('Y-m-d H:i:s')])
+                    ->orderByRaw('COALESCE(due_date, date, txtime) DESC')
+                    ->orderBy('id', 'desc')
+                    ->first();
+                if ($latestBillingRowForDue && !empty($latestBillingRowForDue->due_date)) {
+                    $dueDate = $latestBillingRowForDue->due_date instanceof Carbon
+                        ? $latestBillingRowForDue->due_date->copy()->startOfDay()
+                        : Carbon::parse($latestBillingRowForDue->due_date)->startOfDay();
+                }
+            }
+
+            if ($dueDate && $asOfDate->gt($dueDate)) {
+                $arrearsCy = round((float) $arrearsCy + (float) $currentBill, 2);
+                $currentBill = 0.0;
             }
         }
 
