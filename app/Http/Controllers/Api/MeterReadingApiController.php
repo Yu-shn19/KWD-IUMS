@@ -154,7 +154,7 @@ class MeterReadingApiController extends Controller
             $query->where('bill_month', $latestBillMonth);
         }
 
-        // Order by status priority (active routes first), then by account # tail (after last "-")
+        // Order by status priority (active routes first), then by sedr_number
         $schedules = $query->orderByRaw("
             CASE 
                 WHEN status = 'Assigned' THEN 1
@@ -162,7 +162,7 @@ class MeterReadingApiController extends Controller
                 WHEN status = 'Completed' THEN 3
                 ELSE 4
             END
-        ")->orderByAccountNumberTail()->get();
+        ")->orderBy('sedr_number')->get();
 
         // Get downloaded readings for this reader (only for current bill_month schedules)
         $downloadedReadings = collect();

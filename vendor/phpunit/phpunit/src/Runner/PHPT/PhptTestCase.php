@@ -20,7 +20,6 @@ use function dirname;
 use function explode;
 use function extension_loaded;
 use function file;
-use function file_exists;
 use function file_get_contents;
 use function file_put_contents;
 use function is_array;
@@ -35,7 +34,6 @@ use function preg_replace;
 use function preg_split;
 use function realpath;
 use function rtrim;
-use function sprintf;
 use function str_contains;
 use function str_replace;
 use function str_starts_with;
@@ -95,8 +93,6 @@ final class PhptTestCase implements Reorderable, SelfDescribing, Test
     public function __construct(string $filename)
     {
         $this->filename = $filename;
-
-        $this->ensureCoverageFileDoesNotExist();
     }
 
     /**
@@ -788,15 +784,7 @@ final class PhptTestCase implements Reorderable, SelfDescribing, Test
         }
 
         if ($buffer !== false) {
-            $coverage = @unserialize(
-                $buffer,
-                [
-                    'allowed_classes' => [
-                        /** @phpstan-ignore classConstant.internalClass */
-                        RawCodeCoverageData::class,
-                    ],
-                ],
-            );
+            $coverage = @unserialize($buffer);
 
             if ($coverage === false) {
                 /**
@@ -997,23 +985,5 @@ final class PhptTestCase implements Reorderable, SelfDescribing, Test
         }
 
         return $settings;
-    }
-
-    /**
-     * @throws CodeCoverageFileExistsException
-     */
-    private function ensureCoverageFileDoesNotExist(): void
-    {
-        $files = $this->coverageFiles();
-
-        if (file_exists($files['coverage'])) {
-            throw new CodeCoverageFileExistsException(
-                sprintf(
-                    'File %s exists, PHPT test %s will not be executed',
-                    $files['coverage'],
-                    $this->filename,
-                ),
-            );
-        }
     }
 }

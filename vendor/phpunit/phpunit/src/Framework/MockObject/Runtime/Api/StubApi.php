@@ -20,14 +20,16 @@ trait StubApi
 
     public function __phpunit_state(): TestDoubleState
     {
-        return $this->__phpunit_state ?? new TestDoubleState([], true, false);
+        return $this->__phpunit_state;
     }
 
+    /** @noinspection MagicMethodsValidityInspection */
     public function __phpunit_getInvocationHandler(): InvocationHandler
     {
         return $this->__phpunit_state()->invocationHandler();
     }
 
+    /** @noinspection MagicMethodsValidityInspection */
     public function __phpunit_unsetInvocationMocker(): void
     {
         $this->__phpunit_state()->unsetInvocationHandler();

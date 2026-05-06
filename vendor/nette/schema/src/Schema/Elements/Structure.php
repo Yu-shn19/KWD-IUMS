@@ -1,9 +1,11 @@
-<?php declare(strict_types=1);
+<?php
 
 /**
  * This file is part of the Nette Framework (https://nette.org)
  * Copyright (c) 2004 David Grudl (https://davidgrudl.com)
  */
+
+declare(strict_types=1);
 
 namespace Nette\Schema\Elements;
 
@@ -11,7 +13,6 @@ use Nette;
 use Nette\Schema\Context;
 use Nette\Schema\Helpers;
 use Nette\Schema\Schema;
-use function array_diff_key, array_fill_keys, array_key_exists, array_keys, array_map, array_merge, array_pop, array_values, is_array, is_object, strval;
 
 
 final class Structure implements Schema
@@ -29,7 +30,9 @@ final class Structure implements Schema
 	private bool $skipDefaults = false;
 
 
-	/** @param Schema[]  $shape */
+	/**
+	 * @param  Schema[]  $shape
+	 */
 	public function __construct(array $shape)
 	{
 		(function (Schema ...$items) {})(...array_values($shape));
@@ -73,7 +76,6 @@ final class Structure implements Schema
 	}
 
 
-	/** @param Schema[]|self  $shape */
 	public function extend(array|self $shape): self
 	{
 		$shape = $shape instanceof self ? $shape->items : $shape;
@@ -81,7 +83,6 @@ final class Structure implements Schema
 	}
 
 
-	/** @return Schema[] */
 	public function getShape(): array
 	{
 		return $this->items;
@@ -165,7 +166,6 @@ final class Structure implements Schema
 	}
 
 
-	/** @param  array<mixed>  $value */
 	private function validateItems(array &$value, Context $context): void
 	{
 		$items = $this->items;
@@ -173,7 +173,7 @@ final class Structure implements Schema
 			if ($this->otherItems) {
 				$items += array_fill_keys($extraKeys, $this->otherItems);
 			} else {
-				$keys = array_map(strval(...), array_keys($items));
+				$keys = array_map('strval', array_keys($items));
 				foreach ($extraKeys as $key) {
 					$hint = Nette\Utils\Helpers::getSuggestion($keys, (string) $key);
 					$context->addError(

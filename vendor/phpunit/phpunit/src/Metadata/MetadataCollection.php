@@ -16,7 +16,7 @@ use Countable;
 use IteratorAggregate;
 
 /**
- * @template-implements IteratorAggregate<non-negative-int, Metadata>
+ * @template-implements IteratorAggregate<int, Metadata>
  *
  * @immutable
  *

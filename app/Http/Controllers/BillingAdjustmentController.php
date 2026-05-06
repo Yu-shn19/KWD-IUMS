@@ -10,6 +10,7 @@ use App\Models\LROLedger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 
 class BillingAdjustmentController extends Controller
@@ -222,10 +223,19 @@ class BillingAdjustmentController extends Controller
     public function updateFromNewUi(Request $request, $id)
     {
         $ar = strtoupper((string) $request->input('ar', 'AR'));
-        $status = $request->input('status', 'Pending');
+        $status = strtoupper((string) $request->input('status', 'Pending'));
 
-        // ── AR → LRO switch, or status set to Posted (once paid, ar_type is LRO) ───
-        if ($ar === 'LRO' || $status === 'Posted') {
+        // Prevent silent AR -> LRO migration when user sets status to Paid/Posted.
+        // Moving to LRO must be explicit via ledger selection.
+        if ($ar !== 'LRO' && $status === 'POSTED') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Paid status is only allowed in LRO ledger. Set Ledger to LRO to continue.',
+            ], 422);
+        }
+
+        // ── Explicit AR → LRO switch ─────────────────────────────────────────────
+        if ($ar === 'LRO') {
             try {
                 DB::beginTransaction();
 
@@ -240,11 +250,14 @@ class BillingAdjustmentController extends Controller
                     $type = 'CM';
                 }
 
+                $accountNo = trim((string) $request->input('account', ''));
+                $consumerZone = $this->findConsumerForLroAccount($accountNo);
+
                 // Create a new lro_ledger entry with the submitted data (LRO = paid/posted)
-                $entry = LROLedger::create([
+                $payload = [
                     'type'            => $type,
                     'date'            => $request->input('date') ?: null,
-                    'account'         => $request->input('account'),
+                    'account'         => $accountNo !== '' ? $accountNo : null,
                     'name'            => $request->input('account_name') ?? $request->input('name'),
                     'bam_no'          => $request->input('bam_no'),
                     'amount'          => (float)($request->input('amount', 0)),
@@ -252,13 +265,17 @@ class BillingAdjustmentController extends Controller
                     'acct_code'       => $request->input('acct_code'),
                     'reference'       => $request->input('reference'),
                     'remarks'         => $request->input('remarks'),
-                    'status'          => $status === 'Posted' ? 'Posted' : $request->input('status', 'Pending'),
+                    'status'          => $status === 'POSTED' ? 'Posted' : $request->input('status', 'Pending'),
                     'correct_reading' => (float)($request->input('correct_reading', 0)),
-                ]);
+                ];
+                if ($this->lroLedgerHasConsumerZoneIdColumn()) {
+                    $payload['consumer_zone_id'] = $consumerZone?->id;
+                }
+                $entry = LROLedger::create($payload);
 
                 DB::commit();
 
-                $message = $status === 'Posted'
+                $message = $status === 'POSTED'
                     ? 'Marked as paid; record moved to LRO ledger.'
                     : 'Moved to LRO ledger successfully.';
 
@@ -531,10 +548,15 @@ class BillingAdjustmentController extends Controller
             'correct_reading' => ['nullable', 'numeric'],
         ]);
 
-        $entry->update([
+        $nextAccount = array_key_exists('account', $validated)
+            ? trim((string) ($validated['account'] ?? ''))
+            : trim((string) ($entry->account ?? ''));
+        $consumerZone = $this->findConsumerForLroAccount($nextAccount);
+
+        $payload = [
             'type'            => $validated['type']            ?? $entry->type,
             'date'            => !empty($validated['date'])    ? $validated['date'] : $entry->date,
-            'account'         => $validated['account']         ?? $entry->account,
+            'account'         => array_key_exists('account', $validated) ? ($nextAccount !== '' ? $nextAccount : null) : $entry->account,
             'name'            => $validated['account_name']    ?? $entry->name,
             'bam_no'          => $validated['bam_no']          ?? $entry->bam_no,
             'amount'          => isset($validated['amount'])   ? (float) $validated['amount'] : $entry->amount,
@@ -543,7 +565,12 @@ class BillingAdjustmentController extends Controller
             'remarks'         => $validated['remarks']         ?? $entry->remarks,
             'status'          => $validated['status']          ?? $entry->status,
             'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : $entry->correct_reading,
-        ]);
+        ];
+        if ($this->lroLedgerHasConsumerZoneIdColumn()) {
+            $payload['consumer_zone_id'] = $consumerZone?->id ?? $entry->consumer_zone_id;
+        }
+
+        $entry->update($payload);
 
         return response()->json([
             'success' => true,
@@ -586,11 +613,13 @@ class BillingAdjustmentController extends Controller
 
             $name = $validated['name'] ?? $validated['account_name'] ?? null;
             $arType = $validated['ar_type'] ?? $validated['ar'] ?? 'LRO';
+            $accountNo = trim((string) ($validated['account'] ?? ''));
+            $consumerZone = $this->findConsumerForLroAccount($accountNo);
 
-            $entry = LROLedger::create([
+            $payload = [
                 'type' => $validated['type'] ?? 'CM',
                 'date' => !empty($validated['date']) ? $validated['date'] : null,
-                'account' => $validated['account'] ?? null,
+                'account' => $accountNo !== '' ? $accountNo : null,
                 'name' => $name,
                 'bam_no' => $validated['bam_no'] ?? null,
                 'amount' => (float) ($validated['amount'] ?? 0),
@@ -600,7 +629,12 @@ class BillingAdjustmentController extends Controller
                 'remarks' => $validated['remarks'] ?? null,
                 'status' => $validated['status'] ?? 'Pending',
                 'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : 0,
-            ]);
+            ];
+            if ($this->lroLedgerHasConsumerZoneIdColumn()) {
+                $payload['consumer_zone_id'] = $consumerZone?->id;
+            }
+
+            $entry = LROLedger::create($payload);
 
             return response()->json([
                 'success' => true,
@@ -883,5 +917,29 @@ class BillingAdjustmentController extends Controller
             $entry->balance = $currentBalance;
             $entry->save();
         }
+    }
+
+    /**
+     * Resolve consumer by account using exact and normalized matching.
+     */
+    private function findConsumerForLroAccount(?string $accountNo): ?ConsumerZoneOne
+    {
+        $accountNo = trim((string) ($accountNo ?? ''));
+        if ($accountNo === '') {
+            return null;
+        }
+
+        $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+        if ($consumer) {
+            return $consumer;
+        }
+
+        $normalized = str_replace('-', '', $accountNo);
+        return ConsumerZoneOne::whereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalized])->first();
+    }
+
+    private function lroLedgerHasConsumerZoneIdColumn(): bool
+    {
+        return Schema::hasTable('lro_ledger') && Schema::hasColumn('lro_ledger', 'consumer_zone_id');
     }
 }

@@ -204,28 +204,23 @@
                             </select>
                         </div>
                         <div class="col-md-2">
-                            <label class="small font-weight-bold">Zone</label>
-                            <select class="form-control form-control-sm" id="routeZoneFilter">
-                                <option value="">All zones</option>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
                             <label class="small font-weight-bold">Status</label>
                             <select class="form-control form-control-sm" id="statusFilter">
                                 <option value="">All Status</option>
-                                <option value="Completed">Completed</option>                             
+                                <option value="Completed">Completed</option>
                                 <option value="Assigned">Assigned</option>
+                           
                             </select>
                         </div>
                         <div class="col-md-2">
                             <label class="small font-weight-bold">Account Number</label>
                             <input type="text" class="form-control form-control-sm" id="routeSearchAccount" placeholder="Search account...">
                         </div>
-                        <div class="col-md-2">
+                        <div class="col-md-3">
                             <label class="small font-weight-bold">Name</label>
                             <input type="text" class="form-control form-control-sm" id="routeSearchName" placeholder="Search by name...">
                         </div>
-                        <div class="col-md-2">
+                        <div class="col-md-1">
                             <label class="small font-weight-bold">&nbsp;</label>
                             <button type="button" class="btn btn-sm btn-outline-secondary w-100" id="routeSearchClear">
                                 <i class="fas fa-times mr-1"></i>Clear
@@ -347,51 +342,26 @@
         let availableBillMonths = [];
         let modalRefreshInterval = null;
 
-        function filterRoutes(routes, accountNumber, name, status, zone) {
+        function filterRoutes(routes, accountNumber, name, status) {
             const acct = (accountNumber || '').trim().toLowerCase();
             const n = (name || '').trim().toLowerCase();
             const stat = (status || '').trim();
-            const z = (zone || '').trim();
             return routes.filter(r => {
                 const rAcct = (r.account_number || '').toString().toLowerCase();
                 const rName = (r.account_name || '').toString().toLowerCase();
                 const rStatus = (r.status || '').trim();
-                const rZone = (r.zone != null && r.zone !== '') ? String(r.zone).trim() : '';
                 const matchAcct = !acct || rAcct.includes(acct) || rAcct.replace(/-/g, '').includes(acct.replace(/-/g, ''));
                 const matchName = !n || rName.includes(n);
                 const matchStatus = !stat || rStatus === stat;
-                const matchZone = !z || rZone === z;
-                return matchAcct && matchName && matchStatus && matchZone;
+                return matchAcct && matchName && matchStatus;
             });
-        }
-
-        function populateRouteZoneFilter(routes) {
-            const sel = document.getElementById('routeZoneFilter');
-            if (!sel) return;
-            const zones = [...new Set(
-                routes.map(r => (r.zone != null && r.zone !== '') ? String(r.zone).trim() : '')
-                    .filter(Boolean)
-            )].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-            const prev = sel.value;
-            sel.innerHTML = '<option value="">All zones</option>';
-            zones.forEach(z => {
-                const opt = document.createElement('option');
-                opt.value = z;
-                opt.textContent = z;
-                sel.appendChild(opt);
-            });
-            if (prev && [...sel.options].some(o => o.value === prev)) {
-                sel.value = prev;
-            }
         }
 
         function applyRouteSearch() {
             const accountNumber = document.getElementById('routeSearchAccount').value;
             const name = document.getElementById('routeSearchName').value;
             const status = document.getElementById('statusFilter').value;
-            const zoneEl = document.getElementById('routeZoneFilter');
-            const zone = zoneEl ? zoneEl.value : '';
-            const filtered = filterRoutes(currentModalRoutes, accountNumber, name, status, zone);
+            const filtered = filterRoutes(currentModalRoutes, accountNumber, name, status);
             displayRoutes(filtered);
         }
 
@@ -442,10 +412,6 @@
 
             document.getElementById('routeSearchAccount').value = '';
             document.getElementById('routeSearchName').value = '';
-            const zf = document.getElementById('routeZoneFilter');
-            if (zf) zf.innerHTML = '<option value="">All zones</option>';
-            const st = document.getElementById('statusFilter');
-            if (st) st.value = '';
 
             if (modalRefreshInterval) clearInterval(modalRefreshInterval);
 
@@ -459,8 +425,7 @@
                     const rows = Array.isArray(data.data) ? data.data : (data.data != null ? [data.data] : []);
                     if (data.success && rows.length > 0) {
                         currentModalRoutes = rows;
-                        populateRouteZoneFilter(currentModalRoutes);
-                        applyRouteSearch();
+                        displayRoutes(currentModalRoutes);
                         // Realtime: refresh routes in modal every 45s while open
                         modalRefreshInterval = setInterval(function() {
                             const q = new URLSearchParams({
@@ -472,14 +437,12 @@
                                 .then(d => {
                                     if (d.success && d.data != null) {
                                         currentModalRoutes = Array.isArray(d.data) ? d.data : [d.data];
-                                        populateRouteZoneFilter(currentModalRoutes);
                                         applyRouteSearch();
                                     }
                                 }).catch(() => {});
                         }, 45000);
                     } else {
                         currentModalRoutes = [];
-                        populateRouteZoneFilter([]);
                         document.getElementById('routesContent').innerHTML = `
                             <div class="text-center py-5">
                                 <i class="fas fa-inbox fa-3x text-muted"></i>
@@ -528,17 +491,6 @@
         });
 
         function displayRoutes(routes) {
-            const sorted = [...routes].sort((a, b) => {
-                const za = (a.zone != null ? String(a.zone) : '').trim();
-                const zb = (b.zone != null ? String(b.zone) : '').trim();
-                if (za !== zb) {
-                    return za.localeCompare(zb, undefined, { numeric: true });
-                }
-                const aa = (a.account_number || '').toString();
-                const ab = (b.account_number || '').toString();
-                return aa.localeCompare(ab, undefined, { numeric: true });
-            });
-
             let html = `
                 <div class="table-responsive">
                     <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 12px;">
@@ -559,7 +511,7 @@
                         <tbody>
             `;
 
-            sorted.forEach((route, index) => {
+            routes.forEach((route, index) => {
                 const statusClass = route.status === 'Completed' ? 'success' : 
                                   route.status === 'In Progress' ? 'warning' : 'secondary';
                 
@@ -618,13 +570,10 @@
         document.getElementById('routeSearchAccount').addEventListener('input', applyRouteSearch);
         document.getElementById('routeSearchName').addEventListener('input', applyRouteSearch);
         document.getElementById('statusFilter').addEventListener('change', applyRouteSearch);
-        var routeZoneFilterEl = document.getElementById('routeZoneFilter');
-        if (routeZoneFilterEl) routeZoneFilterEl.addEventListener('change', applyRouteSearch);
         document.getElementById('routeSearchClear').addEventListener('click', function() {
             document.getElementById('routeSearchAccount').value = '';
             document.getElementById('routeSearchName').value = '';
             document.getElementById('statusFilter').value = '';
-            if (routeZoneFilterEl) routeZoneFilterEl.value = '';
             applyRouteSearch();
         });
 

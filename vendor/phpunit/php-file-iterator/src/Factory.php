@@ -9,7 +9,6 @@
  */
 namespace SebastianBergmann\FileIterator;
 
-use const DIRECTORY_SEPARATOR;
 use const GLOB_ONLYDIR;
 use function array_filter;
 use function array_map;
@@ -21,7 +20,6 @@ use function is_dir;
 use function is_string;
 use function realpath;
 use function sort;
-use function str_ends_with;
 use function stripos;
 use function substr;
 use AppendIterator;
@@ -39,8 +37,6 @@ final class Factory
      * @param list<non-empty-string>|string           $suffixes
      * @param list<non-empty-string>|string           $prefixes
      * @param list<non-empty-string>                  $exclude
-     *
-     * @phpstan-ignore missingType.generics
      */
     public function getFileIterator(array|string $paths, array|string $suffixes = '', array|string $prefixes = '', array $exclude = []): AppendIterator
     {
@@ -100,31 +96,11 @@ final class Factory
         $_paths = [[]];
 
         foreach ($paths as $path) {
-            $pathEndsWithDirectorySeparator = str_ends_with($path, '/') || str_ends_with($path, DIRECTORY_SEPARATOR);
-
             if ($locals = $this->globstar($path)) {
-                $_paths[] = array_map(
-                    static function (string $local) use ($pathEndsWithDirectorySeparator): string|false
-                    {
-                        $realPath = realpath($local);
-
-                        if ($realPath !== false && $pathEndsWithDirectorySeparator && is_dir($realPath)) {
-                            return $realPath . DIRECTORY_SEPARATOR;
-                        }
-
-                        return $realPath;
-                    },
-                    $locals,
-                );
+                $_paths[] = array_map('\realpath', $locals);
             } else {
                 // @codeCoverageIgnoreStart
-                $realPath = realpath($path);
-
-                if ($realPath !== false && $pathEndsWithDirectorySeparator && is_dir($realPath)) {
-                    $_paths[] = [$realPath . DIRECTORY_SEPARATOR];
-                } else {
-                    $_paths[] = [$realPath];
-                }
+                $_paths[] = [realpath($path)];
                 // @codeCoverageIgnoreEnd
             }
         }
@@ -137,7 +113,7 @@ final class Factory
      *
      * @return list<string>
      */
-    private function globstar(string $pattern): array
+    private function globstar(string $pattern)
     {
         if (stripos($pattern, '**') === false) {
             $files = glob($pattern, GLOB_ONLYDIR);
@@ -149,24 +125,23 @@ final class Factory
             $patterns = [$rootPattern . $restPattern];
             $rootPattern .= '/*';
 
-            while ($directories = glob($rootPattern, GLOB_ONLYDIR)) {
+            while ($dirs = glob($rootPattern, GLOB_ONLYDIR)) {
                 $rootPattern .= '/*';
 
-                foreach ($directories as $directory) {
-                    $patterns[] = $directory . $restPattern;
+                foreach ($dirs as $dir) {
+                    $patterns[] = $dir . $restPattern;
                 }
             }
 
             $files = [];
 
-            foreach ($patterns as $_pattern) {
-                $files = array_merge($files, $this->globstar($_pattern));
+            foreach ($patterns as $pat) {
+                $files = array_merge($files, $this->globstar($pat));
             }
         }
 
         if ($files !== false) {
             $files = array_unique($files);
-
             sort($files);
 
             return $files;

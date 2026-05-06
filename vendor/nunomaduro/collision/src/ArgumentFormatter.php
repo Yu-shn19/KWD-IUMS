@@ -4,12 +4,10 @@ declare(strict_types=1);
 
 namespace NunoMaduro\Collision;
 
-use Tests\Unit\ArgumentFormatterTest;
-
 /**
  * @internal
  *
- * @see ArgumentFormatterTest
+ * @see \Tests\Unit\ArgumentFormatterTest
  */
 final class ArgumentFormatter
 {

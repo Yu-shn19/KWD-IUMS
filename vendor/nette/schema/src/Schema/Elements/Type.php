@@ -1,9 +1,11 @@
-<?php declare(strict_types=1);
+<?php
 
 /**
  * This file is part of the Nette Framework (https://nette.org)
  * Copyright (c) 2004 David Grudl (https://davidgrudl.com)
  */
+
+declare(strict_types=1);
 
 namespace Nette\Schema\Elements;
 
@@ -11,7 +13,6 @@ use Nette\Schema\Context;
 use Nette\Schema\DynamicParameter;
 use Nette\Schema\Helpers;
 use Nette\Schema\Schema;
-use function array_key_exists, array_pop, implode, is_array, str_replace, strpos;
 
 
 final class Type implements Schema
@@ -187,7 +188,6 @@ final class Type implements Schema
 	}
 
 
-	/** @param  array<mixed>  $value */
 	private function validateItems(array &$value, Context $context): void
 	{
 		if (!$this->itemsValue) {
@@ -200,7 +200,7 @@ final class Type implements Schema
 			$context->isKey = true;
 			$key = $this->itemsKey ? $this->itemsKey->complete($key, $context) : $key;
 			$context->isKey = false;
-			$res[$key ?? ''] = $this->itemsValue->complete($val, $context);
+			$res[$key] = $this->itemsValue->complete($val, $context);
 			array_pop($context->path);
 		}
 		$value = $res;

@@ -12,7 +12,7 @@ namespace PHPUnit\Logging\TestDox;
 use IteratorAggregate;
 
 /**
- * @template-implements IteratorAggregate<non-negative-int, TestResult>
+ * @template-implements IteratorAggregate<int, TestResult>
  *
  * @immutable
  *

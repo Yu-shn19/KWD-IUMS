@@ -133,7 +133,7 @@ final class Mbstring
     public static function mb_convert_variables($toEncoding, $fromEncoding, &...$vars)
     {
         $ok = true;
-        array_walk_recursive($vars, static function (&$v) use (&$ok, $toEncoding, $fromEncoding) {
+        array_walk_recursive($vars, function (&$v) use (&$ok, $toEncoding, $fromEncoding) {
             if (false === $v = self::mb_convert_encoding($v, $toEncoding, $fromEncoding)) {
                 $ok = false;
             }
@@ -194,7 +194,7 @@ final class Mbstring
             $convmap[$i + 1] += $convmap[$i + 2];
         }
 
-        $s = preg_replace_callback('/&#(?:0*([0-9]+)|x0*([0-9a-fA-F]+))'.(\PHP_VERSION_ID >= 80200 ? '' : '(?!&)').';?/', static function (array $m) use ($cnt, $convmap) {
+        $s = preg_replace_callback('/&#(?:0*([0-9]+)|x0*([0-9a-fA-F]+))(?!&);?/', function (array $m) use ($cnt, $convmap) {
             $c = isset($m[2]) ? (int) hexdec($m[2]) : $m[1];
             for ($i = 0; $i < $cnt; $i += 4) {
                 if ($c >= $convmap[$i] && $c <= $convmap[$i + 1]) {
@@ -268,7 +268,7 @@ final class Mbstring
             for ($j = 0; $j < $cnt; $j += 4) {
                 if ($c >= $convmap[$j] && $c <= $convmap[$j + 1]) {
                     $cOffset = ($c + $convmap[$j + 2]) & $convmap[$j + 3];
-                    $result .= $is_hex ? \sprintf('&#x%X;', $cOffset) : '&#'.$cOffset.';';
+                    $result .= $is_hex ? sprintf('&#x%X;', $cOffset) : '&#'.$cOffset.';';
                     continue 2;
                 }
             }
@@ -382,7 +382,7 @@ final class Mbstring
             return false;
         }
 
-        throw new \ValueError(\sprintf('Argument #1 ($encoding) must be a valid encoding, "%s" given', $encoding));
+        throw new \ValueError(sprintf('Argument #1 ($encoding) must be a valid encoding, "%s" given', $encoding));
     }
 
     public static function mb_language($lang = null)
@@ -403,7 +403,7 @@ final class Mbstring
             return false;
         }
 
-        throw new \ValueError(\sprintf('Argument #1 ($language) must be a valid language, "%s" given', $lang));
+        throw new \ValueError(sprintf('Argument #1 ($language) must be a valid language, "%s" given', $lang));
     }
 
     public static function mb_list_encodings()
@@ -834,32 +834,19 @@ final class Mbstring
         return $code;
     }
 
-    /** @return string|false */
-    public static function mb_str_pad(string $string, int $length, string $pad_string = ' ', int $pad_type = \STR_PAD_RIGHT, ?string $encoding = null)
+    public static function mb_str_pad(string $string, int $length, string $pad_string = ' ', int $pad_type = \STR_PAD_RIGHT, ?string $encoding = null): string
     {
         if (!\in_array($pad_type, [\STR_PAD_RIGHT, \STR_PAD_LEFT, \STR_PAD_BOTH], true)) {
-            if (\PHP_VERSION_ID < 80000) {
-                trigger_error('mb_str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH', \E_USER_WARNING);
-
-                return false;
-            }
-
             throw new \ValueError('mb_str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH');
         }
 
         if (null === $encoding) {
             $encoding = self::mb_internal_encoding();
-        } elseif (!self::assertEncoding($encoding, 'mb_str_pad(): Argument #5 ($encoding) must be a valid encoding, "%s" given')) {
-            return false;
+        } else {
+            self::assertEncoding($encoding, 'mb_str_pad(): Argument #5 ($encoding) must be a valid encoding, "%s" given');
         }
 
         if (self::mb_strlen($pad_string, $encoding) <= 0) {
-            if (\PHP_VERSION_ID < 80000) {
-                trigger_error('mb_str_pad(): Argument #3 ($pad_string) must be a non-empty string', \E_USER_WARNING);
-
-                return false;
-            }
-
             throw new \ValueError('mb_str_pad(): Argument #3 ($pad_string) must be a non-empty string');
         }
 
@@ -882,13 +869,12 @@ final class Mbstring
         }
     }
 
-    /** @return string|false */
-    public static function mb_ucfirst(string $string, ?string $encoding = null)
+    public static function mb_ucfirst(string $string, ?string $encoding = null): string
     {
         if (null === $encoding) {
             $encoding = self::mb_internal_encoding();
-        } elseif (!self::assertEncoding($encoding, 'mb_ucfirst(): Argument #2 ($encoding) must be a valid encoding, "%s" given')) {
-            return false;
+        } else {
+            self::assertEncoding($encoding, 'mb_ucfirst(): Argument #2 ($encoding) must be a valid encoding, "%s" given');
         }
 
         $firstChar = mb_substr($string, 0, 1, $encoding);
@@ -897,13 +883,12 @@ final class Mbstring
         return $firstChar.mb_substr($string, 1, null, $encoding);
     }
 
-    /** @return string|false */
-    public static function mb_lcfirst(string $string, ?string $encoding = null)
+    public static function mb_lcfirst(string $string, ?string $encoding = null): string
     {
         if (null === $encoding) {
             $encoding = self::mb_internal_encoding();
-        } elseif (!self::assertEncoding($encoding, 'mb_lcfirst(): Argument #2 ($encoding) must be a valid encoding, "%s" given')) {
-            return false;
+        } else {
+            self::assertEncoding($encoding, 'mb_lcfirst(): Argument #2 ($encoding) must be a valid encoding, "%s" given');
         }
 
         $firstChar = mb_substr($string, 0, 1, $encoding);
@@ -983,42 +968,30 @@ final class Mbstring
             return 'UTF-8';
         }
 
-        if ('UTF-32' === $encoding) {
-            return 'UTF-32BE';
-        }
-
-        if ('UTF-16' === $encoding) {
-            return 'UTF-16BE';
-        }
-
         return $encoding;
     }
 
-    /** @return string|false */
-    public static function mb_trim(string $string, ?string $characters = null, ?string $encoding = null)
+    public static function mb_trim(string $string, ?string $characters = null, ?string $encoding = null): string
     {
         return self::mb_internal_trim('{^[%s]+|[%1$s]+$}Du', $string, $characters, $encoding, __FUNCTION__);
     }
 
-    /** @return string|false */
-    public static function mb_ltrim(string $string, ?string $characters = null, ?string $encoding = null)
+    public static function mb_ltrim(string $string, ?string $characters = null, ?string $encoding = null): string
     {
         return self::mb_internal_trim('{^[%s]+}Du', $string, $characters, $encoding, __FUNCTION__);
     }
 
-    /** @return string|false */
-    public static function mb_rtrim(string $string, ?string $characters = null, ?string $encoding = null)
+    public static function mb_rtrim(string $string, ?string $characters = null, ?string $encoding = null): string
     {
         return self::mb_internal_trim('{[%s]+$}Du', $string, $characters, $encoding, __FUNCTION__);
     }
 
-    /** @return string|false */
-    private static function mb_internal_trim(string $regex, string $string, ?string $characters, ?string $encoding, string $function)
+    private static function mb_internal_trim(string $regex, string $string, ?string $characters, ?string $encoding, string $function): string
     {
         if (null === $encoding) {
             $encoding = self::mb_internal_encoding();
-        } elseif (!self::assertEncoding($encoding, $function.'(): Argument #3 ($encoding) must be a valid encoding, "%s" given')) {
-            return false;
+        } else {
+            self::assertEncoding($encoding, $function.'(): Argument #3 ($encoding) must be a valid encoding, "%s" given');
         }
 
         if ('' === $characters) {
@@ -1047,7 +1020,7 @@ final class Mbstring
             $characters = preg_quote($characters);
         }
 
-        $string = preg_replace(\sprintf($regex, $characters), '', $string);
+        $string = preg_replace(sprintf($regex, $characters), '', $string);
 
         if (null === $encoding) {
             return $string;
@@ -1056,22 +1029,17 @@ final class Mbstring
         return iconv('UTF-8', $encoding.'//IGNORE', $string);
     }
 
-    private static function assertEncoding(string $encoding, string $errorFormat): bool
+    private static function assertEncoding(string $encoding, string $errorFormat): void
     {
         try {
             $validEncoding = @self::mb_check_encoding('', $encoding);
         } catch (\ValueError $e) {
-            throw new \ValueError(\sprintf($errorFormat, $encoding));
+            throw new \ValueError(sprintf($errorFormat, $encoding));
         }
 
+        // BC for PHP 7.3 and lower
         if (!$validEncoding) {
-            if (80000 > \PHP_VERSION_ID) {
-                trigger_error(\sprintf($errorFormat, $encoding), \E_USER_WARNING);
-            } else {
-                throw new \ValueError(\sprintf($errorFormat, $encoding));
-            }
+            throw new \ValueError(sprintf($errorFormat, $encoding));
         }
-
-        return $validEncoding;
     }
 }

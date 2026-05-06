@@ -26,7 +26,7 @@ final readonly class RequiresPhpunitExtension extends Metadata
     /**
      * @param class-string<Extension> $extensionClass
      */
-    protected function __construct(int $level, string $extensionClass)
+    public function __construct(int $level, string $extensionClass)
     {
         parent::__construct($level);
 

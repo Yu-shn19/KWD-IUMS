@@ -278,12 +278,27 @@ class LRO_ConsumerLedgerController extends Controller
         ]);
 
         // --- 1) Fetch from lro_ledger (BAM entries: account, date, type, amount)
-        $fromSingular = LROLedger::where(function ($query) use ($consumerAccount, $normalizedAccountNo) {
-            $query->where('account', $consumerAccount)
-                ->orWhereRaw(
-                    "UPPER(TRIM(REPLACE(COALESCE(account, ''), '-', ''))) = ?",
-                    [$normalizedAccountNo]
-                );
+        $hasSingularConsumerZoneId = Schema::hasColumn('lro_ledger', 'consumer_zone_id');
+        $fromSingular = LROLedger::where(function ($query) use ($consumer, $consumerAccount, $normalizedAccountNo, $hasSingularConsumerZoneId) {
+            $hasAny = false;
+            if ($hasSingularConsumerZoneId && $consumer && isset($consumer->id)) {
+                $query->where('consumer_zone_id', $consumer->id);
+                $hasAny = true;
+            }
+
+            if ($hasAny) {
+                $query->orWhere('account', $consumerAccount)
+                    ->orWhereRaw(
+                        "UPPER(TRIM(REPLACE(COALESCE(account, ''), '-', ''))) = ?",
+                        [$normalizedAccountNo]
+                    );
+            } else {
+                $query->where('account', $consumerAccount)
+                    ->orWhereRaw(
+                        "UPPER(TRIM(REPLACE(COALESCE(account, ''), '-', ''))) = ?",
+                        [$normalizedAccountNo]
+                    );
+            }
         })
             ->orderByRaw('COALESCE(date, "1970-01-01") ASC')
             ->orderBy('id', 'asc')
@@ -447,6 +462,7 @@ class LRO_ConsumerLedgerController extends Controller
                 'consumer_id' => $consumer->id,
                 'merged_rows_count' => count($rawRows),
                 'transactions_count' => count($transactions),
+                'lro_ledger_has_consumer_zone_id' => $hasSingularConsumerZoneId,
                 'lro_ledgers_table_used' => Schema::hasTable('lro_ledgers'),
             ];
         }

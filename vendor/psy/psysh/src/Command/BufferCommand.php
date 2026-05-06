@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2026 Justin Hileman
+ * (c) 2012-2023 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -11,10 +11,7 @@
 
 namespace Psy\Command;
 
-use Psy\Output\ShellOutputAdapter;
-use Psy\Readline\LegacyReadline;
-use Psy\Readline\Readline;
-use Psy\Readline\ReadlineAware;
+use Psy\Output\ShellOutput;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -24,14 +21,12 @@ use Symfony\Component\Console\Output\OutputInterface;
  *
  * Shows and clears the buffer for the current multi-line expression.
  */
-class BufferCommand extends Command implements ReadlineAware
+class BufferCommand extends Command
 {
-    private ?Readline $readline = null;
-
     /**
      * {@inheritdoc}
      */
-    protected function configure(): void
+    protected function configure()
     {
         $this
             ->setName('buffer')
@@ -57,30 +52,16 @@ HELP
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $shell = $this->getShell();
-        $shellOutput = $this->shellOutput($output);
-        $readline = $this->getLegacyReadline();
-        $legacyBuffer = $readline->getBuffer();
-        $shellBuffer = $shell->getPendingCodeBuffer();
-        $buf = $legacyBuffer !== [] ? $legacyBuffer : $shellBuffer;
+
+        $buf = $shell->getCodeBuffer();
         if ($input->getOption('clear')) {
-            $readline->clearBuffer();
-            if ($shellBuffer !== []) {
-                $shell->clearPendingCodeBuffer();
-            }
-            $shellOutput->writeln($this->formatLines($buf, 'urgent'), ShellOutputAdapter::NUMBER_LINES);
+            $shell->resetCodeBuffer();
+            $output->writeln($this->formatLines($buf, 'urgent'), ShellOutput::NUMBER_LINES);
         } else {
-            $shellOutput->writeln($this->formatLines($buf), ShellOutputAdapter::NUMBER_LINES);
+            $output->writeln($this->formatLines($buf), ShellOutput::NUMBER_LINES);
         }
 
         return 0;
-    }
-
-    /**
-     * Set the shell's readline implementation.
-     */
-    public function setReadline(Readline $readline)
-    {
-        $this->readline = $readline;
     }
 
     /**
@@ -95,18 +76,8 @@ HELP
     {
         $template = \sprintf('<%s>%%s</%s>', $type, $type);
 
-        return \array_map(fn ($line) => \sprintf($template, $line), $lines);
-    }
-
-    /**
-     * Get the active multiline buffer from the legacy shim.
-     */
-    private function getLegacyReadline(): LegacyReadline
-    {
-        if ($this->readline instanceof LegacyReadline) {
-            return $this->readline;
-        }
-
-        throw new \LogicException('BufferCommand requires LegacyReadline.');
+        return \array_map(function ($line) use ($template) {
+            return \sprintf($template, $line);
+        }, $lines);
     }
 }

@@ -22,12 +22,11 @@ class WriterFactory
      * @param  string  $writerType
      * @param  Spreadsheet  $spreadsheet
      * @param  object  $export
-     * @param  string|null  $filePath
      * @return IWriter
      *
      * @throws \PhpOffice\PhpSpreadsheet\Writer\Exception
      */
-    public static function make(string $writerType, Spreadsheet $spreadsheet, $export, ?string $filePath = null): IWriter
+    public static function make(string $writerType, Spreadsheet $spreadsheet, $export): IWriter
     {
         $writer = IOFactory::createWriter($spreadsheet, $writerType);
 
@@ -45,11 +44,6 @@ class WriterFactory
 
         if ($writer instanceof Csv) {
             static::applyCsvSettings(config('excel.exports.csv', []));
-
-            // Auto-detect TSV files and apply tab delimiter
-            if ($filePath && static::isTsvFile($filePath) && !($export instanceof WithCustomCsvSettings)) {
-                static::applyCsvSettings(['delimiter' => "\t"]);
-            }
 
             if ($export instanceof WithCustomCsvSettings) {
                 static::applyCsvSettings($export->getCsvSettings());
@@ -94,17 +88,5 @@ class WriterFactory
         }
 
         return false;
-    }
-
-    /**
-     * @param  string  $filePath
-     * @return bool
-     */
-    private static function isTsvFile(string $filePath): bool
-    {
-        $pathInfo  = pathinfo($filePath);
-        $extension = strtolower($pathInfo['extension'] ?? '');
-
-        return $extension === 'tsv';
     }
 }

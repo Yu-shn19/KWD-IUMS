@@ -146,9 +146,7 @@
                         <div>
                             <h1 class="h3 mb-1 text-dark font-weight-bold">Disconnection Management</h1>
                             <p class="text-muted mb-0 small">
-                                @if(isset($filterType) && $filterType === '2_consecutive')
-                                    List of consumers with 2 consecutive months without payment
-                                @elseif(isset($filterType) && $filterType === '3_consecutive')
+                                @if(isset($filterType) && $filterType === '3_consecutive')
                                     List of consumers with 3 consecutive months without payment
                                 @else
                                     List of consumers with passed disconnection dates
@@ -191,9 +189,6 @@
                                         <select name="filter_type" class="form-control form-control-sm">
                                             <option value="disconnection_date" {{ (!isset($filterType) || $filterType == 'disconnection_date') ? 'selected' : '' }}>
                                                 Disconnection Date
-                                            </option>
-                                            <option value="2_consecutive" {{ (isset($filterType) && $filterType == '2_consecutive') ? 'selected' : '' }}>
-                                                2 Months Consecutive
                                             </option>
                                             <option value="3_consecutive" {{ (isset($filterType) && $filterType == '3_consecutive') ? 'selected' : '' }}>
                                                 3 Months Consecutive
@@ -374,11 +369,9 @@
 
     @if(!$consumersByZone->isEmpty())
         @php
-            $filterTypeLabel = match ($filterType ?? '') {
-                '2_consecutive' => '2 consecutive months without payment',
-                '3_consecutive' => '3 consecutive months without payment',
-                default => 'Passed disconnection dates',
-            };
+            $filterTypeLabel = (isset($filterType) && $filterType === '3_consecutive')
+                ? '3 consecutive months without payment'
+                : 'Passed disconnection dates';
             $zoneLabel = !empty($zone ?? null) ? 'Zone ' . $zone : 'All zones';
             $billingMonthLabel = '—';
             if (!empty($billingMonth ?? null)) {

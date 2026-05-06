@@ -5,7 +5,6 @@ use PHPUnit\Runner\ErrorHandler;
 use PHPUnit\TextUI\Configuration\Registry as ConfigurationRegistry;
 use PHPUnit\TextUI\Configuration\CodeCoverageFilterRegistry;
 use PHPUnit\TextUI\Configuration\PhpHandler;
-use PHPUnit\TextUI\Configuration\SourceMapper;
 use PHPUnit\TestRunner\TestResult\PassedTests;
 
 // php://stdout does not obey output buffering. Any output would break
@@ -88,9 +87,9 @@ function __phpunit_run_isolated_test()
     ini_set('xdebug.scream', '0');
 
     // Not every STDOUT target stream is rewindable
-    $hasRewound = @rewind(STDOUT);
+    @rewind(STDOUT);
 
-    if ($hasRewound && $stdout = @stream_get_contents(STDOUT)) {
+    if ($stdout = @stream_get_contents(STDOUT)) {
         $output         = $stdout . $output;
         $streamMetaData = stream_get_meta_data(STDOUT);
 
@@ -129,11 +128,6 @@ set_error_handler('__phpunit_error_handler');
 restore_error_handler();
 
 ConfigurationRegistry::loadFrom('{serializedConfiguration}');
-
-if ('{sourceMapFile}' !== '') {
-    SourceMapper::loadFrom('{sourceMapFile}', ConfigurationRegistry::get()->source());
-}
-
 (new PhpHandler)->handle(ConfigurationRegistry::get()->php());
 
 if ('{bootstrap}' !== '') {

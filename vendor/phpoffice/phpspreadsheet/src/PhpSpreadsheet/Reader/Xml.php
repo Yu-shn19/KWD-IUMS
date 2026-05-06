@@ -5,7 +5,6 @@ namespace PhpOffice\PhpSpreadsheet\Reader;
 use DateTime;
 use DateTimeZone;
 use PhpOffice\PhpSpreadsheet\Cell\AddressHelper;
-use PhpOffice\PhpSpreadsheet\Cell\AddressRange;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\DefinedName;
@@ -76,7 +75,6 @@ class Xml extends BaseReader
         ];
 
         // Open file
-        File::assertFile($filename);
         $data = (string) file_get_contents($filename);
         $data = $this->getSecurityScannerOrThrow()->scan($data);
 
@@ -355,18 +353,14 @@ class Xml extends BaseReader
                 }
             }
 
-            $rowID = 0;
+            $rowID = 1;
             if (isset($worksheet->Table->Row)) {
                 $additionalMergedCells = 0;
                 foreach ($worksheet->Table->Row as $rowData) {
                     $rowHasData = false;
-                    ++$rowID;
                     $row_ss = self::getAttributes($rowData, self::NAMESPACES_SS);
                     if (isset($row_ss['Index'])) {
                         $rowID = (int) $row_ss['Index'];
-                    }
-                    if ($rowID < 1 || $rowID > AddressRange::MAX_ROW) {
-                        continue;
                     }
                     if (isset($row_ss['Hidden'])) {
                         $rowVisible = ((string) $row_ss['Hidden']) !== '1';
@@ -501,6 +495,8 @@ class Xml extends BaseReader
                             $spreadsheet->getActiveSheet()->getRowDimension($rowID)->setRowHeight((float) $rowHeight);
                         }
                     }
+
+                    ++$rowID;
                 }
             }
 

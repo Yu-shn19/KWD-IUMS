@@ -11,7 +11,6 @@
 
 namespace Monolog\Handler;
 
-use DateTimeZone;
 use InvalidArgumentException;
 use Monolog\Level;
 use Monolog\Utils;
@@ -38,20 +37,18 @@ class RotatingFileHandler extends StreamHandler
     protected \DateTimeImmutable $nextRotation;
     protected string $filenameFormat;
     protected string $dateFormat;
-    protected DateTimeZone|null $timezone = null;
 
     /**
      * @param int      $maxFiles       The maximal amount of files to keep (0 means unlimited)
      * @param int|null $filePermission Optional file permissions (default (0644) are only for owner read/write)
      * @param bool     $useLocking     Try to lock log file before doing any writes
      */
-    public function __construct(string $filename, int $maxFiles = 0, int|string|Level $level = Level::Debug, bool $bubble = true, ?int $filePermission = null, bool $useLocking = false, string $dateFormat = self::FILE_PER_DAY, string $filenameFormat  = '{filename}-{date}', DateTimeZone|null $timezone = null)
+    public function __construct(string $filename, int $maxFiles = 0, int|string|Level $level = Level::Debug, bool $bubble = true, ?int $filePermission = null, bool $useLocking = false, string $dateFormat = self::FILE_PER_DAY, string $filenameFormat  = '{filename}-{date}')
     {
         $this->filename = Utils::canonicalizePath($filename);
         $this->maxFiles = $maxFiles;
         $this->setFilenameFormat($filenameFormat, $dateFormat);
         $this->nextRotation = $this->getNextRotation();
-        $this->timezone = $timezone;
 
         parent::__construct($this->getTimedFilename(), $level, $bubble, $filePermission, $useLocking);
     }
@@ -149,27 +146,14 @@ class RotatingFileHandler extends StreamHandler
             return strcmp($b, $a);
         });
 
-        $basePath = dirname($this->filename);
-
         foreach (\array_slice($logFiles, $this->maxFiles) as $file) {
             if (is_writable($file)) {
                 // suppress errors here as unlink() might fail if two processes
                 // are cleaning up/rotating at the same time
                 set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline): bool {
-                    return true;
+                    return false;
                 });
                 unlink($file);
-
-                $dir = dirname($file);
-                while ($dir !== $basePath) {
-                    $entries = scandir($dir);
-                    if ($entries === false || \count(array_diff($entries, ['.', '..'])) > 0) {
-                        break;
-                    }
-
-                    rmdir($dir);
-                    $dir = dirname($dir);
-                }
                 restore_error_handler();
             }
         }
@@ -180,7 +164,7 @@ class RotatingFileHandler extends StreamHandler
         $fileInfo = pathinfo($this->filename);
         $timedFilename = str_replace(
             ['{filename}', '{date}'],
-            [$fileInfo['filename'], (new \DateTimeImmutable(timezone: $this->timezone))->format($this->dateFormat)],
+            [$fileInfo['filename'], date($this->dateFormat)],
             ($fileInfo['dirname'] ?? '') . '/' . $this->filenameFormat
         );
 

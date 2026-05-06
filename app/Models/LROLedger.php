@@ -27,6 +27,7 @@ class LROLedger extends Model
         'date',
         'account',
         'name',
+        'consumer_zone_id',
         'bam_no',
         'amount',
         'ar_type',

@@ -81,7 +81,13 @@ parameters:
 		-
 			message: '#^Parameter \#1 \$haystack of static method Illuminate\\Support\\Str\:\:startsWith\(\) expects string, mixed given\.$#'
 			identifier: argument.type
-			count: 11
+			count: 10
+			path: src/Adapters/Laravel/Commands/TestCommand.php
+
+		-
+			message: '#^Parameter \#1 \$messages of method Illuminate\\Console\\OutputStyle\:\:write\(\) expects iterable\|string, mixed given\.$#'
+			identifier: argument.type
+			count: 1
 			path: src/Adapters/Laravel/Commands/TestCommand.php
 
 		-

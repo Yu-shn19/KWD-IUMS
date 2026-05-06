@@ -172,8 +172,7 @@ class Writer
         $writer = WriterFactory::make(
             $writerType,
             $this->spreadsheet,
-            $export,
-            $temporaryFile->getLocalPath()
+            $export
         );
 
         if ($temporaryFile instanceof RemoteTemporaryFile && !$temporaryFile->existsLocally() && !$this->isRunningServerless()) {

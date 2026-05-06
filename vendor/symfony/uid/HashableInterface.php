@@ -11,17 +11,7 @@
 
 namespace Symfony\Component\Uid;
 
-if (interface_exists(\Ds\Key::class)) {
-    /**
-     * @internal
-     */
-    interface HashableInterface extends \Ds\Key
-    {
-        public function equals(mixed $other): bool;
-
-        public function hash(): string;
-    }
-} elseif (interface_exists(\Ds\Hashable::class)) {
+if (interface_exists(\Ds\Hashable::class)) {
     /**
      * @internal
      */

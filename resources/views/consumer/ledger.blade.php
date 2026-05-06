@@ -76,7 +76,10 @@
                     <div id="ledgerCard" class="card shadow mb-4">
                         <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
                             <h6 class="m-0 font-weight-bold text-primary">Account Ledger - F10</h6>
-                            <span class="badge badge-primary" id="ledgerAccountBadge">No Account Selected</span>
+                            <div class="d-flex align-items-center">
+                                <span class="badge badge-secondary mr-2 d-none" id="ledgerConsumerStatus">N/A Consumer</span>
+                                <span class="badge badge-primary" id="ledgerAccountBadge">No Account Selected</span>
+                            </div>
                         </div>
                         <div class="card-body p-0">
                             <div id="ledgerTableScroll" class="table-responsive" style="max-height: 600px; overflow-y: auto;">
@@ -587,7 +590,7 @@
                 const summary = data.summary;
                 const consumer = data.consumer;
 
-                // Update account badge and keep header in sync with ledger (fix: header showing wrong consumer)
+                // Update account badge + status badge and keep header in sync with ledger
                 if (consumer) {
                     const accountNo = (consumer.account_no || consumer.account_number || '').toString().trim();
                     const accountName = (consumer.account_name || consumer.name || '').toString().trim();
@@ -595,6 +598,36 @@
                     const badgeParts = [accountNo, accountName];
                     if (accountAddress) badgeParts.push(accountAddress);
                     $('#ledgerAccountBadge').text(`Account: ${badgeParts.filter(Boolean).join(' - ')}`);
+
+                    const statusCodeRaw = (consumer.status_code || '').toString().trim().toUpperCase();
+                    const statusLabelRaw = (consumer.status_label || consumer.status || '').toString().trim().toUpperCase();
+                    let statusCode = '';
+                    if (statusCodeRaw === 'A' || statusCodeRaw === 'ACTIVE') {
+                        statusCode = 'A';
+                    } else if (statusCodeRaw === 'P' || statusCodeRaw === 'PENDING') {
+                        statusCode = 'P';
+                    } else if (statusCodeRaw === 'X' || statusCodeRaw === 'D' || statusCodeRaw === 'DISCONNECTED') {
+                        statusCode = 'X';
+                    } else if (statusLabelRaw === 'ACTIVE') {
+                        statusCode = 'A';
+                    } else if (statusLabelRaw === 'PENDING') {
+                        statusCode = 'P';
+                    } else if (statusLabelRaw === 'DISCONNECTED' || statusLabelRaw === 'D') {
+                        statusCode = 'X';
+                    }
+                    const normalizedStatus = statusCode || statusLabelRaw || 'N/A';
+                    let statusClass = 'badge-secondary';
+                    if (normalizedStatus === 'X' || normalizedStatus === 'D' || normalizedStatus === 'DISCONNECTED') {
+                        statusClass = 'badge-danger';
+                    } else if (normalizedStatus === 'P' || normalizedStatus === 'PENDING') {
+                        statusClass = 'badge-warning';
+                    } else if (normalizedStatus === 'A' || normalizedStatus === 'ACTIVE') {
+                        statusClass = 'badge-success';
+                    }
+                    $('#ledgerConsumerStatus')
+                        .removeClass('d-none badge-secondary badge-danger badge-warning badge-success')
+                        .addClass(statusClass)
+                        .text(`${statusCode || 'N/A'} Consumer`);
                     // Sync this consumer to sessionStorage and update header so header always matches ledger
                     try {
                         const stored = sessionStorage.getItem('currentConsumer');

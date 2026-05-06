@@ -1437,6 +1437,7 @@ class ReportController extends Controller
                 'zones' => [],
                 'categories' => [],
                 'status' => '',
+                'selectedBalanceFilter' => '',
                 'selectedZone' => '',
                 'selectedCategory' => '',
                 'asOf' => $now,
@@ -1463,6 +1464,7 @@ class ReportController extends Controller
             @ini_set('max_execution_time', '300'); // 5 minutes
 
             $status = $request->input('status', '');
+            $selectedBalanceFilter = $request->input('balance_filter', '');
             $zone = $request->input('zone', '');
             $category = $request->input('category', '');
             try {
@@ -1779,9 +1781,13 @@ class ReportController extends Controller
                 ROUND(SUM(unpaid_amount), 2) AS total_balance
             FROM unpaid
             GROUP BY consumer_zone_id, account_no
-            HAVING ROUND(SUM(unpaid_amount), 2) > 0
-            ORDER BY account_no
         ";
+
+        if ($selectedBalanceFilter === 'with_balance') {
+            $agingSql .= "    HAVING ROUND(SUM(unpaid_amount), 2) > 0\n";
+        }
+
+        $agingSql .= "    ORDER BY account_no\n";
 
         $queryBindings = array_merge(
             [$billingCutoffDate],
@@ -1839,19 +1845,34 @@ class ReportController extends Controller
                 'balance' => round($total_balance, 2),
             ];
 
-            $totals['current'] += $current;
-            $totals['_30'] += $bucket30;
-            $totals['_60'] += $bucket60;
-            $totals['_90'] += $bucket90;
-            $totals['_over90'] += $bucketOver90;
-            $totals['prev_year'] += $prevYear;
-            $totals['total_balance'] += $total_balance;
         }
 
-        // Round totals
-        foreach ($totals as $key => $value) {
-            $totals[$key] = round($value, 2);
+        if ($selectedBalanceFilter === 'with_balance') {
+            $detailRecords = array_values(array_filter($detailRecords, function ($r) {
+                $over90 = (float) ($r['_over90'] ?? 0);
+                $prevYr = (float) ($r['prev_year'] ?? 0);
+                $b30    = (float) ($r['_30'] ?? 0);
+                $b60    = (float) ($r['_60'] ?? 0);
+                $b90    = (float) ($r['_90'] ?? 0);
+
+                if ($over90 > 0) return true;
+                if ($prevYr > 0) return true;
+                if ($b30 > 0 && ($b60 > 0 || $b90 > 0)) return true;
+
+                return false;
+            }));
         }
+
+        $detailCollection = collect($detailRecords);
+        $totals = [
+            'current' => round($detailCollection->sum('current'), 2),
+            '_30' => round($detailCollection->sum('_30'), 2),
+            '_60' => round($detailCollection->sum('_60'), 2),
+            '_90' => round($detailCollection->sum('_90'), 2),
+            '_over90' => round($detailCollection->sum('_over90'), 2),
+            'prev_year' => round($detailCollection->sum('prev_year'), 2),
+            'total_balance' => round($detailCollection->sum('balance'), 2),
+        ];
 
         // AR Summary Recap (overall totals)
         $arSummaryRecap = [
@@ -1866,7 +1887,7 @@ class ReportController extends Controller
         ];
 
         // AR Summary per Zone
-        $arSummaryZone = collect($detailRecords)->groupBy('zone')->map(function ($items, $zoneCode) {
+        $arSummaryZone = $detailCollection->groupBy('zone')->map(function ($items, $zoneCode) {
             return [
                 'zone' => $zoneCode ?? 'Unknown',
                 'accounts' => $items->count(),
@@ -1881,7 +1902,7 @@ class ReportController extends Controller
         })->sortBy('zone')->values();
 
         // AR Summary by Category
-        $arSummaryCategory = collect($detailRecords)->groupBy('category_code')->map(function ($items, $categoryCode) {
+        $arSummaryCategory = $detailCollection->groupBy('category_code')->map(function ($items, $categoryCode) {
             return [
                 'category' => $categoryCode ?? 'Unknown',
                 'accounts' => $items->count(),
@@ -1912,6 +1933,7 @@ class ReportController extends Controller
                 'zones' => $zones,
                 'categories' => $categories,
                 'status' => $status,
+                'selectedBalanceFilter' => $selectedBalanceFilter,
                 'selectedZone' => $zone,
                 'selectedCategory' => $category,
                 'asOf' => $asOf,
@@ -1962,6 +1984,7 @@ class ReportController extends Controller
 
             // Reuse the same filter logic as arAgingSummary
             $status = $request->input('status', '');
+            $selectedBalanceFilter = $request->input('balance_filter', '');
             $zone = $request->input('zone', '');
             $category = $request->input('category', '');
             try {
@@ -2239,9 +2262,13 @@ class ReportController extends Controller
                     ROUND(SUM(unpaid_amount), 2) AS total_balance
                 FROM unpaid
                 GROUP BY consumer_zone_id, account_no
-                HAVING ROUND(SUM(unpaid_amount), 2) > 0
-                ORDER BY account_no
             ";
+
+            if ($selectedBalanceFilter === 'with_balance') {
+                $agingSql .= "    HAVING ROUND(SUM(unpaid_amount), 2) > 0\n";
+            }
+
+            $agingSql .= "    ORDER BY account_no\n";
 
             $queryBindings = array_merge(
                 [$billingCutoffDate],
@@ -2262,6 +2289,7 @@ class ReportController extends Controller
             }
 
             $detailRecords = [];
+
             foreach ($fifoRows as $row) {
                 $meta = $consumerMeta->get($row->consumer_zone_id);
                 $current = (float) ($row->current ?? 0);
@@ -2283,6 +2311,22 @@ class ReportController extends Controller
                     'PREV YEAR' => round($prevYear, 2),
                     'BALANCE' => round($total_balance, 2),
                 ];
+            }
+
+            if ($selectedBalanceFilter === 'with_balance') {
+                $detailRecords = array_values(array_filter($detailRecords, function ($r) {
+                    $over90 = (float) ($r['_OVER90'] ?? 0);
+                    $prevYr = (float) ($r['PREV YEAR'] ?? 0);
+                    $b30    = (float) ($r['_30'] ?? 0);
+                    $b60    = (float) ($r['_60'] ?? 0);
+                    $b90    = (float) ($r['_90'] ?? 0);
+
+                    if ($over90 > 0) return true;
+                    if ($prevYr > 0) return true;
+                    if ($b30 > 0 && ($b60 > 0 || $b90 > 0)) return true;
+
+                    return false;
+                }));
             }
 
             if (empty($detailRecords)) {

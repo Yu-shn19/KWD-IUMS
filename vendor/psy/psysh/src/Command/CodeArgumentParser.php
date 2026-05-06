@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2026 Justin Hileman
+ * (c) 2012-2023 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -11,7 +11,6 @@
 
 namespace Psy\Command;
 
-use PhpParser\Error as PhpParserError;
 use PhpParser\Parser;
 use Psy\Exception\ParseErrorException;
 use Psy\ParserFactory;
@@ -43,7 +42,7 @@ class CodeArgumentParser
 
         try {
             return $this->parser->parse($code);
-        } catch (PhpParserError $e) {
+        } catch (\PhpParser\Error $e) {
             if (\strpos($e->getMessage(), 'unexpected EOF') === false) {
                 throw ParseErrorException::fromParseError($e);
             }
@@ -51,7 +50,7 @@ class CodeArgumentParser
             // If we got an unexpected EOF, let's try it again with a semicolon.
             try {
                 return $this->parser->parse($code.';');
-            } catch (PhpParserError $_e) {
+            } catch (\PhpParser\Error $_e) {
                 // Throw the original error, not the semicolon one.
                 throw ParseErrorException::fromParseError($e);
             }

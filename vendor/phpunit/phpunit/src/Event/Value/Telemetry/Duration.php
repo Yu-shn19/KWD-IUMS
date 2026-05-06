@@ -80,9 +80,9 @@ final readonly class Duration
 
         return sprintf(
             '%02d:%02d:%02d.%09d',
-            (int) $hours,
-            (int) $minutes,
-            (int) $seconds,
+            $hours,
+            $minutes,
+            $seconds,
             $this->nanoseconds(),
         );
     }

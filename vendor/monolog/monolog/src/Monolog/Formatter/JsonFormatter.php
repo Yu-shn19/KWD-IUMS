@@ -195,11 +195,7 @@ class JsonFormatter extends NormalizerFormatter
             }
 
             if ($data instanceof Stringable) {
-                try {
-                    return $data->__toString();
-                } catch (Throwable) {
-                    return $data::class;
-                }
+                return $data->__toString();
             }
 
             if (\get_class($data) === '__PHP_Incomplete_Class') {

@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\MeterReadingSchedule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -108,8 +107,7 @@ class ReaderController extends Controller
             }
 
             $rows = $query->orderByRaw('COALESCE(reading_date, bill_date) DESC')
-                ->orderByRaw(MeterReadingSchedule::accountTailNumericOrderExpression('meter_reading_schedules'))
-                ->orderBy('meter_reading_schedules.account_number')
+                ->orderBy('sedr_number')
                 ->get();
 
             $data = $rows->map(function ($row) {

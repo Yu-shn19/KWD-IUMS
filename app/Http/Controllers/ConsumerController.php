@@ -9,6 +9,7 @@ use App\Models\Setting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class ConsumerController extends Controller
 {
@@ -642,7 +643,21 @@ class ConsumerController extends Controller
 
         try {
             $data = $request->except(['_token', '_method']);
-            $consumer->update($data);
+            $oldAccountNo = trim((string) ($consumer->account_no ?? ''));
+            $oldAccountName = trim((string) ($consumer->account_name ?? ''));
+            $newAccountNo = trim((string) ($data['account_no'] ?? $oldAccountNo));
+            $newAccountName = trim((string) ($data['account_name'] ?? $oldAccountName));
+
+            DB::transaction(function () use ($consumer, $data, $oldAccountNo, $newAccountNo, $oldAccountName, $newAccountName) {
+                $consumer->update($data);
+                $this->syncConsumerIdentityChanges(
+                    (int) $consumer->id,
+                    $oldAccountNo,
+                    $newAccountNo,
+                    $oldAccountName,
+                    $newAccountName
+                );
+            });
 
             return response()->json([
                 'success' => true,
@@ -654,6 +669,149 @@ class ConsumerController extends Controller
                 'success' => false,
                 'message' => 'Failed to update consumer: ' . $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Propagate changed account identity fields to related records so legacy lists/reports stay in sync.
+     */
+    private function syncConsumerIdentityChanges(
+        int $consumerId,
+        string $oldAccountNo,
+        string $newAccountNo,
+        string $oldAccountName,
+        string $newAccountName
+    ): void {
+        $accountNoChanged = $newAccountNo !== '' && $oldAccountNo !== $newAccountNo;
+        $accountNameChanged = $oldAccountName !== $newAccountName;
+
+        $normalizedOld = str_replace('-', '', $oldAccountNo);
+        $normalizedNew = str_replace('-', '', $newAccountNo);
+
+        if ($newAccountNo !== '' && Schema::hasTable('billing_adjustments')) {
+            DB::table('billing_adjustments')
+                ->where('consumer_zone_id', $consumerId)
+                ->update(['account_no' => $newAccountNo]);
+        }
+
+        if ($newAccountNo !== '' && Schema::hasTable('consumer_ledgers') && Schema::hasColumn('consumer_ledgers', 'account_no')) {
+            DB::table('consumer_ledgers')
+                ->where('consumer_zone_id', $consumerId)
+                ->update(['account_no' => $newAccountNo]);
+        }
+
+        if (Schema::hasTable('downloaded_readings')) {
+            if ($accountNoChanged && Schema::hasColumn('downloaded_readings', 'account_number')) {
+                DB::table('downloaded_readings')
+                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
+                        $q->where('account_number', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld]);
+                    })
+                    ->update(['account_number' => $newAccountNo]);
+            }
+            if ($accountNameChanged && Schema::hasColumn('downloaded_readings', 'account_name')) {
+                DB::table('downloaded_readings')
+                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
+                        $q->where('account_number', $newAccountNo)
+                          ->orWhere('account_number', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld])
+                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedNew]);
+                    })
+                    ->update(['account_name' => $newAccountName]);
+            }
+        }
+
+        if (Schema::hasTable('meter_reading_schedules')) {
+            if ($accountNoChanged && Schema::hasColumn('meter_reading_schedules', 'account_number')) {
+                DB::table('meter_reading_schedules')
+                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
+                        $q->where('account_number', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld]);
+                    })
+                    ->update(['account_number' => $newAccountNo]);
+            }
+            if ($accountNameChanged && Schema::hasColumn('meter_reading_schedules', 'account_name')) {
+                DB::table('meter_reading_schedules')
+                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
+                        $q->where('account_number', $newAccountNo)
+                          ->orWhere('account_number', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld])
+                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedNew]);
+                    })
+                    ->update(['account_name' => $newAccountName]);
+            }
+        }
+
+        if (Schema::hasTable('collection')) {
+            if ($accountNoChanged && Schema::hasColumn('collection', 'account_no')) {
+                DB::table('collection')
+                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
+                        $q->where('account_no', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedOld]);
+                    })
+                    ->update(['account_no' => $newAccountNo]);
+            }
+            if ($accountNameChanged && Schema::hasColumn('collection', 'account_name')) {
+                DB::table('collection')
+                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
+                        $q->where('account_no', $newAccountNo)
+                          ->orWhere('account_no', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedOld])
+                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedNew]);
+                    })
+                    ->update(['account_name' => $newAccountName]);
+            }
+        }
+
+        if (Schema::hasTable('disconnection_orders')) {
+            if ($accountNoChanged && Schema::hasColumn('disconnection_orders', 'account_no')) {
+                DB::table('disconnection_orders')
+                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
+                        $q->where('account_no', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedOld]);
+                    })
+                    ->update(['account_no' => $newAccountNo]);
+            }
+            if ($accountNameChanged && Schema::hasColumn('disconnection_orders', 'account_name')) {
+                DB::table('disconnection_orders')
+                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
+                        $q->where('account_no', $newAccountNo)
+                          ->orWhere('account_no', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedOld])
+                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedNew]);
+                    })
+                    ->update(['account_name' => $newAccountName]);
+            }
+        }
+
+        if (Schema::hasTable('lro_ledger')) {
+            $hasLroConsumerId = Schema::hasColumn('lro_ledger', 'consumer_zone_id');
+            if ($newAccountNo !== '' && Schema::hasColumn('lro_ledger', 'account') && ($hasLroConsumerId || $oldAccountNo !== '')) {
+                DB::table('lro_ledger')
+                    ->where(function ($q) use ($hasLroConsumerId, $consumerId, $oldAccountNo, $normalizedOld) {
+                        if ($hasLroConsumerId) {
+                            $q->where('consumer_zone_id', $consumerId);
+                        }
+                        if ($oldAccountNo !== '') {
+                            $q->orWhere('account', $oldAccountNo)
+                              ->orWhereRaw("REPLACE(TRIM(account), '-', '') = ?", [$normalizedOld]);
+                        }
+                    })
+                    ->update(['account' => $newAccountNo]);
+            }
+            if ($accountNameChanged && Schema::hasColumn('lro_ledger', 'name') && ($hasLroConsumerId || $newAccountNo !== '' || $oldAccountNo !== '')) {
+                DB::table('lro_ledger')
+                    ->where(function ($q) use ($hasLroConsumerId, $consumerId, $newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
+                        if ($hasLroConsumerId) {
+                            $q->where('consumer_zone_id', $consumerId);
+                        }
+                        $q->orWhere('account', $newAccountNo)
+                          ->orWhere('account', $oldAccountNo)
+                          ->orWhereRaw("REPLACE(TRIM(account), '-', '') = ?", [$normalizedOld])
+                          ->orWhereRaw("REPLACE(TRIM(account), '-', '') = ?", [$normalizedNew]);
+                    })
+                    ->update(['name' => $newAccountName]);
+            }
         }
     }
 

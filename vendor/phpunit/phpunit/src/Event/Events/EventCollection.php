@@ -14,7 +14,7 @@ use Countable;
 use IteratorAggregate;
 
 /**
- * @template-implements IteratorAggregate<non-negative-int, Event>
+ * @template-implements IteratorAggregate<int, Event>
  *
  * @no-named-arguments Parameter names are not covered by the backward compatibility promise for PHPUnit
  */

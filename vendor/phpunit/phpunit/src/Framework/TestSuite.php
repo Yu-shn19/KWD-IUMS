@@ -50,7 +50,7 @@ use SebastianBergmann\CodeCoverage\UnintentionallyCoveredCodeException;
 use Throwable;
 
 /**
- * @template-implements IteratorAggregate<non-negative-int, Test>
+ * @template-implements IteratorAggregate<int, Test>
  *
  * @no-named-arguments Parameter names are not covered by the backward compatibility promise for PHPUnit
  *
@@ -405,7 +405,7 @@ class TestSuite implements IteratorAggregate, Reorderable, Test
     }
 
     /**
-     * @return Iterator<non-negative-int, Test>
+     * Returns an iterator for this test suite.
      */
     public function getIterator(): Iterator
     {
@@ -511,7 +511,7 @@ class TestSuite implements IteratorAggregate, Reorderable, Test
                 new TestMethod(
                     $className,
                     $methodName,
-                    $method->getFileName(),
+                    $class->getFileName(),
                     $method->getStartLine(),
                     Event\Code\TestDoxBuilder::fromClassNameAndMethodName(
                         $className,

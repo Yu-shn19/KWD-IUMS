@@ -18,7 +18,7 @@ use IteratorAggregate;
  *
  * @immutable
  *
- * @template-implements IteratorAggregate<non-negative-int, Constant>
+ * @template-implements IteratorAggregate<int, Constant>
  */
 final readonly class ConstantCollection implements Countable, IteratorAggregate
 {

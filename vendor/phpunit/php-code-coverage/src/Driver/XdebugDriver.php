@@ -125,11 +125,6 @@ final class XdebugDriver extends Driver
         return 'Xdebug ' . phpversion('xdebug');
     }
 
-    public function isXdebug(): true
-    {
-        return true;
-    }
-
     /**
      * @throws XdebugNotAvailableException
      */

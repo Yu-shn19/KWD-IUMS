@@ -2789,7 +2789,6 @@ class Calculation
             'category' => Category::CATEGORY_WEB,
             'functionCall' => [Web\Service::class, 'webService'],
             'argumentCount' => '1',
-            'passCellReference' => true,
         ],
         'WEEKDAY' => [
             'category' => Category::CATEGORY_DATE_AND_TIME,

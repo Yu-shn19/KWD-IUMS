@@ -18,7 +18,7 @@ use IteratorAggregate;
  *
  * @immutable
  *
- * @template-implements IteratorAggregate<non-negative-int, Variable>
+ * @template-implements IteratorAggregate<int, Variable>
  */
 final readonly class VariableCollection implements Countable, IteratorAggregate
 {

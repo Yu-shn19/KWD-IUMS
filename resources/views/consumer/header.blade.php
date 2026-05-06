@@ -4,30 +4,42 @@
     <div class="card-header bg-primary text-white py-3">
         <div class="d-flex justify-content-between align-items-center">
             <div id="consumerHeaderInfo">
-                @if($consumer)
+                @if ($consumer)
                     @php
-                        $st = $consumer->status_label ?? $consumer->status_code ?? '';
-                        $headerStatusBadge = match ($st) {
-                            'Active' => 'success',
-                            'Pending' => 'warning',
-                            'Disconnected' => 'danger',
+                        $statusRaw = strtoupper(
+                            trim((string) ($consumer->status_code ?? ($consumer->status_label ?? ''))),
+                        );
+                        $statusCode = match ($statusRaw) {
+                            'A', 'ACTIVE' => 'A',
+                            'P', 'PENDING' => 'P',
+                            'X', 'D', 'DISCONNECTED' => 'X',
+                            default => 'N/A',
+                        };
+                        $headerStatusBadge = match ($statusCode) {
+                            'A' => 'success',
+                            'P' => 'warning',
+                            'X' => 'danger',
                             default => 'secondary',
                         };
-                        $headerNameClass = match ($st) {
-                            'Pending' => 'text-warning fw-semibold',
-                            'Disconnected' => 'text-danger fw-semibold',
+                        $headerNameClass = match ($statusCode) {
+                            'P' => 'text-warning fw-semibold',
+                            'X' => 'text-danger fw-semibold',
                             default => '',
                         };
                     @endphp
-                    <h4 class="mb-1 {{ $headerNameClass }}" id="consumerHeaderName">{{ $consumer->account_no ?? '' }} {{ $consumer->account_name ?? '' }}</h4>
-                    <p class="mb-1 small" id="consumerHeaderAddress" style="color: #000 !important;">{{ trim(($consumer->address1 ?? '') . ' ' . ($consumer->address2 ?? $consumer->address_2 ?? '')) ?: '—' }}</p>
-                    <span class="badge bg-{{ $headerStatusBadge }}" id="consumerHeaderStatus">{{ $consumer->status_label ?? $consumer->status_code ?? 'N/A' }} Consumer</span>
-                 @else
+                    <h4 class="mb-1 {{ $headerNameClass }}" id="consumerHeaderName">{{ $consumer->account_no ?? '' }}
+                        {{ $consumer->account_name ?? '' }}</h4>
+                    <p class="mb-1 small" id="consumerHeaderAddress" style="color: #000 !important;">
+                        {{ trim(($consumer->address1 ?? '') . ' ' . ($consumer->address2 ?? ($consumer->address_2 ?? ''))) ?: '—' }}
+                    </p>
+                    <span class="badge bg-{{ $headerStatusBadge }}" id="consumerHeaderStatus">{{ $statusCode }}
+                        Consumer</span>
+                @else
                     <h4 class="mb-1" id="consumerHeaderName">No Consumer Selected</h4>
                     <p class="mb-1 small" id="consumerHeaderAddress" style="color: #000 !important;">—</p>
                     <span class="badge bg-secondary" id="consumerHeaderStatus">Please search for a consumer</span>
                 @endif
-                
+
             </div>
             <div class="text-end">
                 <h5 class="mb-0">Consumers</h5>

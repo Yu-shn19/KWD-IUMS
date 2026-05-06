@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2026 Justin Hileman
+ * (c) 2012-2023 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -12,23 +12,18 @@
 namespace Psy\ExecutionLoop;
 
 use PhpParser\Parser;
-use Psy\ConfigPaths;
 use Psy\Exception\ParseErrorException;
-use Psy\OutputAware;
 use Psy\ParserFactory;
 use Psy\Shell;
-use Psy\Util\Docblock;
-use Symfony\Component\Console\Output\OutputInterface;
 
 /**
  * A runkit-based code reloader, which is pretty much magic.
  *
  * @todo Remove RunkitReloader once we drop support for PHP 7.x :(
  */
-class RunkitReloader extends AbstractListener implements OutputAware
+class RunkitReloader extends AbstractListener
 {
     private Parser $parser;
-    private ?OutputInterface $output = null;
     private array $timestamps = [];
 
     /**
@@ -49,25 +44,20 @@ class RunkitReloader extends AbstractListener implements OutputAware
     }
 
     /**
-     * {@inheritdoc}
-     */
-    public function setOutput(OutputInterface $output): void
-    {
-        $this->output = $output;
-    }
-
-    /**
      * Reload code on input.
+     *
+     * @param Shell  $shell
+     * @param string $input
      */
     public function onInput(Shell $shell, string $input)
     {
         $this->reload($shell);
-
-        return null;
     }
 
     /**
      * Look through included files and update anything with a new timestamp.
+     *
+     * @param Shell $shell
      */
     private function reload(Shell $shell)
     {
@@ -96,21 +86,18 @@ class RunkitReloader extends AbstractListener implements OutputAware
             $this->timestamps[$file] = $timestamp;
         }
 
-        if (\count($modified) === 0) {
-            return;
-        }
+        // switch (count($modified)) {
+        //     case 0:
+        //         return;
 
-        // Clear magic method/property cache since docblocks may have changed
-        Docblock::clearMagicCache();
+        //     case 1:
+        //         printf("Reloading modified file: \"%s\"\n", str_replace(getcwd(), '.', $file));
+        //         break;
 
-        // Notify user about reload attempts
-        if ($this->output) {
-            if (\count($modified) === 1) {
-                $this->output->writeln(\sprintf('<whisper>Reloading %s</whisper>', ConfigPaths::prettyPath($modified[0])));
-            } else {
-                $this->output->writeln(\sprintf('<whisper>Reloading %d files</whisper>', \count($modified)));
-            }
-        }
+        //     default:
+        //         printf("Reloading %d modified files\n", count($modified));
+        //         break;
+        // }
 
         foreach ($modified as $file) {
             $flags = (
@@ -133,7 +120,11 @@ class RunkitReloader extends AbstractListener implements OutputAware
     }
 
     /**
-     * Check if file has valid PHP syntax.
+     * Should this file be re-imported?
+     *
+     * Use PHP-Parser to ensure that the file is valid PHP.
+     *
+     * @param string $file
      */
     private function lintFile(string $file): bool
     {

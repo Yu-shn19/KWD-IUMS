@@ -70,9 +70,8 @@ class UrlMatcher implements UrlMatcherInterface, RequestMatcherInterface
     public function match(string $pathinfo): array
     {
         $this->allow = $this->allowSchemes = [];
-        $pathinfo = '' === ($pathinfo = rawurldecode($pathinfo)) ? '/' : $pathinfo;
 
-        if ($ret = $this->matchCollection($pathinfo, $this->routes)) {
+        if ($ret = $this->matchCollection(rawurldecode($pathinfo) ?: '/', $this->routes)) {
             return $ret;
         }
 
@@ -86,15 +85,12 @@ class UrlMatcher implements UrlMatcherInterface, RequestMatcherInterface
     public function matchRequest(Request $request): array
     {
         $this->request = $request;
-        $originalContext = $this->context;
-        $this->context = (clone $originalContext)->fromRequest($request);
 
-        try {
-            return $this->match($request->getPathInfo());
-        } finally {
-            $this->context = $originalContext;
-            $this->request = null;
-        }
+        $ret = $this->match($request->getPathInfo());
+
+        $this->request = null;
+
+        return $ret;
     }
 
     public function addExpressionLanguageProvider(ExpressionFunctionProviderInterface $provider): void
@@ -118,7 +114,7 @@ class UrlMatcher implements UrlMatcherInterface, RequestMatcherInterface
             $method = 'GET';
         }
         $supportsTrailingSlash = 'GET' === $method && $this instanceof RedirectableUrlMatcherInterface;
-        $trimmedPathinfo = '' === ($trimmedPathinfo = rtrim($pathinfo, '/')) ? '/' : $trimmedPathinfo;
+        $trimmedPathinfo = rtrim($pathinfo, '/') ?: '/';
 
         foreach ($routes as $name => $route) {
             $compiledRoute = $route->compile();

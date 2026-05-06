@@ -74,7 +74,7 @@ class SerializableClosure
     }
 
     /**
-     * Sets the transformer that should be used when serializing use variables.
+     * Sets the serializable closure secret key.
      *
      * @param  \Closure|null  $transformer
      * @return void
@@ -85,7 +85,7 @@ class SerializableClosure
     }
 
     /**
-     * Sets the resolver that should be used when unserializing use variables.
+     * Sets the serializable closure secret key.
      *
      * @param  \Closure|null  $resolver
      * @return void

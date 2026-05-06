@@ -13,7 +13,6 @@ use function assert;
 use function phpversion;
 use DateTimeImmutable;
 use DOMElement;
-use SebastianBergmann\CodeCoverage\CodeCoverage;
 use SebastianBergmann\Environment\Runtime;
 
 /**
@@ -28,7 +27,7 @@ final class BuildInformation
         $this->contextNode = $contextNode;
     }
 
-    public function setRuntimeInformation(Runtime $runtime, CodeCoverage $coverage): void
+    public function setRuntimeInformation(Runtime $runtime): void
     {
         $runtimeNode = $this->nodeByName('runtime');
 
@@ -38,12 +37,14 @@ final class BuildInformation
 
         $driverNode = $this->nodeByName('driver');
 
-        if ($coverage->driverIsPcov()) {
-            $driverNode->setAttribute('name', 'pcov');
-            $driverNode->setAttribute('version', phpversion('pcov'));
-        } elseif ($coverage->driverIsXdebug()) {
+        if ($runtime->hasXdebug()) {
             $driverNode->setAttribute('name', 'xdebug');
             $driverNode->setAttribute('version', phpversion('xdebug'));
+        }
+
+        if ($runtime->hasPCOV()) {
+            $driverNode->setAttribute('name', 'pcov');
+            $driverNode->setAttribute('version', phpversion('pcov'));
         }
     }
 

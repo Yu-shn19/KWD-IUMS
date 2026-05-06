@@ -4,14 +4,13 @@ declare(strict_types=1);
 
 namespace NunoMaduro\Collision;
 
-use Tests\Unit\ProviderTest;
 use Whoops\Run;
 use Whoops\RunInterface;
 
 /**
  * @internal
  *
- * @see ProviderTest
+ * @see \Tests\Unit\ProviderTest
  */
 final class Provider
 {

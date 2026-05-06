@@ -126,9 +126,63 @@ class ConsumerLedgerController extends Controller
         // Get ledgers ordered by date (ascending - oldest to newest)
         // Use CAST to ensure proper date ordering if stored as string
         // Secondary sort by ID to maintain order for same-date entries
-        $ledgers = $ledgersQuery->orderByRaw('CAST(date AS DATE) ASC')
-        ->orderByRaw("CASE WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN 0 WHEN UPPER(TRIM(trans)) = 'PENALTY' THEN 1 WHEN UPPER(TRIM(trans)) = 'PAYMENT' THEN 2 ELSE 3 END ASC")
-        ->get();
+        // Get ledgers ordered by transaction date (ascending - oldest to newest).
+        // For same-date rows:
+        // - PAYMENT uses consumer_payments.created_at
+        // - BILLING/BILL uses downloaded_readings.created_at
+        // - fallback to ledger txtime/created_at
+        // Final tie-breaker is ID for deterministic ordering.
+        $ledgers = $ledgersQuery
+            ->orderByRaw('CAST(date AS DATE) ASC')
+            ->orderByRaw("
+        CASE
+            WHEN UPPER(TRIM(trans)) IN ('PAYMENT', 'CM') THEN
+                COALESCE(
+                    (SELECT cp.created_at
+                     FROM consumer_payments cp
+                     WHERE cp.id = consumer_ledgers.consumer_payment_id
+                     LIMIT 1),
+                    (SELECT cp2.created_at
+                     FROM consumer_payments cp2
+                     WHERE cp2.reading_id = consumer_ledgers.downloaded_reading_id
+                     ORDER BY cp2.created_at DESC, cp2.id DESC
+                     LIMIT 1),
+                    (SELECT cp3.created_at
+                     FROM consumer_payments cp3
+                     WHERE cp3.or_number = REPLACE(consumer_ledgers.reference, '-SC', '')
+                     ORDER BY cp3.created_at DESC, cp3.id DESC
+                     LIMIT 1),
+                    (SELECT ba.created_at
+                     FROM billing_adjustments ba
+                     WHERE ba.id = consumer_ledgers.billing_adjustment_id
+                     LIMIT 1),
+                    consumer_ledgers.txtime,
+                    consumer_ledgers.created_at
+                )
+            WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN
+                COALESCE(
+                    (SELECT dr.created_at
+                     FROM downloaded_readings dr
+                     WHERE dr.id = consumer_ledgers.downloaded_reading_id
+                     LIMIT 1),
+                    (SELECT dr2.created_at
+                     FROM downloaded_readings dr2
+                     WHERE dr2.schedule_id = consumer_ledgers.schedule_id
+                     ORDER BY dr2.created_at DESC, dr2.id DESC
+                     LIMIT 1),
+                    (SELECT ba2.created_at
+                     FROM billing_adjustments ba2
+                     WHERE ba2.id = consumer_ledgers.billing_adjustment_id
+                     LIMIT 1),
+                    consumer_ledgers.txtime,
+                    consumer_ledgers.created_at
+                )
+            ELSE
+                COALESCE(consumer_ledgers.txtime, consumer_ledgers.created_at)
+        END ASC
+    ")
+            ->orderBy('id', 'asc')
+            ->get();
         
         \Log::info('Ledgers fetched from database', [
             'consumer_zone_id' => $consumer->id,
@@ -224,10 +278,12 @@ class ConsumerLedgerController extends Controller
             'consumer' => [
                 'account_no' => $consumer->account_no,
                 'account_name' => $consumer->account_name,
-                    'zone_code' => $consumer->zone_code,
+                'zone_code' => $consumer->zone_code,
                 'address1' => $consumer->address1,
                 'meter_number' => $consumer->meter_number,
                 'cons_ctrl' => $consumer->cons_ctrl,
+                'status_code' => $consumer->status_code,
+                'status_label' => $consumer->status_label,
                 'sequence' => $consumer->sequence,
             ],
             'ledgers' => $ledgersWithBalance->values(),

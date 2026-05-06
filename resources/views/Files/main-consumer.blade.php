@@ -957,6 +957,52 @@
             return amount.toFixed(1);
         }
 
+        // Canonical installation date format across UI: YYYY-MM-DD
+        function normalizeDateToYmd(raw) {
+            if (!raw) return '';
+
+            if (raw instanceof Date) {
+                if (Number.isNaN(raw.getTime())) return '';
+                const y = raw.getFullYear();
+                const m = String(raw.getMonth() + 1).padStart(2, '0');
+                const d = String(raw.getDate()).padStart(2, '0');
+                return `${y}-${m}-${d}`;
+            }
+
+            const s = String(raw).trim();
+            if (!s) return '';
+
+            // Accept "YYYY-MM-DD", "YYYY-MM-DD HH:mm:ss", or ISO "YYYY-MM-DDTHH:mm:ssZ"
+            const ymdMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (ymdMatch) {
+                return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+            }
+
+            // Accept "MM/DD/YYYY"
+            const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (mdyMatch) {
+                const month = String(mdyMatch[1]).padStart(2, '0');
+                const day = String(mdyMatch[2]).padStart(2, '0');
+                return `${mdyMatch[3]}-${month}-${day}`;
+            }
+
+            // Last fallback: parse date and read UTC parts to avoid timezone day shifts.
+            const parsed = new Date(s);
+            if (Number.isNaN(parsed.getTime())) {
+                return '';
+            }
+            const year = parsed.getUTCFullYear();
+            const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(parsed.getUTCDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function formatYmdToMdy(ymd) {
+            const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (!m) return '';
+            return `${m[2]}/${m[3]}/${m[1]}`;
+        }
+
         var SC_DISCOUNT_PERCENT = 'SC DISCOUNT';
         var SC_DISCOUNT_AMOUNT = 5;
         var editBillDiscSnapshot = null;
@@ -1449,12 +1495,9 @@
             $('#editConsumerBtn').prop('disabled', false);
             $('#deleteConsumerBtn').prop('disabled', false);
             
-            // Format the date - use install_date from consumer_zone table
-            let formattedDate = '';
-            if (consumer.install_date) {
-                let installDate = new Date(consumer.install_date);
-                formattedDate = (installDate.getMonth() + 1) + '/' + installDate.getDate() + '/' + installDate.getFullYear();
-            }
+            // Canonical parse (YYYY-MM-DD) then display as MM/DD/YYYY
+            const installDateYmd = normalizeDateToYmd(consumer.install_date || consumer.installation_date || '');
+            const formattedDate = formatYmdToMdy(installDateYmd);
 
             // Update the header dynamically
             updateConsumerHeader(consumer);
@@ -1720,20 +1763,37 @@
             }
 
             requestPinThenRun(function() {
-                // Populate edit modal with current consumer data from consumer_zone table
+                // Populate edit modal using currently displayed Consumer Information first,
+                // then fall back to currentConsumer payload when needed.
+                const $info = $('#consumerInfoCard');
                 $('#edit_consumer_id').val(currentConsumer.id);
-                
-                if (currentConsumer.install_date) {
-                    const date = new Date(currentConsumer.install_date);
-                    const formattedDate = date.toISOString().split('T')[0];
-                    $('#edit_installation_date').val(formattedDate);
-                }
-                
-                $('#edit_account_no').val(currentConsumer.account_no || '');
-                $('#edit_meter_number').val(currentConsumer.meter_number || '');
-                $('#edit_address').val(currentConsumer.address1 || '');
-                
-                const categoryCode = currentConsumer.category_code;
+
+                const cardInstallDate = ($info.find('#installationDate').val() || '').trim();
+                const installDateValue = cardInstallDate || currentConsumer.install_date || currentConsumer.installation_date || '';
+                const formattedDate = normalizeDateToYmd(installDateValue);
+                $('#edit_installation_date').val(formattedDate);
+
+                const cardAccountNo = ($info.find('#accountNumber').val() || '').trim();
+                const cardMeterNo = ($info.find('#meterNumber').val() || '').trim();
+                const cardAddress = ($info.find('#address').val() || '').trim();
+                const cardCategoryCode = ($info.find('#displayCategory').val() || '').trim();
+                const cardStatusText = ($info.find('#status').val() || '').trim();
+                const cardAccountName = ($info.find('#accountName').val() || '').trim();
+                const cardMeterBrand = ($info.find('#meterBrand').val() || '').trim();
+                const cardZoneCode = ($info.find('#displayZone').val() || '').replace(/^Zone\s+/i, '').trim();
+                const cardSequence = ($info.find('#sequence').val() || '').trim();
+                const cardRateCode = ($info.find('#rateCode').val() || '').trim();
+                const cardControlNo = ($info.find('#displayCardNumber').val() || '').trim();
+                const cardBillDiscPercent = ($info.find('#billDiscPercent').val() || '').trim();
+                const cardBillDiscAmount = ($info.find('#billDiscAmount').val() || '').trim();
+                const cardOscaId = ($info.find('#oscaIdNumber').val() || '').trim();
+                const cardRemark = ($info.find('#remark').val() || '').trim();
+
+                $('#edit_account_no').val(cardAccountNo || currentConsumer.account_no || '');
+                $('#edit_meter_number').val(cardMeterNo || currentConsumer.meter_number || '');
+                $('#edit_address').val(cardAddress || currentConsumer.address1 || '');
+
+                const categoryCode = cardCategoryCode || currentConsumer.category_code;
                 if (categoryCode) {
                     $('#edit_category option').each(function() {
                         if ($(this).data('code') == categoryCode) {
@@ -1743,28 +1803,44 @@
                     });
                 }
                 
-                $('#edit_status').val(currentConsumer.status_code || 'A');
-                $('#edit_rate_code').val(currentConsumer.rate_code || 'A');
-                $('#edit_account_name').val(currentConsumer.account_name || '');
+                const rawStatusCode = String(currentConsumer.status_code || '').trim().toUpperCase();
+                const rawStatusLabel = String(cardStatusText || currentConsumer.status_label || currentConsumer.status || '').trim().toUpperCase();
+                let editStatusCode = 'A';
+                if (rawStatusCode === 'A' || rawStatusCode === 'ACTIVE') {
+                    editStatusCode = 'A';
+                } else if (rawStatusCode === 'P' || rawStatusCode === 'PENDING') {
+                    editStatusCode = 'P';
+                } else if (rawStatusCode === 'X' || rawStatusCode === 'D' || rawStatusCode === 'DISCONNECTED') {
+                    editStatusCode = 'X';
+                } else if (rawStatusLabel === 'ACTIVE') {
+                    editStatusCode = 'A';
+                } else if (rawStatusLabel === 'PENDING') {
+                    editStatusCode = 'P';
+                } else if (rawStatusLabel === 'DISCONNECTED') {
+                    editStatusCode = 'X';
+                }
+                $('#edit_status').val(editStatusCode);
+                $('#edit_rate_code').val(cardRateCode || currentConsumer.rate_code || 'A');
+                $('#edit_account_name').val(cardAccountName || currentConsumer.account_name || '');
                 
                 $('#edit_contact_number').val('');
-                $('#edit_meter_brand').val(currentConsumer.meter_brand || '');
-                $('#edit_zone').val(currentConsumer.zone_code || '');
-                $('#edit_card_number').val(currentConsumer.sequence || '');
-                $('#edit_cons_ctrl').val(currentConsumer.cons_ctrl || '');
-                const edRaw = String(currentConsumer.bill_disc_percent ?? '').trim();
+                $('#edit_meter_brand').val(cardMeterBrand || currentConsumer.meter_brand || '');
+                $('#edit_zone').val(cardZoneCode || currentConsumer.zone_code || '');
+                $('#edit_card_number').val(cardSequence || currentConsumer.sequence || '');
+                $('#edit_cons_ctrl').val(cardControlNo || currentConsumer.cons_ctrl || '');
+                const edRaw = String(cardBillDiscPercent || (currentConsumer.bill_disc_percent ?? '')).trim();
                 const edNum = parseFloat(edRaw);
                 const edIsSc = edRaw.toUpperCase() === 'SC DISCOUNT'
                     || (Number.isFinite(edNum) && Math.abs(edNum - 5) < 0.001);
                 $('#edit_bill_disc_percent').val(edIsSc ? 'SC DISCOUNT' : '');
                 $('#edit_bill_disc_amount').val(edIsSc ? Number(SC_DISCOUNT_AMOUNT).toFixed(1) : (function() {
-                    const a = currentConsumer.bill_disc_amount;
+                    const a = cardBillDiscAmount || currentConsumer.bill_disc_amount;
                     if (a === undefined || a === null || a === '') return '';
                     const n = parseFloat(a);
                     return Number.isFinite(n) ? n.toFixed(1) : '';
                 })());
-                $('#edit_osca_id_no').val(currentConsumer.osca_id_no || currentConsumer.osca_id || '');
-                $('#edit_remark').val(currentConsumer.remark || currentConsumer.remarks || '');
+                $('#edit_osca_id_no').val(cardOscaId || currentConsumer.osca_id_no || currentConsumer.osca_id || '');
+                $('#edit_remark').val(cardRemark || currentConsumer.remark || currentConsumer.remarks || '');
 
                 $('#edit_bill_disc_last_updated_display').text(
                     formatBillDiscUpdatedAtDisplay(currentConsumer.bill_disc_updated_at)

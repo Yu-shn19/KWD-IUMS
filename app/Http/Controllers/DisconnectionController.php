@@ -22,13 +22,13 @@ class DisconnectionController extends Controller
         $zone = $request->get('zone');
         $billingMonth = $request->get('billing_month'); // Format: YYYY-MM
         $billingDate = $request->get('billing_date');
-        $filterType = $request->get('filter_type', 'disconnection_date'); // disconnection_date | 2_consecutive | 3_consecutive
-
+        $filterType = $request->get('filter_type', 'disconnection_date'); // 'disconnection_date' or '3_consecutive'
+        
         // Use different filter based on filter_type parameter
-        if (in_array($filterType, ['2_consecutive', '3_consecutive'], true)) {
-            $requiredMonths = $filterType === '2_consecutive' ? 2 : 3;
-
-            return $this->getConsumersWithConsecutiveUnpaidMonths($request, $requiredMonths);
+        if ($filterType === '3_consecutive') {
+            $consumers = $this->getConsumersWith3ConsecutiveUnpaidMonths($request);
+            // The method already returns the view, so we return it directly
+            return $consumers;
         } else {
             // Default: use disconnection date filter
             // Priority: billing_month > billing_date
@@ -226,11 +226,6 @@ class DisconnectionController extends Controller
                 $join->on(DB::raw('mrs.account_number COLLATE utf8mb4_unicode_ci'), '=', DB::raw('cz.account_no COLLATE utf8mb4_unicode_ci'));
             })
             ->where('mrs.due_date', '<=', $today)
-            // Exclude already disconnected consumers from candidate list
-            ->where(function ($q) {
-                $q->whereNull('cz.status_code')
-                    ->orWhereNotIn(DB::raw('UPPER(TRIM(cz.status_code))'), ['X', 'D', 'DISCONNECTED']);
-            })
             ->whereNotNull('mrs.due_date')
             ->select('cz.account_no', 'cz.id as consumer_zone_id')
             ->distinct();
@@ -762,30 +757,21 @@ class DisconnectionController extends Controller
     }
 
     /**
-     * Get consumers with N consecutive bill months without payment (no PAYMENT for schedule).
+     * Get consumers with 3 consecutive bill months without payment
      * OPTIMIZED: Only checks records from 2025 onwards for faster processing
-     *
-     * @param  int  $requiredMonths  2 or 3
      */
-    private function getConsumersWithConsecutiveUnpaidMonths(Request $request, int $requiredMonths)
+    private function getConsumersWith3ConsecutiveUnpaidMonths(Request $request)
     {
-        $requiredMonths = max(2, min(3, $requiredMonths));
-        $filterType = $requiredMonths === 2 ? '2_consecutive' : '3_consecutive';
-
         $zone = $request->get('zone');
-
-        $query = ConsumerZoneOne::query()
-            ->where(function ($q) {
-                $q->whereNull('status_code')
-                    ->orWhereNotIn(DB::raw('UPPER(TRIM(status_code))'), ['X', 'D', 'DISCONNECTED']);
-            });
-
+        
+        $query = ConsumerZoneOne::query();
+        
         if ($zone) {
             $query->where('zone_code', $zone);
         }
 
         $consumers = $query->get();
-
+        
         if ($consumers->isEmpty()) {
             $zones = ConsumerZoneOne::select('zone_code')
                 ->distinct()
@@ -793,13 +779,13 @@ class DisconnectionController extends Controller
                 ->orderBy('zone_code')
                 ->pluck('zone_code');
             $consumersByZone = collect();
+            $filterType = '3_consecutive';
             $disconnectors = User::where('role', 'disconnector')->orderBy('name')->get();
             $totalConsumers = 0;
             $totalOutstanding = 0;
             $billingMonth = $request->get('billing_month');
             $billingDate = $request->get('billing_date');
             $defaultDisconnectionDate = $this->getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate);
-
             return view('disconnection.index', compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'));
         }
 
@@ -873,7 +859,8 @@ class DisconnectionController extends Controller
                 continue;
             }
 
-            if ($billings->count() < $requiredMonths) {
+            // Early exit: Need at least 3 billings to have 3 consecutive months
+            if ($billings->count() < 3) {
                 continue;
             }
 
@@ -903,9 +890,9 @@ class DisconnectionController extends Controller
                 ];
             });
             
-            $consecutiveUnpaid = $this->checkConsecutiveUnpaidMonthsOptimized($consumer, $billings, $paymentsCollection, $requiredMonths);
-
-            if ($consecutiveUnpaid['has_consecutive']) {
+            $consecutiveUnpaid = $this->check3ConsecutiveUnpaidMonthsOptimized($consumer, $billings, $paymentsCollection);
+            
+            if ($consecutiveUnpaid['has_3_consecutive']) {
                 $lastMonthArrearsAmount = $this->computeLastMonthArrearsAmount(
                     $currentBalance,
                     $billings,
@@ -955,10 +942,10 @@ class DisconnectionController extends Controller
         $totalConsumers = $eligibleConsumers->count();
         $totalOutstanding = $eligibleConsumers->sum('total_outstanding');
 
+        $filterType = '3_consecutive';
         $billingMonth = $request->get('billing_month');
         $billingDate = $request->get('billing_date');
         $defaultDisconnectionDate = $this->getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate);
-
         return view('disconnection.index', compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'));
     }
 
@@ -1009,17 +996,13 @@ class DisconnectionController extends Controller
     }
 
     /**
-     * Check if consumer has N consecutive months without payment (optimized version).
-     * Uses only consumer_ledger records (BILL/BILLING and PAYMENT).
-     *
-     * @param  int  $requiredMonths  Minimum consecutive unpaid months (2 or 3)
+     * Check if consumer has 3 consecutive months without payment (optimized version)
+     * Uses only consumer_ledger records (BILL/BILLING and PAYMENT)
      */
-    private function checkConsecutiveUnpaidMonthsOptimized(ConsumerZoneOne $consumer, $billings, $payments, int $requiredMonths = 3)
+    private function check3ConsecutiveUnpaidMonthsOptimized(ConsumerZoneOne $consumer, $billings, $payments)
     {
-        $requiredMonths = max(2, $requiredMonths);
-
         $result = [
-            'has_consecutive' => false,
+            'has_3_consecutive' => false,
             'count' => 0,
             'months' => [],
             'oldest_date' => null,
@@ -1103,7 +1086,7 @@ class DisconnectionController extends Controller
             }
         }
 
-        if (count($unpaidMonths) < $requiredMonths) {
+        if (count($unpaidMonths) < 3) {
             return $result;
         }
 
@@ -1114,38 +1097,45 @@ class DisconnectionController extends Controller
             return $result;
         }
 
+        // Check for 3 consecutive months (optimized - stop early when found)
         $consecutiveCount = 1;
         $maxConsecutive = 1;
-        $bestStreakMonths = [$unpaidMonths[0]];
+        $consecutiveMonths = [$unpaidMonths[0]];
 
         for ($i = 1; $i < $unpaidMonths->count(); $i++) {
             $prevMonth = Carbon::parse($unpaidMonths[$i - 1]['month_key'] . '-01');
             $currentMonth = Carbon::parse($unpaidMonths[$i]['month_key'] . '-01');
-
+            
+            // Check if current month is exactly 1 month after previous
             if ($currentMonth->diffInMonths($prevMonth) == 1) {
                 $consecutiveCount++;
+                $consecutiveMonths[] = $unpaidMonths[$i];
+                
                 if ($consecutiveCount > $maxConsecutive) {
                     $maxConsecutive = $consecutiveCount;
-                    $bestStreakMonths = $unpaidMonths->slice($i - $consecutiveCount + 1, $consecutiveCount)->values()->all();
                 }
-                if ($consecutiveCount >= $requiredMonths) {
-                    $bestStreakMonths = $unpaidMonths->slice($i - $consecutiveCount + 1, $consecutiveCount)->values()->all();
+                
+                // If we found 3 consecutive, we can stop early
+                if ($consecutiveCount >= 3) {
                     break;
                 }
             } else {
-                if ($maxConsecutive >= $requiredMonths) {
+                // If we already found 3 consecutive, stop
+                if ($maxConsecutive >= 3) {
                     break;
                 }
+                // Reset if not consecutive
                 $consecutiveCount = 1;
+                $consecutiveMonths = [$unpaidMonths[$i]];
             }
         }
 
-        if ($maxConsecutive >= $requiredMonths) {
-            $result['has_consecutive'] = true;
+        if ($maxConsecutive >= 3) {
+            $result['has_3_consecutive'] = true;
             $result['count'] = $maxConsecutive;
-            $result['months'] = collect($bestStreakMonths)->pluck('month_key')->toArray();
-            $result['oldest_date'] = $bestStreakMonths[0]['due_date'];
-            $result['latest_date'] = $bestStreakMonths[count($bestStreakMonths) - 1]['due_date'];
+            $result['months'] = collect($consecutiveMonths)->pluck('month_key')->toArray();
+            $result['oldest_date'] = $consecutiveMonths[0]['due_date'];
+            $result['latest_date'] = $consecutiveMonths[count($consecutiveMonths) - 1]['due_date'];
         }
 
         return $result;
@@ -1384,12 +1374,7 @@ class DisconnectionController extends Controller
             $orders->where('disconnector_id', $request->input('disconnector_id'));
         }
 
-        // Filter by disconnected date (YYYY-MM-DD)
-        if ($request->filled('date_saved')) {
-            $orders->whereDate('disconnected_at', $request->input('date_saved'));
-        }
-
-        $orders = $orders->paginate(20)->withQueryString();
+        $orders = $orders->paginate(20);
 
         // Get all zones
         $zones = DisconnectionOrder::select('zone_code')

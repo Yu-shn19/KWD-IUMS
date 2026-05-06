@@ -181,8 +181,23 @@
             }
         }
 
-        const statusText = consumer.status_label || consumer.status_code || consumer.status || 'N/A';
-        const statusUpper = (statusText || '').toUpperCase();
+        const statusCodeRaw = (consumer.status_code || '').toString().trim().toUpperCase();
+        const statusLabelRaw = (consumer.status_label || consumer.status || '').toString().trim().toUpperCase();
+        let statusCode = '';
+        if (statusCodeRaw === 'A' || statusCodeRaw === 'ACTIVE') {
+            statusCode = 'A';
+        } else if (statusCodeRaw === 'P' || statusCodeRaw === 'PENDING') {
+            statusCode = 'P';
+        } else if (statusCodeRaw === 'X' || statusCodeRaw === 'D' || statusCodeRaw === 'DISCONNECTED') {
+            statusCode = 'X';
+        } else if (statusLabelRaw === 'ACTIVE') {
+            statusCode = 'A';
+        } else if (statusLabelRaw === 'PENDING') {
+            statusCode = 'P';
+        } else if (statusLabelRaw === 'DISCONNECTED' || statusLabelRaw === 'D') {
+            statusCode = 'X';
+        }
+        const statusUpper = (statusCode || statusLabelRaw || 'N/A').toUpperCase();
 
         // Update header name (warning/danger text matches status, like badge)
         const headerName = document.getElementById('consumerHeaderName');
@@ -199,7 +214,7 @@
         // Update header status badge - use status_label or status_code from consumer_zone
         const headerStatus = document.getElementById('consumerHeaderStatus');
         if (headerStatus) {
-            headerStatus.textContent = statusText + ' Consumer';
+            headerStatus.textContent = (statusCode || 'N/A') + ' Consumer';
             
             // Badge colors: Active / Pending / Disconnected (matches ConsumerZoneOne::status_label)
             headerStatus.className = 'badge';

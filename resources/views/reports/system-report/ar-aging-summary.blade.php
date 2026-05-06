@@ -48,6 +48,15 @@
                                                 </select>
                                             </div>
 
+                                            <!-- Balance Filter -->
+                                            <div class="col-md-2">
+                                                <label class="small font-weight-bold mb-1">Balance Filter</label>
+                                                <select name="balance_filter" class="form-control form-control-sm">
+                                                    <option value="" {{ ($selectedBalanceFilter ?? '') == '' ? 'selected' : '' }}>All Data</option>
+                                                    <option value="with_balance" {{ ($selectedBalanceFilter ?? '') == 'with_balance' ? 'selected' : '' }}>With Balance</option>
+                                                </select>
+                                            </div>
+
                                             <!-- Zone/Route -->
                                             <div class="col-md-2">
                                                 <label class="small font-weight-bold mb-1">Zone / Route</label>
@@ -158,28 +167,26 @@
                                     <div class="card shadow-sm mb-4">
                                         <div class="card-body p-0">
                                             <div class="table-responsive" style="max-height: 600px; overflow: auto;">
-                                                <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 14px;" id="agingTable">
+                                                <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 10px;" id="agingTable">
                                                     <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                                         <tr>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">Zone_code</th>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">Sequence</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 140px;">ACCOUNT NO</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 100px;">ACCOUNT NO</th>
                                                             <th class="py-2 px-1" style="min-width: 180px;">ACCOUNT NAME</th>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 60px;">STATUS</th>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 90px;">Category_code</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 90px;">current</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 90px;">CURRENT</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 70px;">_30</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 70px;">_60</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 70px;">_90</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">_over90</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">prev_year</th>
-                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">balance</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">_OVER90</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">PREV YEAR</th>
+                                                            <th class="text-center py-2 px-1" style="min-width: 80px;">BALANCE</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        @forelse(collect($detailRecords ?? [])->sortBy(function ($record) {
-                                                            return (string) ($record['sequence'] ?? '');
-                                                        }, SORT_NATURAL | SORT_FLAG_CASE)->values() as $record)
+                                                        @forelse(($detailRecords ?? []) as $record)
                                                             <tr>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['zone'] }}</td>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['sequence'] }}</td>
@@ -187,12 +194,12 @@
                                                                 <td class="py-1 px-1">{{ $record['account_name'] }}</td>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['status_code'] }}</td>
                                                                 <td class="text-center py-1 no-print-col">{{ $record['category_code'] }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['current_bill'] ?? 0, 2) }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['days_1_30'], 2) }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['days_31_60'], 2) }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['days_61_90'], 2) }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['over_120'], 2) }}</td>
-                                                                <td class="text-right py-1 px-1">{{ number_format($record['prev_house'], 2) }}</td>
+                                                                <td class="text-right py-1 px-1">{{ number_format($record['current'] ?? 0, 2) }}</td>
+                                                                <td class="text-right py-1 px-1">{{ number_format($record['_30'] ?? 0, 2) }}</td>
+                                                                <td class="text-right py-1 px-1">{{ number_format($record['_60'] ?? 0, 2) }}</td>
+                                                                <td class="text-right py-1 px-1">{{ number_format($record['_90'] ?? 0, 2) }}</td>
+                                                                <td class="text-right py-1 px-1">{{ number_format($record['_over90'] ?? 0, 2) }}</td>
+                                                                <td class="text-right py-1 px-1">{{ number_format($record['prev_year'] ?? 0, 2) }}</td>
                                                                 <td class="text-right py-1 px-1 font-weight-bold">{{ number_format($record['balance'], 2) }}</td>
                                                             </tr>
                                                         @empty
@@ -203,13 +210,6 @@
                                                             </tr>
                                                         @endforelse
                                                     </tbody>
-                                                    <tfoot>
-                                                        <tr class="bg-light font-weight-bold">
-                                                            <td colspan="13" class="text-right py-2 px-2">
-                                                                Total Number of Accounts: {{ count($detailRecords ?? []) }}
-                                                            </td>
-                                                        </tr>
-                                                    </tfoot>
                                                 </table>
                                             </div>
                                         </div>
@@ -218,28 +218,28 @@
                                         <table class="print-totals-table" style="display: none; width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 15px;">
                                             <!-- COUNT row -->
                                             <tr>
-                                                <td colspan="9" class="text-left" style="border: none; padding: 6px 5px; font-size: 9px; font-weight: bold; color: #333;">COUNT: {{ count($detailRecords ?? []) }}</td>
+                                                <td colspan="10" class="text-left" style="border: none; padding: 6px 5px; font-size: 9px; font-weight: bold; color: #333;">COUNT: {{ count($detailRecords ?? []) }}</td>
                                             </tr>
                                             <!-- TOTALS row - calculating from all detailRecords to ensure all data is included -->
                                             @php
                                                 $detailRecordsForTotals = $detailRecords ?? [];
-                                                $totalCurrent = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['current_bill'] ?? 0); });
-                                                $totalDays1_30 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_1_30'] ?? 0); });
-                                                $totalDays31_60 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_31_60'] ?? 0); });
-                                                $totalDays61_90 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['days_61_90'] ?? 0); });
-                                                $totalOver120 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['over_120'] ?? 0); });
-                                                $totalPrevHouse = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['prev_house'] ?? 0); });
+                                                $totalCurrent = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['current'] ?? 0); });
+                                                $total30 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['_30'] ?? 0); });
+                                                $total60 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['_60'] ?? 0); });
+                                                $total90 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['_90'] ?? 0); });
+                                                $totalOver90 = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['_over90'] ?? 0); });
+                                                $totalPrevYear = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['prev_year'] ?? 0); });
                                                 $totalBalance = collect($detailRecordsForTotals)->sum(function($record) { return (float)($record['balance'] ?? 0); });
                                             @endphp
                                             <tr style="background-color: #f8f9fa !important; font-weight: bold;">
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;"></td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ $selectedZone ? $selectedZone : 'ALL' }} TOTALS:</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalCurrent, 2) }}</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays1_30, 2) }}</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays31_60, 2) }}</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalDays61_90, 2) }}</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalOver120, 2) }}</td>
-                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalPrevHouse, 2) }}</td>
+                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($total30, 2) }}</td>
+                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($total60, 2) }}</td>
+                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($total90, 2) }}</td>
+                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalOver90, 2) }}</td>
+                                                <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalPrevYear, 2) }}</td>
                                                 <td class="text-right" style="border: none; padding: 8px 5px; font-size: 9px; font-weight: bold; color: #333;">{{ number_format($totalBalance, 2) }}</td>
                                             </tr>
                                         </table>
@@ -277,8 +277,6 @@
                                                         Zone {{ $selectedZone }} - 
                                                     @endif
                                                     As of {{ isset($asOf) ? $asOf->format('m/d/Y') : now()->format('m/d/Y') }}
-                                                    <span class="ml-2">|</span>
-                                                    Total Number of Accounts: <strong>{{ count($detailRecords ?? []) }}</strong>
                                                 </small>
                                                 <small class="text-muted">
                                                     Total Balance: <strong class="text-danger">₱ {{ number_format($totals['total_balance'] ?? 0, 2) }}</strong>
@@ -302,12 +300,11 @@
                                                         <tr>
                                                             <th class="text-center py-2 px-2">Total Accounts</th>
                                                             <th class="text-right py-2 px-2">Current</th>
-                                                            <th class="text-right py-2 px-2">1 - 30</th>
-                                                            <th class="text-right py-2 px-2">31 - 60</th>
-                                                            <th class="text-right py-2 px-2">61 - 90</th>
-                                                            <th class="text-right py-2 px-2">91 - 120</th>
-                                                            <th class="text-right py-2 px-2">Over 120</th>
-                                                            <th class="text-right py-2 px-2">Prev House</th>
+                                                            <th class="text-right py-2 px-2">_30</th>
+                                                            <th class="text-right py-2 px-2">_60</th>
+                                                            <th class="text-right py-2 px-2">_90</th>
+                                                            <th class="text-right py-2 px-2">_over90</th>
+                                                            <th class="text-right py-2 px-2">Prev Year</th>
                                                             <th class="text-right py-2 px-2">Total Balance</th>
                                                         </tr>
                                                     </thead>
@@ -315,12 +312,11 @@
                                                         <tr>
                                                             <td class="text-center py-2">{{ $arSummaryRecap['total_accounts'] ?? 0 }}</td>
                                                             <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['current'] ?? 0, 2) }}</td>
-                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['days_1_30'] ?? 0, 2) }}</td>
-                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['days_31_60'] ?? 0, 2) }}</td>
-                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['days_61_90'] ?? 0, 2) }}</td>
-                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['days_91_120'] ?? 0, 2) }}</td>
-                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['over_120'] ?? 0, 2) }}</td>
-                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['prev_house'] ?? 0, 2) }}</td>
+                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['_30'] ?? 0, 2) }}</td>
+                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['_60'] ?? 0, 2) }}</td>
+                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['_90'] ?? 0, 2) }}</td>
+                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['_over90'] ?? 0, 2) }}</td>
+                                                            <td class="text-right py-2 px-2">₱ {{ number_format($arSummaryRecap['prev_year'] ?? 0, 2) }}</td>
                                                             <td class="text-right py-2 px-2"><strong>₱ {{ number_format($arSummaryRecap['total_balance'] ?? 0, 2) }}</strong></td>
                                                         </tr>
                                                     </tbody>
@@ -345,12 +341,11 @@
                                                             <th class="text-center py-2 px-2">Zone</th>
                                                             <th class="text-center py-2 px-2">Accounts</th>
                                                             <th class="text-right py-2 px-2">Current</th>
-                                                            <th class="text-right py-2 px-2">1 - 30</th>
-                                                            <th class="text-right py-2 px-2">31 - 60</th>
-                                                            <th class="text-right py-2 px-2">61 - 90</th>
-                                                            <th class="text-right py-2 px-2">91 - 120</th>
-                                                            <th class="text-right py-2 px-2">Over 120</th>
-                                                            <th class="text-right py-2 px-2">Prev House</th>
+                                                            <th class="text-right py-2 px-2">_30</th>
+                                                            <th class="text-right py-2 px-2">_60</th>
+                                                            <th class="text-right py-2 px-2">_90</th>
+                                                            <th class="text-right py-2 px-2">_over90</th>
+                                                            <th class="text-right py-2 px-2">Prev Year</th>
                                                             <th class="text-right py-2 px-2">Total Balance</th>
                                                         </tr>
                                                     </thead>
@@ -360,12 +355,11 @@
                                                                 <td class="text-center py-1">{{ $summary['zone'] }}</td>
                                                                 <td class="text-center py-1">{{ $summary['accounts'] }}</td>
                                                                 <td class="text-right py-1 px-2">₱ {{ number_format($summary['current'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_1_30'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_31_60'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_61_90'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_91_120'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['over_120'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['prev_house'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_30'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_60'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_90'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_over90'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['prev_year'], 2) }}</td>
                                                                 <td class="text-right py-1 px-2"><strong>₱ {{ number_format($summary['total_balance'], 2) }}</strong></td>
                                                             </tr>
                                                         @empty
@@ -397,12 +391,11 @@
                                                             <th class="py-2 px-2">Category</th>
                                                             <th class="text-center py-2 px-2">Accounts</th>
                                                             <th class="text-right py-2 px-2">Current</th>
-                                                            <th class="text-right py-2 px-2">1 - 30</th>
-                                                            <th class="text-right py-2 px-2">31 - 60</th>
-                                                            <th class="text-right py-2 px-2">61 - 90</th>
-                                                            <th class="text-right py-2 px-2">91 - 120</th>
-                                                            <th class="text-right py-2 px-2">Over 120</th>
-                                                            <th class="text-right py-2 px-2">Prev House</th>
+                                                            <th class="text-right py-2 px-2">_30</th>
+                                                            <th class="text-right py-2 px-2">_60</th>
+                                                            <th class="text-right py-2 px-2">_90</th>
+                                                            <th class="text-right py-2 px-2">_over90</th>
+                                                            <th class="text-right py-2 px-2">Prev Year</th>
                                                             <th class="text-right py-2 px-2">Total Balance</th>
                                                         </tr>
                                                     </thead>
@@ -412,12 +405,11 @@
                                                                 <td class="py-1 px-2">{{ $summary['category'] }}</td>
                                                                 <td class="text-center py-1">{{ $summary['accounts'] }}</td>
                                                                 <td class="text-right py-1 px-2">₱ {{ number_format($summary['current'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_1_30'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_31_60'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_61_90'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['days_91_120'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['over_120'], 2) }}</td>
-                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['prev_house'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_30'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_60'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_90'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['_over90'], 2) }}</td>
+                                                                <td class="text-right py-1 px-2">₱ {{ number_format($summary['prev_year'], 2) }}</td>
                                                                 <td class="text-right py-1 px-2"><strong>₱ {{ number_format($summary['total_balance'], 2) }}</strong></td>
                                                             </tr>
                                                         @empty
@@ -611,7 +603,7 @@
                 width: 100% !important;
                 border-collapse: separate !important;
                 border-spacing: 0 !important;
-                font-size: 14px !important;
+                font-size: 11px !important;
                 margin: 0 !important;
                 display: table !important;
                 font-family: Arial, sans-serif !important;
@@ -635,7 +627,7 @@
                 padding: 10px 6px !important;
                 font-weight: bold !important;
                 text-align: center !important;
-                font-size: 14px !important;
+                font-size: 11px !important;
                 text-transform: uppercase !important;
                 color: #333 !important;
                 position: static !important;
@@ -655,7 +647,7 @@
             #agingTable tbody td {
                 border: none !important;
                 padding: 8px 6px !important;
-                font-size: 14px !important;
+                font-size: 11px !important;
                 color: #333 !important;
             }
 

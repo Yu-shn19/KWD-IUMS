@@ -145,7 +145,11 @@ class BillingProcessController extends Controller
           //  $arrears = (float) ($previousReading['arrears'] ?? 0);
                // Must match consumer ledger footer Current Balance (same year as bill month)
            // $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
-            $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
+               $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
+            // Meter Reading Preparation (zone) and (Single Consumer): arrears must not be negative; Multiple Consumers path unchanged
+            if (!$isMultiple) {
+                $arrears = max(0.0, (float) $arrears);
+            }  
             $total = $currentBill + $wmc + $arrears;
             $data[] = [
                 'sedr' => (string) $sedr++,
@@ -606,7 +610,7 @@ class BillingProcessController extends Controller
         }
         return null;
     }
-    
+
     /**
      * True when a payment in consumer_payments (paid_at set) covers this schedule/reading.
      */
@@ -1258,177 +1262,15 @@ class BillingProcessController extends Controller
         $request->validate([
             'format' => 'required|in:excel,pdf',
             'zone' => 'nullable|string',
-            'process_type' => 'nullable|string',
-            'reading_date' => 'nullable|date',
         ]);
 
         $zone = $request->input('zone');
-        $processType = $request->input('process_type');
-        $readingDateInput = $request->input('reading_date');
-
-        // Bill Printing export must match the on-screen Bill Printing table exactly.
-        if ($processType === 'Bill Printing') {
-            if (!$zone || $zone === 'all') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Zone is required for Bill Printing export.',
-                ], 422);
-            }
-            if (!$readingDateInput) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Reading Date is required for Bill Printing export.',
-                ], 422);
-            }
-
-            $readingDate = Carbon::parse($readingDateInput)->format('Y-m-d');
-
-            $downloadedRows = DB::table('downloaded_readings as dr')
-                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-                ->select([
-                    'dr.id as downloaded_id',
-                    DB::raw('COALESCE(mrs.account_number, dr.account_number) as account_number'),
-                    DB::raw('COALESCE(mrs.account_name, dr.account_name) as account_name'),
-                    'mrs.meter_number',
-                    'dr.consumption as volume',
-                    'dr.current_bill as downloaded_current_bill',
-                ])
-                ->where(function($query) use ($zone) {
-                    $query->where(function($qq) use ($zone) {
-                        $qq->where('dr.zone', $zone)
-                           ->orWhereRaw('LPAD(dr.zone, 3, "0") = ?', [$zone])
-                           ->orWhereRaw('TRIM(LEADING "0" FROM dr.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                    })
-                    ->orWhere(function($qq) use ($zone) {
-                        $qq->whereNotNull('mrs.zone')
-                           ->where(function($qqq) use ($zone) {
-                               $qqq->where('mrs.zone', $zone)
-                                   ->orWhereRaw('LPAD(mrs.zone, 3, "0") = ?', [$zone])
-                                   ->orWhereRaw('TRIM(LEADING "0" FROM mrs.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                           });
-                    });
-                })
-                ->whereDate('dr.reading_date', $readingDate)
-                ->orderByDesc('dr.id')
-                ->get();
-
-            // Match table behavior: latest downloaded row per account, then account-tail ascending.
-            $rowsByAccount = collect($downloadedRows)
-                ->unique(function ($row) {
-                    return strtoupper(trim((string) ($row->account_number ?? '')));
-                })
-                ->values();
-
-            $tailNumber = function ($accountNumber) {
-                $parts = explode('-', (string) $accountNumber);
-                $tail = trim((string) end($parts));
-                return is_numeric($tail) ? (int) $tail : PHP_INT_MAX;
-            };
-
-            $sortedRows = $rowsByAccount->sort(function ($a, $b) use ($tailNumber) {
-                $na = $tailNumber($a->account_number ?? '');
-                $nb = $tailNumber($b->account_number ?? '');
-                if ($na === $nb) {
-                    return strnatcasecmp((string) ($a->account_number ?? ''), (string) ($b->account_number ?? ''));
-                }
-                return $na <=> $nb;
-            })->values();
-
-            $records = $sortedRows->map(function ($item) {
-                $currentBill = (float) ($item->downloaded_current_bill ?? 0);
-                $maintenanceCharge = $currentBill > 0 ? 20.00 : 0.00;
-                $totalAmount = $currentBill + $maintenanceCharge;
-
-                return [
-                    'Account #' => $item->account_number ?? '',
-                    'Account Name' => $item->account_name ?? '',
-                    'Meter #' => $item->meter_number ?? '',
-                    'Consumption' => number_format((float) ($item->volume ?? 0), 0),
-                    'Current Bill' => number_format($currentBill, 2),
-                    'Water Maintenance Charge' => number_format($maintenanceCharge, 2),
-                    'Total Amount' => number_format($totalAmount, 2),
-                ];
-            });
-
-            if ($records->isEmpty()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No bill printing records found to export for the selected zone and reading date.',
-                ], 404);
-            }
-
-            $zoneText = "Zone-{$zone}";
-            $dateText = Carbon::parse($readingDate)->format('Ymd');
-            $filename = "Bill-Printing-{$zoneText}-{$dateText}-" . Carbon::now()->format('His') . '.xlsx';
-
-            if (class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
-                return \Maatwebsite\Excel\Facades\Excel::download(
-                    new class($records) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle {
-                        protected $data;
-
-                        public function __construct($data)
-                        {
-                            $this->data = collect($data);
-                        }
-
-                        public function collection()
-                        {
-                            return $this->data;
-                        }
-
-                        public function headings(): array
-                        {
-                            return [
-                                'Account #',
-                                'Account Name',
-                                'Meter #',
-                                'Consumption',
-                                'Current Bill',
-                                'Water Maintenance Charge',
-                                'Total Amount',
-                            ];
-                        }
-
-                        public function title(): string
-                        {
-                            return 'Bill Printing';
-                        }
-                    },
-                    $filename
-                );
-            }
-
-            $csvFilename = str_replace('.xlsx', '.csv', $filename);
-            $headers = [
-                'Content-Type' => 'text/csv',
-                'Content-Disposition' => "attachment; filename=\"{$csvFilename}\"",
-            ];
-
-            $callback = function () use ($records) {
-                $file = fopen('php://output', 'w');
-                fputcsv($file, [
-                    'Account #',
-                    'Account Name',
-                    'Meter #',
-                    'Consumption',
-                    'Current Bill',
-                    'Water Maintenance Charge',
-                    'Total Amount',
-                ]);
-                foreach ($records as $record) {
-                    fputcsv($file, array_values($record));
-                }
-                fclose($file);
-            };
-
-            return response()->stream($callback, 200, $headers);
-        }
 
         // Build base query for schedules in the selected zone (or all zones)
         $query = MeterReadingSchedule::query()
             ->with('consumer')
             ->orderBy('zone')
-            ->orderByAccountNumberTail();
+            ->orderBy('sedr_number');
 
         if ($zone && $zone !== 'all') {
             $query->where('zone', $zone);
@@ -1443,7 +1285,7 @@ class BillingProcessController extends Controller
             ], 404);
         }
 
-              // Map schedules to flat array for export (only required columns)
+ // Map schedules to flat array for export (only required columns)
         $records = $schedules->map(function (MeterReadingSchedule $item) {
             $currentBill = $item->current_bill !== null ? (float) $item->current_bill : 0.0;
             $arrears = $item->arrears !== null ? (float) $item->arrears : 0.0;
@@ -3010,110 +2852,6 @@ class BillingProcessController extends Controller
     /**
      * Show consumer master list with filters
      */
-    // public function consumerMasterList(Request $request)
-    // {
-    //     $filters = $request->only([
-    //         'search',
-    //         'zone',
-    //         'status',
-    //         'senior_citizen',
-    //         'meter_number',
-    //         'address',
-    //         'meter_location',
-    //         'ledger_status',
-    //     ]);
-
-    //     $zones = ConsumerZoneOne::select('zone_code')
-    //         ->distinct()
-    //         ->orderBy('zone_code')
-    //         ->pluck('zone_code');
-
-    //     $baseQuery = ConsumerZoneOne::query();
-
-    //     if (!empty($filters['search'])) {
-    //         $searchTerm = $filters['search'];
-    //         $baseQuery->where(function ($q) use ($searchTerm) {
-    //             $q->where('account_name', 'like', '%' . $searchTerm . '%')
-    //               ->orWhere('account_no', 'like', '%' . $searchTerm . '%');
-    //         });
-    //     }
-
-    //     if (!empty($filters['zone'])) {
-    //         $baseQuery->where('zone_code', $filters['zone']);
-    //     }
-
-    //     if (!empty($filters['status'])) {
-    //         $statusValue = $filters['status'];
-
-    //         $statusMap = [
-    //             'Active' => ['A', 'ACTIVE', 'Active', 'A - ACTIVE'],
-    //              'Pending' => ['P', 'PENDING', 'Pending'],
-    //              'Disconnected' => ['X', 'DISCONNECTED', 'Disconnected', 'D'],
-    //         ];
-
-    //         if (isset($statusMap[$statusValue])) {
-    //             $baseQuery->whereIn('status_code', $statusMap[$statusValue]);
-    //         } else {
-    //             $baseQuery->where('status_code', $statusValue);
-    //         }
-    //     }
-
-    //     if (!empty($filters['senior_citizen']) && Schema::hasColumn('consumer_zone', 'is_senior_citizen')) {
-    //         $baseQuery->where('is_senior_citizen', true);
-    //     }
-
-    //     if (!empty($filters['meter_number'])) {
-    //         $baseQuery->where('meter_number', 'like', '%' . $filters['meter_number'] . '%');
-    //     }
-
-    //     if (!empty($filters['address'])) {
-    //         $baseQuery->where(function ($q) use ($filters) {
-    //             $q->where('address1', 'like', '%' . $filters['address'] . '%');
-
-    //             if (Schema::hasColumn('consumer_zone', 'address_2')) {
-    //                 $q->orWhere('address_2', 'like', '%' . $filters['address'] . '%');
-    //             }
-    //         });
-    //     }
-
-    //     if (!empty($filters['meter_location']) && Schema::hasColumn('consumer_zone', 'meter_location')) {
-    //         $baseQuery->where('meter_location', 'like', '%' . $filters['meter_location'] . '%');
-    //     }
-
-    //     if (!empty($filters['ledger_status'])) {
-    //         if ($filters['ledger_status'] === 'missing') {
-    //             $baseQuery->whereDoesntHave('ledgers');
-    //         } elseif ($filters['ledger_status'] === 'imported') {
-    //             $baseQuery->whereHas('ledgers');
-    //         }
-    //     }
-
-    //     $consumersQuery = (clone $baseQuery)->orderBy('zone_code');
-
-    //     if (Schema::hasColumn('consumer_zone', 'route')) {
-    //         $consumersQuery->orderBy('route');
-    //     }
-
-    //     if (Schema::hasColumn('consumer_zone', 'sequence')) {
-    //         $consumersQuery->orderBy('sequence');
-    //     }
-
-    //     // Eager load ledger count to check if consumer has imported ledger entries
-    //     $consumers = $consumersQuery->withCount('ledgers')->get();
-
-    //     $summaryByZone = (clone $baseQuery)
-    //         ->select('zone_code as zone', DB::raw('COUNT(*) as total'))
-    //         ->groupBy('zone_code')
-    //         ->orderBy('zone_code')
-    //         ->get();
-
-    //     return view('reports.system-report.consumer-master-list', [
-    //         'zones' => $zones,
-    //         'consumers' => $consumers,
-    //         'summaryByZone' => $summaryByZone,
-    //         'filters' => $filters,
-    //     ]);
-    // }
     public function consumerMasterList(Request $request)
     {
         $filters = $request->only([
@@ -3204,53 +2942,6 @@ class BillingProcessController extends Controller
 
         // Eager load ledger count to check if consumer has imported ledger entries
         $consumers = $consumersQuery->withCount('ledgers')->get();
-
-        // Reading guide print fields:
-        // - Prevdate / PrevRdg from previous month schedule
-        // - PresRdg from latest/current generated month schedule
-        $previousMonth = Carbon::now()->subMonthNoOverflow();
-        $accountNos = $consumers->pluck('account_no')->filter()->values();
-        $previousScheduleByAccount = collect();
-        $latestScheduleByAccount = collect();
-        if ($accountNos->isNotEmpty()) {
-            $previousScheduleByAccount = MeterReadingSchedule::whereIn('account_number', $accountNos)
-                ->whereYear('bill_month', $previousMonth->year)
-                ->whereMonth('bill_month', $previousMonth->month)
-                ->orderBy('bill_date', 'desc')
-                ->orderBy('id', 'desc')
-                ->get(['account_number', 'bill_date', 'current_reading', 'previous_reading'])
-                ->groupBy('account_number')
-                ->map(function ($rows) {
-                    return $rows->first();
-                });
-
-            $latestGeneratedBillMonth = MeterReadingSchedule::whereNotNull('bill_month')->max('bill_month');
-            if ($latestGeneratedBillMonth) {
-                $latestMonth = Carbon::parse($latestGeneratedBillMonth);
-                $latestScheduleByAccount = MeterReadingSchedule::whereIn('account_number', $accountNos)
-                    ->whereYear('bill_month', $latestMonth->year)
-                    ->whereMonth('bill_month', $latestMonth->month)
-                    ->orderBy('bill_date', 'desc')
-                    ->orderBy('id', 'desc')
-                    ->get(['account_number', 'bill_month', 'bill_date', 'current_reading', 'previous_reading'])
-                    ->groupBy('account_number')
-                    ->map(function ($rows) {
-                        return $rows->first();
-                    });
-            }
-        }
-
-        $consumers->transform(function ($consumer) use ($previousScheduleByAccount, $latestScheduleByAccount) {
-            $prev = $previousScheduleByAccount->get($consumer->account_no);
-            $latest = $latestScheduleByAccount->get($consumer->account_no);
-            $consumer->prev_bill_date = $prev && $prev->bill_date ? Carbon::parse($prev->bill_date)->format('m/d/Y') : '';
-            $consumer->prev_pres_rdg = $latest && $latest->current_reading !== null ? (string) ((int) $latest->current_reading) : '';
-            $consumer->prev_prev_rdg = $prev && $prev->current_reading !== null
-                ? (string) ((int) $prev->current_reading)
-                : ($prev && $prev->previous_reading !== null ? (string) ((int) $prev->previous_reading) : '');
-
-            return $consumer;
-        });
 
         $summaryByZone = (clone $baseQuery)
             ->select('zone_code as zone', DB::raw('COUNT(*) as total'))
@@ -3504,14 +3195,6 @@ class BillingProcessController extends Controller
                         'downloaded_id' => $downloaded?->id,
                     ]);
                 }
-
-                // Separate sundries from the water-bill amount.
-                // paid_at reconciliation should use bill-only amount to avoid over-marking.
-                $sundriesTotal = 0;
-                foreach ($validated['sundries'] ?? [] as $s) {
-                    $sundriesTotal += round((float)($s['amount'] ?? 0), 2);
-                }
-                $billPaymentAmount = max(0, round(($validated['amount_due'] ?? 0) - $sundriesTotal, 2));
 
                 // Separate sundries from the water-bill amount.
                 // paid_at reconciliation should use bill-only amount to avoid over-marking.

@@ -18,7 +18,7 @@ use IteratorAggregate;
  *
  * @immutable
  *
- * @template-implements IteratorAggregate<non-negative-int, TestSuite>
+ * @template-implements IteratorAggregate<int, TestSuite>
  */
 final readonly class TestSuiteCollection implements Countable, IteratorAggregate
 {

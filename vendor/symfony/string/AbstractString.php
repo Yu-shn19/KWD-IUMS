@@ -706,9 +706,9 @@ abstract class AbstractString implements \Stringable, \JsonSerializable
         return $str;
     }
 
-    public function __serialize(): array
+    public function __sleep(): array
     {
-        return ['string' => $this->string];
+        return ['string'];
     }
 
     public function __clone()

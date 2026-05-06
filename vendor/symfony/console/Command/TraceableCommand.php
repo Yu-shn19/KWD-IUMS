@@ -63,7 +63,9 @@ final class TraceableCommand extends Command
         parent::__construct($command->getName());
 
         // init below enables calling {@see parent::run()}
-        [$code, $processTitle, $ignoreValidationErrors] = \Closure::bind(fn () => [$this->code, $this->processTitle, $this->ignoreValidationErrors], $command, Command::class)();
+        [$code, $processTitle, $ignoreValidationErrors] = \Closure::bind(function () {
+            return [$this->code, $this->processTitle, $this->ignoreValidationErrors];
+        }, $command, Command::class)();
 
         if (\is_callable($code)) {
             $this->setCode($code);
@@ -167,19 +169,18 @@ final class TraceableCommand extends Command
     public function setCode(callable $code): static
     {
         if ($code instanceof InvokableCommand) {
-            $r = \Closure::bind(fn () => $this->invokable, $code, InvokableCommand::class)();
+            $r = new \ReflectionFunction(\Closure::bind(function () {
+                return $this->code;
+            }, $code, InvokableCommand::class)());
 
             $this->invokableCommandInfo = [
                 'class' => $r->getClosureScopeClass()->name,
                 'file' => $r->getFileName(),
                 'line' => $r->getStartLine(),
             ];
-
-            // Pass the original callable to avoid double-wrapping in Command::setCode()
-            $this->command->setCode($code->getCode());
-        } else {
-            $this->command->setCode($code);
         }
+
+        $this->command->setCode($code);
 
         return parent::setCode(function (InputInterface $input, OutputInterface $output) use ($code): int {
             $event = $this->stopwatch->start($this->getName().'.code');
@@ -286,8 +287,8 @@ final class TraceableCommand extends Command
     {
         $this->input = $input;
         $this->output = $output;
-        $initialArguments = $input->getArguments();
-        $initialOptions = $input->getOptions();
+        $this->arguments = $input->getArguments();
+        $this->options = $input->getOptions();
         $event = $this->stopwatch->start($this->getName(), 'command');
 
         try {
@@ -302,11 +303,9 @@ final class TraceableCommand extends Command
             $this->duration = $event->getDuration().' ms';
             $this->maxMemoryUsage = ($event->getMemory() >> 20).' MiB';
 
-            $this->arguments = $input->getArguments();
-            $this->options = $input->getOptions();
-
-            $this->extractInteractiveInputs($initialArguments, $initialOptions);
-            $this->isInteractive = $this->isInteractive || $this->interactiveInputs;
+            if ($this->isInteractive) {
+                $this->extractInteractiveInputs($input->getArguments(), $input->getOptions());
+            }
         }
 
         return $this->exitCode;
@@ -345,24 +344,22 @@ final class TraceableCommand extends Command
         return $exitCode;
     }
 
-    private function extractInteractiveInputs(array $initialArguments, array $initialOptions): void
+    private function extractInteractiveInputs(array $arguments, array $options): void
     {
-        $nativeDefinition = $this->command->getNativeDefinition();
-
-        foreach ($nativeDefinition->getArguments() as $argName => $argument) {
-            if (\array_key_exists($argName, $initialArguments) && $initialArguments[$argName] === $this->arguments[$argName]) {
+        foreach ($arguments as $argName => $argValue) {
+            if (\array_key_exists($argName, $this->arguments) && $this->arguments[$argName] === $argValue) {
                 continue;
             }
 
-            $this->interactiveInputs[$argName] = $this->arguments[$argName];
+            $this->interactiveInputs[$argName] = $argValue;
         }
 
-        foreach ($nativeDefinition->getOptions() as $optName => $option) {
-            if (\array_key_exists($optName, $initialOptions) && $initialOptions[$optName] === $this->options[$optName]) {
+        foreach ($options as $optName => $optValue) {
+            if (\array_key_exists($optName, $this->options) && $this->options[$optName] === $optValue) {
                 continue;
             }
 
-            $this->interactiveInputs['--'.$optName] = $this->options[$optName];
+            $this->interactiveInputs['--'.$optName] = $optValue;
         }
     }
 }
