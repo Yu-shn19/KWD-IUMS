@@ -1,0 +1,39 @@
+{
+  "name": "learningrn",
+  "license": "0BSD",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "npx expo start",
+    "android": "cross-env JAVA_HOME=\"C:\\Program Files\\Java\\jdk-17\" npx expo run:android",
+    "ios": "npx expo run:ios",
+    "web": "npx expo start --web",
+    "setup-bluetooth": "node scripts/setup-bluetooth.js",
+    "prebuild": "npx expo prebuild",
+    "prebuild:clean": "npx expo prebuild --clean"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^14.1.0",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "@react-native-community/netinfo": "11.3.1",
+    "eas-cli": "^18.1.0",
+    "expo": "~53.0.23",
+    "expo-asset": "~11.1.7",
+    "expo-image-picker": "^17.0.10",
+    "expo-location": "~18.0.4",
+    "expo-print": "~14.1.4",
+    "expo-sqlite": "~15.2.14",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.5",
+    "react-native-ping": "^1.2.8",
+    "react-native-sqlite-storage": "^6.0.1",
+    "react-native-thermal-receipt-printer-image-qr": "^0.1.12",
+    "react-native-webview": "^13.16.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "cross-env": "^10.1.0"
+  },
+  "private": true
+}
