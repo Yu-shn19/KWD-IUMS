@@ -4118,33 +4118,51 @@ class MeterReadingController extends Controller
             }
         }
 
-        // For unpaid next-breakdown view (no explicit paid OR), when a payment exists inside the
-        // currently selected billing cycle window, treat WMC as already covered in that cycle's split.
+        // For unpaid next-breakdown view (no explicit paid OR), when a payment exists for the
+        // same current billing cycle, treat WMC as already covered in that cycle's split.
         // Keep total due unchanged by moving the same amount to Arrears CY.
         $wmcCoveredInCycle = false;
         if (!($orNumberInput !== '' && $orPayment) && $maintenance > 0.009 && $paymentStatus !== 'paid') {
             try {
-                $cycleStart = isset($fromMonthDate) && $fromMonthDate instanceof Carbon
-                    ? $fromMonthDate->copy()->startOfDay()
-                    : null;
-                $cycleEnd = isset($toMonthDate) && $toMonthDate instanceof Carbon
-                    ? $toMonthDate->copy()->endOfDay()
-                    : null;
-
-                if ($cycleStart && $cycleEnd) {
-                    $paymentExistsInCycle = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
-                        ->where(DB::raw("UPPER(TRIM(trans))"), 'PAYMENT')
-                        ->whereRaw('COALESCE(credit, 0) > 0')
-                        ->whereRaw('COALESCE(txtime, date) >= ?', [$cycleStart->format('Y-m-d H:i:s')])
-                        ->whereRaw('COALESCE(txtime, date) <= ?', [$cycleEnd->format('Y-m-d H:i:s')])
-                        ->exists();
-
-                    if ($paymentExistsInCycle) {
-                        $wmcShift = round((float) $maintenance, 2);
-                        $maintenance = 0.0;
-                        $arrearsCy = round((float) $arrearsCy + $wmcShift, 2);
-                        $wmcCoveredInCycle = true;
+                $cycleStart = null;
+                $cycleEnd = null;
+                $cycleScheduleId = null;
+                if (isset($currentBillEntry) && is_array($currentBillEntry)) {
+                    if (!empty($currentBillEntry['date'])) {
+                        $cycleStart = $currentBillEntry['date'] instanceof Carbon
+                            ? $currentBillEntry['date']->copy()->startOfDay()
+                            : Carbon::parse($currentBillEntry['date'])->startOfDay();
                     }
+                    if (!empty($currentBillEntry['due_date'])) {
+                        $cycleEnd = $currentBillEntry['due_date'] instanceof Carbon
+                            ? $currentBillEntry['due_date']->copy()->endOfDay()
+                            : Carbon::parse($currentBillEntry['due_date'])->endOfDay();
+                    }
+                    if (!empty($currentBillEntry['schedule_id'])) {
+                        $cycleScheduleId = (int) $currentBillEntry['schedule_id'];
+                    }
+                }
+
+                $paymentQuery = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
+                    ->where(DB::raw("UPPER(TRIM(trans))"), 'PAYMENT')
+                    ->whereRaw('COALESCE(credit, 0) > 0');
+                if ($cycleScheduleId) {
+                    $paymentQuery->where('schedule_id', $cycleScheduleId);
+                } elseif ($cycleStart && $cycleEnd) {
+                    $paymentQuery
+                        ->whereRaw('COALESCE(txtime, date) >= ?', [$cycleStart->format('Y-m-d H:i:s')])
+                        ->whereRaw('COALESCE(txtime, date) <= ?', [$cycleEnd->format('Y-m-d H:i:s')]);
+                } else {
+                    // Do not perform broad month-level matching when no cycle keys are available.
+                    $paymentQuery->whereRaw('1 = 0');
+                }
+                $paymentExistsInCycle = $paymentQuery->exists();
+
+                if ($paymentExistsInCycle) {
+                    $wmcShift = round((float) $maintenance, 2);
+                    $maintenance = 0.0;
+                    $arrearsCy = round((float) $arrearsCy + $wmcShift, 2);
+                    $wmcCoveredInCycle = true;
                 }
             } catch (\Throwable $e) {
                 // Keep original split when cycle-payment check fails.
@@ -4352,6 +4370,35 @@ class MeterReadingController extends Controller
                 if ($shortfall > 0.009) {
                     $arrearsCy = round($arrearsCy + $shortfall, 2);
                 }
+            }
+
+            // Normalize split for unpaid/non-OR flow:
+            // - Keep current month's principal as Current Bill (from billing period principal)
+            // - Allocate the remaining balance to Arrears CY
+            // - Preserve penalty/WMC as already computed (including paid/covered logic)
+            if ($paymentStatus !== 'paid') {
+                // Anchor Current Bill to the selected bill-month principal (if available),
+                // so breakdown does not drift to a different period's principal.
+                $selectedMonthPrincipal = null;
+                if (!empty($schedulesInRange) && $schedulesInRange->isNotEmpty()) {
+                    $selectedMonthPrincipal = DB::table('downloaded_readings')
+                        ->whereIn('schedule_id', $schedulesInRange->toArray())
+                        ->orderBy('id', 'desc')
+                        ->value('current_bill');
+                }
+                $principalForCurrentBill = round(max(0.0, (float) (
+                    $selectedMonthPrincipal ?? $principalFromBilling ?? $currentBill
+                )), 2);
+                $fixedCharges = round(
+                    max(0.0, (float) $arrearsPy)
+                    + max(0.0, (float) $penalty)
+                    + max(0.0, (float) $maintenance)
+                    + max(0.0, (float) $others),
+                    2
+                );
+                $maxCurrentBillAllowed = round(max(0.0, $currentBalanceCapped - $fixedCharges), 2);
+                $currentBill = round(min($principalForCurrentBill, $maxCurrentBillAllowed), 2);
+                $arrearsCy = round(max(0.0, $currentBalanceCapped - ($currentBill + $fixedCharges)), 2);
             }
         }
 
