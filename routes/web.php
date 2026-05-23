@@ -319,9 +319,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/download-reading/summary', [MeterReadingController::class, 'getAssignmentsSummary'])->name('download-reading.summary');
 
     // Visual Summary page route
-    Route::get('/visual-summary', function () {
-        return view('reports.system-report.visual-summary');
-    })->name('visual-summary');
+    Route::get('/visual-summary', [ReportController::class, 'visualSummary'])->name('visual-summary');
 
     // Collection Report page routes
     Route::get('/collection-report', [ReportController::class, 'collectionReport'])->name('collection-report');

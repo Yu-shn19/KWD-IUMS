@@ -15,12 +15,80 @@
 
                 <!-- Container Fluid-->
                 <div class="container-fluid" id="container-wrapper">
+                    @php
+                        $totalConsumers = $totalConsumers ?? 0;
+                        $monthlyRevenue = (float) ($monthlyRevenue ?? 0);
+                        $collectionRate = (float) ($collectionRate ?? 0);
+                        $pendingArrears = (float) ($pendingArrears ?? 0);
+                        $revenueChartLabels = $revenueChartLabels ?? [];
+                        $revenueChartData = $revenueChartData ?? [];
+                        $statusChartData = $statusChartData ?? [0, 0, 0];
+                        $zoneChartLabels = $zoneChartLabels ?? ['—'];
+                        $zoneChartData = $zoneChartData ?? [0];
+                        $zoneUnpaidChartLabels = $zoneUnpaidChartLabels ?? ['—'];
+                        $zoneUnpaidChartData = $zoneUnpaidChartData ?? [0];
+                        $topConsumption = $topConsumption ?? collect();
+                        $topOutstanding = $topOutstanding ?? collect();
+                        $topTablesMonthLabel = $topTablesMonthLabel ?? \Illuminate\Support\Carbon::now()->format('F Y');
+                        $collectionBarWidth = max(0, min(100, $collectionRate));
+                        $zoneOptions = $zoneOptions ?? collect();
+                        $filters = $filters ?? [
+                            'zone_route' => '',
+                            'bill_month' => \Illuminate\Support\Carbon::now()->format('Y-m'),
+                        ];
+                    @endphp
+
+                    <style>
+                        .visual-summary-filters {
+                            background: #fff;
+                            border: 1px solid #e3e6f0;
+                            border-radius: 12px;
+                            padding: 1.25rem 1.5rem;
+                            box-shadow: 0 0.125rem 0.25rem rgba(58, 59, 69, 0.08);
+                            margin-bottom: 1.5rem;
+                        }
+                        .visual-summary-filters label {
+                            font-weight: 700;
+                            color: #2c3e50;
+                            font-size: 0.8rem;
+                            margin-bottom: 0.35rem;
+                        }
+                        .visual-summary-filters .form-control {
+                            border-radius: 8px;
+                            border-color: #d1d3e2;
+                        }
+                    </style>
+
+                    <form method="get" action="{{ route('visual-summary') }}" class="visual-summary-filters">
+                        <div class="form-row align-items-end">
+                            <div class="form-group col-md-5 mb-2 mb-md-0">
+                                <label for="filter_zone_route">Zone / Route</label>
+                                <select class="form-control" id="filter_zone_route" name="zone_route">
+                                    <option value="">All Zones</option>
+                                    @foreach ($zoneOptions as $z)
+                                        <option value="{{ $z }}" @selected(($filters['zone_route'] ?? '') === (string) $z)>{{ $z }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <div class="form-group col-md-5 mb-2 mb-md-0">
+                                <label for="filter_bill_month">Bill Month</label>
+                                <input type="month" class="form-control" id="filter_bill_month" name="bill_month"
+                                       value="{{ $filters['bill_month'] ?? '' }}" required>
+                            </div>
+                            <div class="form-group col-md-2 mb-0 d-flex flex-wrap gap-1">
+                                <button type="submit" class="btn btn-primary btn-block">
+                                    <i class="fas fa-filter mr-1"></i>Apply
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
                     <div class="d-sm-flex align-items-center justify-content-between mb-4">
                         <h1 class="h3 mb-0 text-gray-800">Visual Summary</h1>
                         <div>
-                            <button class="btn btn-primary btn-sm mr-2">
+                            <a href="{{ route('visual-summary', array_filter(['zone_route' => $filters['zone_route'] ?? '', 'bill_month' => $filters['bill_month'] ?? ''], fn ($v) => $v !== null && $v !== '')) }}" class="btn btn-primary btn-sm mr-2">
                                 <i class="fas fa-sync-alt mr-1"></i>Refresh
-                            </button>
+                            </a>
                             <button class="btn btn-success btn-sm">
                                 <i class="fas fa-download mr-1"></i>Export
                             </button>
@@ -38,7 +106,7 @@
                                             <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
                                                 Total Consumers
                                             </div>
-                                            <div class="h5 mb-0 font-weight-bold text-gray-800">3,541</div>
+                                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ number_format($totalConsumers) }}</div>
                                         </div>
                                         <div class="col-auto">
                                             <i class="fas fa-users fa-2x text-gray-300"></i>
@@ -57,7 +125,7 @@
                                             <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
                                                 Monthly Revenue
                                             </div>
-                                            <div class="h5 mb-0 font-weight-bold text-gray-800">₱ 1,245,680</div>
+                                            <div class="h5 mb-0 font-weight-bold text-gray-800">₱ {{ number_format($monthlyRevenue, 2) }}</div>
                                         </div>
                                         <div class="col-auto">
                                             <i class="fas fa-dollar-sign fa-2x text-gray-300"></i>
@@ -67,22 +135,22 @@
                             </div>
                         </div>
 
-                        <!-- Collection Rate -->
+                        <!-- Collection Efficiency -->
                         <div class="col-xl-3 col-md-6 mb-4">
                             <div class="card border-left-info shadow h-100 py-2">
                                 <div class="card-body">
                                     <div class="row no-gutters align-items-center">
                                         <div class="col mr-2">
                                             <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
-                                                Collection Rate
+                                                Collection Efficiency
                                             </div>
                                             <div class="row no-gutters align-items-center">
                                                 <div class="col-auto">
-                                                    <div class="h5 mb-0 mr-3 font-weight-bold text-gray-800">87%</div>
+                                                    <div class="h5 mb-0 mr-3 font-weight-bold text-gray-800">{{ number_format($collectionRate, 1) }}%</div>
                                                 </div>
                                                 <div class="col">
                                                     <div class="progress progress-sm mr-2">
-                                                        <div class="progress-bar bg-info" role="progressbar" style="width: 87%" aria-valuenow="87" aria-valuemin="0" aria-valuemax="100"></div>
+                                                        <div class="progress-bar bg-info" role="progressbar" style="width: {{ $collectionBarWidth }}%" aria-valuenow="{{ $collectionBarWidth }}" aria-valuemin="0" aria-valuemax="100"></div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -104,7 +172,7 @@
                                             <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">
                                                 Pending Arrears
                                             </div>
-                                            <div class="h5 mb-0 font-weight-bold text-gray-800">₱ 345,200</div>
+                                            <div class="h5 mb-0 font-weight-bold text-gray-800">₱ {{ number_format($pendingArrears, 2) }}</div>
                                         </div>
                                         <div class="col-auto">
                                             <i class="fas fa-exclamation-triangle fa-2x text-gray-300"></i>
@@ -121,7 +189,7 @@
                         <div class="col-xl-8 col-lg-7">
                             <div class="card shadow mb-4">
                                 <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                                    <h6 class="m-0 font-weight-bold text-primary">Monthly Revenue Trend</h6>
+                                    <h6 class="m-0 font-weight-bold text-primary">Monthly Collections Trend (last 12 months)</h6>
                                 </div>
                                 <div class="card-body">
                                     <div class="chart-area">
@@ -171,13 +239,27 @@
                         </div>
                     </div>
 
+                    <!-- Total balance per zone (same FIFO sums as AR Aging → AR Summary per Zone) -->
+                    <div class="row mb-4">
+                        <div class="col-lg-12">
+                            <div class="card shadow mb-4">
+                                <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
+                                    <h6 class="m-0 font-weight-bold text-primary">Unpaid Balance</h6>
+                                </div>
+                                <div class="card-body">
+                                    <canvas id="zoneUnpaidBalanceChart" height="70"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Statistics Tables Row -->
                     <div class="row mb-4">
                         <!-- Top Consumers by Consumption -->
                         <div class="col-lg-6">
                             <div class="card shadow mb-4">
                                 <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                                    <h6 class="m-0 font-weight-bold text-primary">Top 10 Consumers by Consumption</h6>
+                                    <h6 class="m-0 font-weight-bold text-primary">Top 10 Consumers by Consumption <span class="text-muted font-weight-normal">(active · {{ $topTablesMonthLabel }})</span></h6>
                                 </div>
                                 <div class="card-body p-0">
                                     <div class="table-responsive" style="max-height: 400px; overflow: auto;">
@@ -191,66 +273,18 @@
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <tr>
-                                                    <td class="py-2 px-3">1</td>
-                                                    <td class="py-2 px-3">ABC Hotel & Resort</td>
-                                                    <td class="py-2 px-3">031</td>
-                                                    <td class="text-right py-2 px-3">1,250</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">2</td>
-                                                    <td class="py-2 px-3">XYZ Manufacturing Inc.</td>
-                                                    <td class="py-2 px-3">081</td>
-                                                    <td class="text-right py-2 px-3">980</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">3</td>
-                                                    <td class="py-2 px-3">Grand Mall Complex</td>
-                                                    <td class="py-2 px-3">041</td>
-                                                    <td class="text-right py-2 px-3">875</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">4</td>
-                                                    <td class="py-2 px-3">City Hospital</td>
-                                                    <td class="py-2 px-3">011</td>
-                                                    <td class="text-right py-2 px-3">760</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">5</td>
-                                                    <td class="py-2 px-3">Provincial Capitol</td>
-                                                    <td class="py-2 px-3">021</td>
-                                                    <td class="text-right py-2 px-3">650</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">6</td>
-                                                    <td class="py-2 px-3">University Campus</td>
-                                                    <td class="py-2 px-3">051</td>
-                                                    <td class="text-right py-2 px-3">580</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">7</td>
-                                                    <td class="py-2 px-3">Sports Complex</td>
-                                                    <td class="py-2 px-3">061</td>
-                                                    <td class="text-right py-2 px-3">520</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">8</td>
-                                                    <td class="py-2 px-3">Plaza Hotel</td>
-                                                    <td class="py-2 px-3">031</td>
-                                                    <td class="text-right py-2 px-3">475</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">9</td>
-                                                    <td class="py-2 px-3">Food Processing Plant</td>
-                                                    <td class="py-2 px-3">071</td>
-                                                    <td class="text-right py-2 px-3">430</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">10</td>
-                                                    <td class="py-2 px-3">Business Park Tower</td>
-                                                    <td class="py-2 px-3">091</td>
-                                                    <td class="text-right py-2 px-3">390</td>
-                                                </tr>
+                                                @forelse ($topConsumption as $idx => $row)
+                                                    <tr>
+                                                        <td class="py-2 px-3">{{ $idx + 1 }}</td>
+                                                        <td class="py-2 px-3">{{ $row->account_name }}</td>
+                                                        <td class="py-2 px-3">{{ $row->zone ?? '—' }}</td>
+                                                        <td class="text-right py-2 px-3">{{ number_format((float) $row->total_consumption) }}</td>
+                                                    </tr>
+                                                @empty
+                                                    <tr>
+                                                        <td colspan="4" class="py-3 px-3 text-center text-muted">No consumption data for active accounts in {{ $topTablesMonthLabel }}.</td>
+                                                    </tr>
+                                                @endforelse
                                             </tbody>
                                         </table>
                                     </div>
@@ -262,7 +296,7 @@
                         <div class="col-lg-6">
                             <div class="card shadow mb-4">
                                 <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                                    <h6 class="m-0 font-weight-bold text-danger">Top 10 Outstanding Accounts</h6>
+                                    <h6 class="m-0 font-weight-bold text-danger">Top 10 Outstanding Accounts <span class="text-muted font-weight-normal">(active · {{ $topTablesMonthLabel }})</span></h6>
                                 </div>
                                 <div class="card-body p-0">
                                     <div class="table-responsive" style="max-height: 400px; overflow: auto;">
@@ -276,66 +310,18 @@
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <tr>
-                                                    <td class="py-2 px-3">1</td>
-                                                    <td class="py-2 px-3">Garcia, David P.</td>
-                                                    <td class="py-2 px-3">021</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 15,450.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">2</td>
-                                                    <td class="py-2 px-3">Santos, Maria B.</td>
-                                                    <td class="py-2 px-3">031</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 12,800.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">3</td>
-                                                    <td class="py-2 px-3">Reyes, Pedro C.</td>
-                                                    <td class="py-2 px-3">041</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 11,250.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">4</td>
-                                                    <td class="py-2 px-3">Rodriguez, Emily Q.</td>
-                                                    <td class="py-2 px-3">011</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 9,680.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">5</td>
-                                                    <td class="py-2 px-3">Gonzales, Michael R.</td>
-                                                    <td class="py-2 px-3">051</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 8,920.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">6</td>
-                                                    <td class="py-2 px-3">Aquino, Jessica S.</td>
-                                                    <td class="py-2 px-3">061</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 7,550.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">7</td>
-                                                    <td class="py-2 px-3">Dizon, Kevin T.</td>
-                                                    <td class="py-2 px-3">071</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 6,430.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">8</td>
-                                                    <td class="py-2 px-3">Castro, Nicole U.</td>
-                                                    <td class="py-2 px-3">081</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 5,890.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">9</td>
-                                                    <td class="py-2 px-3">Perez, Oliver V.</td>
-                                                    <td class="py-2 px-3">091</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 4,760.00</td>
-                                                </tr>
-                                                <tr>
-                                                    <td class="py-2 px-3">10</td>
-                                                    <td class="py-2 px-3">Flores, Patricia W.</td>
-                                                    <td class="py-2 px-3">011</td>
-                                                    <td class="text-right py-2 px-3 text-danger">₱ 4,220.00</td>
-                                                </tr>
+                                                @forelse ($topOutstanding as $idx => $row)
+                                                    <tr>
+                                                        <td class="py-2 px-3">{{ $idx + 1 }}</td>
+                                                        <td class="py-2 px-3">{{ $row->account_name ?? '—' }}</td>
+                                                        <td class="py-2 px-3">{{ $row->zone_code ?? '—' }}</td>
+                                                        <td class="text-right py-2 px-3 text-danger">₱ {{ number_format((float) $row->balance, 2) }}</td>
+                                                    </tr>
+                                                @empty
+                                                    <tr>
+                                                        <td colspan="4" class="py-3 px-3 text-center text-muted">No outstanding positive balances for active accounts.</td>
+                                                    </tr>
+                                                @endforelse
                                             </tbody>
                                         </table>
                                     </div>
@@ -367,9 +353,9 @@
     var revenueChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"],
+            labels: @json($revenueChartLabels),
             datasets: [{
-                label: "Revenue",
+                label: "Collections",
                 lineTension: 0.3,
                 backgroundColor: "rgba(78, 115, 223, 0.05)",
                 borderColor: "rgba(78, 115, 223, 1)",
@@ -381,7 +367,7 @@
                 pointHoverBorderColor: "rgba(78, 115, 223, 1)",
                 pointHitRadius: 10,
                 pointBorderWidth: 2,
-                data: [1050000, 1100000, 1080000, 1150000, 1200000, 1180000, 1220000, 1245680],
+                data: @json($revenueChartData),
             }],
         },
         options: {
@@ -415,7 +401,7 @@
         data: {
             labels: ['Active', 'Pending', 'Disconnected'],
             datasets: [{
-                data: [3200, 261, 80],
+                data: @json($statusChartData),
                 backgroundColor: ['#1cc88a', '#f6c23e', '#e74a3b'],
                 hoverBackgroundColor: ['#17a673', '#f4b619', '#e02d1b'],
                 hoverBorderColor: "rgba(234, 236, 244, 1)",
@@ -432,18 +418,56 @@
         },
     });
 
-    // Zone Performance Bar Chart
+    // Zone Performance Bar Chart (collections)
     var ctx3 = document.getElementById("zonePerformanceChart");
     var zoneChart = new Chart(ctx3, {
         type: 'bar',
         data: {
-            labels: ["Zone 011", "Zone 021", "Zone 031", "Zone 041", "Zone 051", "Zone 061", "Zone 071", "Zone 081", "Zone 091"],
+            labels: @json($zoneChartLabels),
             datasets: [{
-                label: "Revenue",
+                label: "Total amount (bill month)",
                 backgroundColor: "#4e73df",
                 hoverBackgroundColor: "#2e59d9",
                 borderColor: "#4e73df",
-                data: [145000, 132000, 158000, 98000, 175000, 165000, 138000, 189000, 145680],
+                data: @json($zoneChartData),
+            }],
+        },
+        options: {
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    }
+                },
+                y: {
+                    ticks: {
+                        callback: function(value) {
+                            return '₱' + value.toLocaleString();
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Total balance by zone (FIFO), same per-zone totals as AR Aging → AR Summary per Zone
+    var ctxZoneUnpaid = document.getElementById("zoneUnpaidBalanceChart");
+    var zoneUnpaidChart = new Chart(ctxZoneUnpaid, {
+        type: 'bar',
+        data: {
+            labels: @json($zoneUnpaidChartLabels),
+            datasets: [{
+                label: "Total balance",
+                backgroundColor: "#f6c23e",
+                hoverBackgroundColor: "#dda20a",
+                borderColor: "#f6c23e",
+                data: @json($zoneUnpaidChartData),
             }],
         },
         options: {

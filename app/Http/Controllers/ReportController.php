@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
 use Carbon\Carbon;
@@ -58,6 +59,80 @@ class ReportController extends Controller
             : 0.00;
 
         return round($baseBill + $penalty, 2);
+    }
+
+    protected function resolveMonthlyBillingTotalAmount(Carbon $monthStart, string $zone = '', ?Carbon $asOf = null): float
+    {
+        $monthStart = $monthStart->copy()->startOfMonth();
+        $monthEnd = $monthStart->copy()->endOfMonth();
+        $asOfDate = ($asOf ?? Carbon::now())->copy()->endOfDay();
+
+        $query = DB::table('meter_reading_schedules as mrs')
+            ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
+            ->leftJoin('consumer_ledgers as cl', function ($join) {
+                $join->on('mrs.id', '=', 'cl.schedule_id')
+                    ->whereIn('cl.trans', ['BILL', 'BILLING']);
+            })
+            ->select(
+                'mrs.zone',
+                'mrs.bill_date',
+                'mrs.due_date',
+                'mrs.previous_reading as mrs_previous_reading',
+                'mrs.current_reading as mrs_current_reading',
+                'mrs.consumption as mrs_consumption',
+                'mrs.current_bill as mrs_current_bill',
+                'mrs.arrears',
+                'mrs.total_amount',
+                'dr.previous_reading as dr_previous_reading',
+                'dr.current_reading as dr_current_reading',
+                'dr.consumption as dr_consumption',
+                'dr.current_bill as dr_current_bill',
+                'dr.reading_date',
+                'cl.debit as ledger_debit',
+                'cl.others as ledger_others'
+            )
+            ->whereBetween('mrs.bill_month', [$monthStart, $monthEnd]);
+
+        if ($zone !== '') {
+            $query->where('mrs.zone', $zone);
+        }
+
+        $rows = $query->get();
+
+        return (float) $rows->sum(function ($item) use ($asOfDate) {
+            $previousReading = $item->dr_previous_reading ?? $item->mrs_previous_reading ?? 0;
+            $currentReading = $item->dr_current_reading ?? $item->mrs_current_reading ?? 0;
+            $consumption = $item->dr_consumption ?? $item->mrs_consumption ?? 0;
+
+            if ($consumption <= 0 && $currentReading > 0 && $previousReading >= 0) {
+                $consumption = max(0, $currentReading - $previousReading);
+            }
+
+            $baseCurrentBill = 0.0;
+            if ($item->ledger_debit !== null) {
+                $others = (float) ($item->ledger_others ?? 20.00);
+                $debit = (float) $item->ledger_debit;
+                $baseCurrentBill = max(0, $debit - $others);
+            } else {
+                $storedCurrentBill = $item->dr_current_bill ?? $item->mrs_current_bill ?? 0;
+                $baseCurrentBill = (float) $storedCurrentBill;
+
+                if ($baseCurrentBill <= 0 && $consumption > 0) {
+                    $baseCurrentBill = $this->calculateWaterBill((float) $consumption);
+                    $dueDate = $item->due_date ? Carbon::parse($item->due_date) : null;
+                    if ($dueDate && $asOfDate->copy()->startOfDay()->greaterThanOrEqualTo($dueDate->copy()->startOfDay())) {
+                        $baseCurrentBill += round($baseCurrentBill * 0.10, 2);
+                    }
+                }
+            }
+
+            $currentBill = $baseCurrentBill > 0 ? ($baseCurrentBill + 20.00) : 0.0;
+            $arrears = (float) ($item->arrears ?? 0);
+            $totalAmountStored = (float) ($item->total_amount ?? 0);
+            $computedTotal = round($currentBill + $arrears, 2);
+
+            return $totalAmountStored > 0 ? round($totalAmountStored, 2) : $computedTotal;
+        });
     }
 
     /**
@@ -1422,6 +1497,206 @@ class ReportController extends Controller
     }
 
     /**
+     * FIFO AR aging: one row per account with bucket columns and total_balance (same logic as AR Aging Summary).
+     */
+    protected function runArAgingFifoAccountQuery(
+        Carbon $asOf,
+        Carbon $billingCutOff,
+        Carbon $paymentCutOff,
+        string $zone = '',
+        string $category = '',
+        string $status = '',
+        ?string $selectedBalanceFilter = null
+    ): Collection {
+        $selectedBalanceFilter = (string) ($selectedBalanceFilter ?? '');
+        $agingFilters = [];
+        $agingBindings = [];
+
+        if ($status && $status !== '' && $status !== 'All Status') {
+            $statusMap = [
+                'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
+                'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
+                'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
+            ];
+            if (isset($statusMap[$status])) {
+                $placeholders = implode(',', array_fill(0, count($statusMap[$status]), '?'));
+                $agingFilters[] = "cz.status_code IN ({$placeholders})";
+                foreach ($statusMap[$status] as $statusValue) {
+                    $agingBindings[] = $statusValue;
+                }
+            } else {
+                $agingFilters[] = 'cz.status_code = ?';
+                $agingBindings[] = $status;
+            }
+        }
+        if ($zone && $zone !== '' && $zone !== 'All Zones') {
+            $agingFilters[] = 'cz.zone_code = ?';
+            $agingBindings[] = $zone;
+        }
+        if ($category && $category !== '' && $category !== 'All Categories') {
+            $agingFilters[] = 'cz.category_code = ?';
+            $agingBindings[] = $category;
+        }
+
+        $chargeWhere = '';
+        if (! empty($agingFilters)) {
+            $chargeWhere = ' AND ' . implode(' AND ', $agingFilters);
+        }
+
+        $asOfDate = $asOf->format('Y-m-d');
+        $billingCutoffDate = $billingCutOff->format('Y-m-d');
+        $paymentCutoffDate = $paymentCutOff->format('Y-m-d');
+
+        $agingSql = "
+            WITH charges AS (
+                SELECT
+                    cl.consumer_zone_id,
+                    cz.account_no,
+                    UPPER(TRIM(cl.trans)) AS trans,
+                    cl.id,
+                    cl.`date` AS trans_date,
+                    COALESCE(cl.due_date, cl.`date`) AS aging_date,
+                    cl.debit AS amount
+                FROM consumer_ledgers cl
+                INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
+                WHERE UPPER(TRIM(cl.trans)) IN ('DM', 'BILLING', 'PENALTY')
+                  AND cl.debit > 0
+                  AND cl.`date` <= ?
+                  {$chargeWhere}
+            ),
+            payments AS (
+                SELECT
+                    cl.consumer_zone_id,
+                    SUM(
+                        CASE
+                            WHEN UPPER(TRIM(cl.trans)) = 'CM'
+                                THEN GREATEST(COALESCE(cl.credit, 0), COALESCE(-cl.debit, 0), 0)
+                            ELSE GREATEST(COALESCE(cl.credit, 0), 0)
+                        END
+                    ) AS total_payment
+                FROM consumer_ledgers cl
+                INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
+                WHERE UPPER(TRIM(cl.trans)) IN ('PAYMENT', 'CM')
+                  AND (
+                      cl.credit > 0
+                      OR (
+                          UPPER(TRIM(cl.trans)) = 'CM'
+                          AND (COALESCE(cl.credit, 0) <> 0 OR COALESCE(cl.debit, 0) < 0)
+                      )
+                  )
+                  AND cl.`date` <= ?
+                  {$chargeWhere}
+                GROUP BY cl.consumer_zone_id
+            ),
+            ordered AS (
+                SELECT
+                    c.*,
+                    COALESCE(
+                        SUM(c.amount) OVER (
+                            PARTITION BY c.consumer_zone_id
+                            ORDER BY
+                                CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
+                                c.aging_date,
+                                c.trans_date,
+                                c.id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                        ),
+                        0
+                    ) AS prev_total,
+                    SUM(c.amount) OVER (
+                        PARTITION BY c.consumer_zone_id
+                        ORDER BY
+                            CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
+                            c.aging_date,
+                            c.trans_date,
+                            c.id
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS run_total
+                FROM charges c
+            ),
+            unpaid AS (
+                SELECT
+                    o.consumer_zone_id,
+                    o.account_no,
+                    o.trans,
+                    o.aging_date,
+                    GREATEST(
+                        0,
+                        GREATEST(0, o.run_total - COALESCE(p.total_payment, 0))
+                        - GREATEST(0, o.prev_total - COALESCE(p.total_payment, 0))
+                    ) AS unpaid_amount
+                FROM ordered o
+                LEFT JOIN payments p ON p.consumer_zone_id = o.consumer_zone_id
+            )
+            SELECT
+                consumer_zone_id,
+                account_no,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND DATEDIFF(?, aging_date) <= 0
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS current,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND DATEDIFF(?, aging_date) > 0
+                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 0
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _30,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 1
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _60,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 2
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _90,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND (
+                             trans = 'DM'
+                            OR PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) >= 3
+                         )
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _over90,
+                ROUND(SUM(unpaid_amount), 2) AS total_balance
+            FROM unpaid
+            GROUP BY consumer_zone_id, account_no
+        ";
+
+        if ($selectedBalanceFilter === 'with_balance') {
+            $agingSql .= "    HAVING ROUND(SUM(unpaid_amount), 2) > 0\n";
+        }
+
+        $agingSql .= "    ORDER BY account_no\n";
+
+        $queryBindings = array_merge(
+            [$billingCutoffDate],
+            $agingBindings,
+            [$paymentCutoffDate],
+            $agingBindings,
+            [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
+        );
+
+        return collect(DB::select($agingSql, $queryBindings));
+    }
+
+    /**
      * AR Aging Summary - Calculate accounts receivable aging
      */
     public function arAgingSummary(Request $request)
@@ -1464,7 +1739,7 @@ class ReportController extends Controller
             @ini_set('max_execution_time', '300'); // 5 minutes
 
             $status = $request->input('status', '');
-            $selectedBalanceFilter = $request->input('balance_filter', '');
+            $selectedBalanceFilter = (string) ($request->input('balance_filter') ?? '');
             $zone = $request->input('zone', '');
             $category = $request->input('category', '');
             try {
@@ -1609,202 +1884,23 @@ class ReportController extends Controller
             ]);
         } catch (\Throwable $e) {}
 
-        // FIFO aging SQL logic:
-        // - charges = DM/BILLING/PENALTY debits
-        // - payments = total credits
-        // - oldest charges are paid first
-        // - DM is always classified into over-90
-        $agingFilters = [];
-        $agingBindings = [];
-
-        if ($status && $status !== '' && $status !== 'All Status') {
-            $statusMap = [
-                'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
-                'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
-                'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
-            ];
-            if (isset($statusMap[$status])) {
-                $placeholders = implode(',', array_fill(0, count($statusMap[$status]), '?'));
-                $agingFilters[] = "cz.status_code IN ({$placeholders})";
-                foreach ($statusMap[$status] as $statusValue) {
-                    $agingBindings[] = $statusValue;
-                }
-            } else {
-                $agingFilters[] = 'cz.status_code = ?';
-                $agingBindings[] = $status;
-            }
-        }
-        if ($zone && $zone !== '' && $zone !== 'All Zones') {
-            $agingFilters[] = 'cz.zone_code = ?';
-            $agingBindings[] = $zone;
-        }
-        if ($category && $category !== '' && $category !== 'All Categories') {
-            $agingFilters[] = 'cz.category_code = ?';
-            $agingBindings[] = $category;
-        }
-
-        $chargeWhere = '';
-        if (!empty($agingFilters)) {
-            $chargeWhere = ' AND ' . implode(' AND ', $agingFilters);
-        }
-
-        $asOfDate = $asOf->format('Y-m-d');
-        $billingCutoffDate = $billingCutOff->format('Y-m-d');
-        $paymentCutoffDate = $paymentCutOff->format('Y-m-d');
-
-        $agingSql = "
-            WITH charges AS (
-                SELECT
-                    cl.consumer_zone_id,
-                    cz.account_no,
-                    UPPER(TRIM(cl.trans)) AS trans,
-                    cl.id,
-                    cl.`date` AS trans_date,
-                    COALESCE(cl.due_date, cl.`date`) AS aging_date,
-                    cl.debit AS amount
-                FROM consumer_ledgers cl
-                INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
-                WHERE UPPER(TRIM(cl.trans)) IN ('DM', 'BILLING', 'PENALTY')
-                  AND cl.debit > 0
-                  AND cl.`date` <= ?
-                  {$chargeWhere}
-            ),
-            payments AS (
-                SELECT
-                    cl.consumer_zone_id,
-                    SUM(
-                        CASE
-                            WHEN UPPER(TRIM(cl.trans)) = 'CM'
-                                THEN GREATEST(COALESCE(cl.credit, 0), COALESCE(-cl.debit, 0), 0)
-                            ELSE GREATEST(COALESCE(cl.credit, 0), 0)
-                        END
-                    ) AS total_payment
-                FROM consumer_ledgers cl
-                INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
-                WHERE UPPER(TRIM(cl.trans)) IN ('PAYMENT', 'CM')
-                  AND (
-                      cl.credit > 0
-                      OR (
-                          UPPER(TRIM(cl.trans)) = 'CM'
-                          AND (COALESCE(cl.credit, 0) <> 0 OR COALESCE(cl.debit, 0) < 0)
-                      )
-                  )
-                  AND cl.`date` <= ?
-                  {$chargeWhere}
-                GROUP BY cl.consumer_zone_id
-            ),
-            ordered AS (
-                SELECT
-                    c.*,
-                    COALESCE(
-                        SUM(c.amount) OVER (
-                            PARTITION BY c.consumer_zone_id
-                            ORDER BY
-                                CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
-                                c.aging_date,
-                                c.trans_date,
-                                c.id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                        ),
-                        0
-                    ) AS prev_total,
-                    SUM(c.amount) OVER (
-                        PARTITION BY c.consumer_zone_id
-                        ORDER BY
-                            CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
-                            c.aging_date,
-                            c.trans_date,
-                            c.id
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    ) AS run_total
-                FROM charges c
-            ),
-            unpaid AS (
-                SELECT
-                    o.consumer_zone_id,
-                    o.account_no,
-                    o.trans,
-                    o.aging_date,
-                    GREATEST(
-                        0,
-                        GREATEST(0, o.run_total - COALESCE(p.total_payment, 0))
-                        - GREATEST(0, o.prev_total - COALESCE(p.total_payment, 0))
-                    ) AS unpaid_amount
-                FROM ordered o
-                LEFT JOIN payments p ON p.consumer_zone_id = o.consumer_zone_id
-            )
-            SELECT
-                consumer_zone_id,
-                account_no,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) <= 0
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS current,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) BETWEEN 1 AND 30
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _30,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) BETWEEN 31 AND 60
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _60,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) BETWEEN 61 AND 90
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _90,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND (
-                             trans = 'DM'
-                             OR DATEDIFF(?, aging_date) > 90
-                         )
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _over90,
-                ROUND(SUM(unpaid_amount), 2) AS total_balance
-            FROM unpaid
-            GROUP BY consumer_zone_id, account_no
-        ";
-
-        if ($selectedBalanceFilter === 'with_balance') {
-            $agingSql .= "    HAVING ROUND(SUM(unpaid_amount), 2) > 0\n";
-        }
-
-        $agingSql .= "    ORDER BY account_no\n";
-
-        $queryBindings = array_merge(
-            [$billingCutoffDate],
-            $agingBindings,
-            [$paymentCutoffDate],
-            $agingBindings,
-            [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
+        // FIFO aging SQL (shared with Visual Summary pending arrears via runArAgingFifoAccountQuery).
+        $fifoRows = $this->runArAgingFifoAccountQuery(
+            $asOf,
+            $billingCutOff,
+            $paymentCutOff,
+            $zone ?? '',
+            $category ?? '',
+            $status ?? '',
+            $selectedBalanceFilter
         );
-
-        $fifoRows = collect(DB::select($agingSql, $queryBindings));
         $consumerMeta = collect();
         if ($fifoRows->isNotEmpty()) {
             $consumerMeta = DB::table('consumer_zone')
                 ->select('id', 'zone_code', 'sequence', 'account_no', 'account_name', 'status_code', 'category_code')
-                ->whereIn('id', $fifoRows->pluck('consumer_zone_id')->filter()->values())
+                ->whereIn('id', $fifoRows->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values())
                 ->get()
-                ->keyBy('id');
+                ->keyBy(fn ($m) => (int) $m->id);
         }
 
         $detailRecords = [];
@@ -1819,7 +1915,14 @@ class ReportController extends Controller
         ];
 
         foreach ($fifoRows as $row) {
-            $meta = $consumerMeta->get($row->consumer_zone_id);
+            $czId = (int) ($row->consumer_zone_id ?? 0);
+            if ($czId === 0) {
+                continue;
+            }
+            $meta = $consumerMeta->get($czId);
+            if ($meta === null) {
+                continue;
+            }
             $current = (float) ($row->current ?? 0);
             $bucket30 = (float) ($row->_30 ?? 0);
             $bucket60 = (float) ($row->_60 ?? 0);
@@ -1849,17 +1952,7 @@ class ReportController extends Controller
 
         if ($selectedBalanceFilter === 'with_balance') {
             $detailRecords = array_values(array_filter($detailRecords, function ($r) {
-                $over90 = (float) ($r['_over90'] ?? 0);
-                $prevYr = (float) ($r['prev_year'] ?? 0);
-                $b30    = (float) ($r['_30'] ?? 0);
-                $b60    = (float) ($r['_60'] ?? 0);
-                $b90    = (float) ($r['_90'] ?? 0);
-
-                if ($over90 > 0) return true;
-                if ($prevYr > 0) return true;
-                if ($b30 > 0 && ($b60 > 0 || $b90 > 0)) return true;
-
-                return false;
+                return (float) ($r['balance'] ?? 0) > 0;
             }));
         }
 
@@ -1984,7 +2077,7 @@ class ReportController extends Controller
 
             // Reuse the same filter logic as arAgingSummary
             $status = $request->input('status', '');
-            $selectedBalanceFilter = $request->input('balance_filter', '');
+            $selectedBalanceFilter = (string) ($request->input('balance_filter') ?? '');
             $zone = $request->input('zone', '');
             $category = $request->input('category', '');
             try {
@@ -2221,7 +2314,7 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                             AND DATEDIFF(?, aging_date) <= 0
+                         AND DATEDIFF(?, aging_date) <= 0
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS current,
@@ -2229,7 +2322,8 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                             AND DATEDIFF(?, aging_date) BETWEEN 1 AND 30
+                         AND DATEDIFF(?, aging_date) > 0
+                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 0
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS _30,
@@ -2237,7 +2331,7 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                             AND DATEDIFF(?, aging_date) BETWEEN 31 AND 60
+                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 1
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS _60,
@@ -2245,7 +2339,7 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                             AND DATEDIFF(?, aging_date) BETWEEN 61 AND 90
+                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 2
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS _90,
@@ -2254,7 +2348,7 @@ class ReportController extends Controller
                             WHEN unpaid_amount > 0
                              AND (
                                  trans = 'DM'
-                                 OR DATEDIFF(?, aging_date) > 90
+                            OR PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) >= 3
                              )
                             THEN unpaid_amount ELSE 0
                         END
@@ -2275,7 +2369,7 @@ class ReportController extends Controller
                 $agingBindings,
                 [$paymentCutoffDate],
                 $agingBindings,
-                [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
+                [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
             );
 
             $fifoRows = collect(DB::select($agingSql, $queryBindings));
@@ -2283,15 +2377,22 @@ class ReportController extends Controller
             if ($fifoRows->isNotEmpty()) {
                 $consumerMeta = DB::table('consumer_zone')
                     ->select('id', 'account_name')
-                    ->whereIn('id', $fifoRows->pluck('consumer_zone_id')->filter()->values())
+                    ->whereIn('id', $fifoRows->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values())
                     ->get()
-                    ->keyBy('id');
+                    ->keyBy(fn ($m) => (int) $m->id);
             }
 
             $detailRecords = [];
 
             foreach ($fifoRows as $row) {
-                $meta = $consumerMeta->get($row->consumer_zone_id);
+                $czId = (int) ($row->consumer_zone_id ?? 0);
+                if ($czId === 0) {
+                    continue;
+                }
+                $meta = $consumerMeta->get($czId);
+                if ($meta === null) {
+                    continue;
+                }
                 $current = (float) ($row->current ?? 0);
                 $bucket30 = (float) ($row->_30 ?? 0);
                 $bucket60 = (float) ($row->_60 ?? 0);
@@ -2315,17 +2416,7 @@ class ReportController extends Controller
 
             if ($selectedBalanceFilter === 'with_balance') {
                 $detailRecords = array_values(array_filter($detailRecords, function ($r) {
-                    $over90 = (float) ($r['_OVER90'] ?? 0);
-                    $prevYr = (float) ($r['PREV YEAR'] ?? 0);
-                    $b30    = (float) ($r['_30'] ?? 0);
-                    $b60    = (float) ($r['_60'] ?? 0);
-                    $b90    = (float) ($r['_90'] ?? 0);
-
-                    if ($over90 > 0) return true;
-                    if ($prevYr > 0) return true;
-                    if ($b30 > 0 && ($b60 > 0 || $b90 > 0)) return true;
-
-                    return false;
+                    return (float) ($r['BALANCE'] ?? 0) > 0;
                 }));
             }
 
@@ -2386,5 +2477,410 @@ class ReportController extends Controller
                 ->back()
                 ->with('error', 'Error exporting AR aging summary: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Visual Summary: KPIs, charts, and tables backed by the database.
+     *
+     * Query: zone_route (empty = all), bill_month (Y-m).
+     * Consumer counts / status / arrears use a snapshot end of min(selected bill month end, today), with NULL created_at treated as included.
+     * Monthly revenue KPI uses the selected bill month (clipped to today); the revenue line chart uses rolling 12 months to today.
+     * Top consumption sums readings in the bill month for accounts joined to active consumer_zone rows; top outstanding uses FIFO total_balance when AR aging SQL runs (same as AR Aging), else consumer_zone.balance.
+     * Pending arrears / unpaid-by-zone FIFO: billing & aging as-of = bill-month snapshot end (min(month end, today));
+     * payment cut-off = today so ledger payments through the run date apply (aligns with AR Aging when payment cut-off is later than billing).
+     */
+    public function visualSummary(Request $request)
+    {
+        $now = Carbon::now();
+        $todayEnd = $now->copy()->endOfDay();
+
+        $billMonthInput = $request->input('bill_month', $now->format('Y-m'));
+        try {
+            $billMonth = Carbon::createFromFormat('Y-m', $billMonthInput);
+        } catch (\Exception $e) {
+            $billMonth = $now->copy()->startOfMonth();
+            $billMonthInput = $billMonth->format('Y-m');
+        }
+        $billMonthStart = $billMonth->copy()->startOfMonth();
+        $billMonthEnd = $billMonth->copy()->endOfMonth();
+
+        $periodEnd = $billMonthEnd->copy()->endOfDay();
+        if ($periodEnd->gt($todayEnd)) {
+            $periodEnd = $todayEnd->copy();
+        }
+        $periodStart = $billMonthStart->copy()->startOfDay();
+        $ytdStart = $billMonthStart->copy()->startOfYear()->startOfDay();
+        if ($periodEnd->lt($periodStart)) {
+            $periodEnd = $billMonthEnd->copy()->endOfDay();
+        }
+
+        $snapshotEnd = $billMonthEnd->copy()->endOfDay();
+        if ($snapshotEnd->gt($todayEnd)) {
+            $snapshotEnd = $todayEnd->copy();
+        }
+
+        $zoneRoute = trim((string) $request->input('zone_route', ''));
+        $chartAnchor = $now->copy()->startOfMonth();
+
+        $baseConsumerQuery = function () use ($zoneRoute, $snapshotEnd) {
+            $q = DB::table('consumer_zone');
+            if ($zoneRoute !== '') {
+                $q->where('zone_code', $zoneRoute);
+            }
+            if (Schema::hasColumn('consumer_zone', 'created_at')) {
+                $q->where(function ($w) use ($snapshotEnd) {
+                    $w->whereNull('created_at')
+                        ->orWhere('created_at', '<=', $snapshotEnd);
+                });
+            }
+
+            return $q;
+        };
+
+        $zonesFromConsumers = DB::table('consumer_zone')
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
+            ->distinct()
+            ->orderBy('zone_code')
+            ->pluck('zone_code');
+        $zonesFromSchedules = MeterReadingSchedule::query()
+            ->whereNotNull('zone')
+            ->where('zone', '!=', '')
+            ->distinct()
+            ->orderBy('zone')
+            ->pluck('zone');
+        $zoneOptions = $zonesFromConsumers->merge($zonesFromSchedules)->filter()->unique()->sort()->values();
+
+        $totalConsumers = (int) $baseConsumerQuery()->count();
+
+        $consumerExistsForStatus = function () use ($baseConsumerQuery) {
+            return $baseConsumerQuery();
+        };
+
+        // Same payment scope as Collection Report (consumer_payments + dr/mrs/cz, zone COALESCE, date on paid_at/created_at).
+        $applyCollectionReportDateRange = static function ($q, Carbon $from, Carbon $to): void {
+            $df = $from->copy()->startOfDay()->format('Y-m-d');
+            $dt = $to->copy()->endOfDay()->format('Y-m-d');
+            $q->where(function ($q2) use ($df) {
+                $q2->whereDate('cp.paid_at', '>=', $df)
+                    ->orWhere(function ($q3) use ($df) {
+                        $q3->whereNull('cp.paid_at')
+                            ->whereDate('cp.created_at', '>=', $df);
+                    });
+            });
+            $q->where(function ($q2) use ($dt) {
+                $q2->whereDate('cp.paid_at', '<=', $dt)
+                    ->orWhere(function ($q3) use ($dt) {
+                        $q3->whereNull('cp.paid_at')
+                            ->whereDate('cp.created_at', '<=', $dt);
+                    });
+            });
+        };
+
+        $collectionPaymentsBase = function () use ($zoneRoute) {
+            $q = DB::table('consumer_payments as cp')
+                ->leftJoin('downloaded_readings as dr', 'cp.reading_id', '=', 'dr.id')
+                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+                ->leftJoin('consumer_zone as cz', 'cp.consumer_id', '=', 'cz.id')
+                ->where(function ($w) {
+                    $w->where('cp.payment_amount', '>', 0)
+                        ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
+                });
+            if ($zoneRoute !== '') {
+                $q->where(function ($w) use ($zoneRoute) {
+                    $w->where('dr.zone', $zoneRoute)
+                        ->orWhere('mrs.zone', $zoneRoute)
+                        ->orWhere('cz.zone_code', $zoneRoute);
+                });
+            }
+
+            return $q;
+        };
+
+        $paymentSumBetween = function (Carbon $start, Carbon $end) use ($collectionPaymentsBase, $applyCollectionReportDateRange): float {
+            $q = $collectionPaymentsBase();
+            $applyCollectionReportDateRange($q, $start, $end);
+
+            return (float) $q->sum('cp.payment_amount');
+        };
+
+        $monthlyRevenue = $paymentSumBetween($periodStart, $periodEnd);
+
+        // Collection Efficiency numerator baseline provided by finance:
+        // Jan-Mar carry-in (Current + Arrears CY), then add Collection Report breakdown from April onward.
+        $openingCurrentPlusArrearsCy = 1557349.94 + 1239625.75;
+        $collectionBaselineStart = Carbon::create(2026, 4, 1)->startOfDay();
+        $collectionBreakdownStart = $billMonthStart->gte($collectionBaselineStart)
+            ? $collectionBaselineStart->copy()
+            : $ytdStart->copy();
+        $efficiencyNumeratorQuery = $collectionPaymentsBase();
+        $applyCollectionReportDateRange($efficiencyNumeratorQuery, $collectionBreakdownStart, $periodEnd);
+        $collectedCurrentPlusArrearsCy = (float) $efficiencyNumeratorQuery->sum(
+            DB::raw('COALESCE(cp.current_bill, 0) + COALESCE(cp.arrears_cy, 0)')
+        );
+        if ($billMonthStart->gte($collectionBaselineStart)) {
+            $collectedCurrentPlusArrearsCy += $openingCurrentPlusArrearsCy;
+        }
+
+        // 4.1 denominator baseline provided by finance:
+        // opening current-metered (Jan-Mar gap-adjusted) + April billing current-metered,
+        // then add Monthly Billing total amount for each succeeding month (May onward).
+        $openingCurrentMetered = 3556007.52;
+        $aprilBillingCurrentMetered = 2367347.29;
+        $rollingBillingStart = Carbon::create(2026, 5, 1)->startOfMonth();
+        $additionalMonthlyBilling = 0.0;
+        if ($billMonthStart->gte($rollingBillingStart)) {
+            $monthCursor = $rollingBillingStart->copy();
+            while ($monthCursor->lte($billMonthStart)) {
+                $additionalMonthlyBilling += $this->resolveMonthlyBillingTotalAmount($monthCursor, $zoneRoute, $periodEnd);
+                $monthCursor->addMonth();
+            }
+        }
+        $billedCurrentMeteredYtd = $openingCurrentMetered + $aprilBillingCurrentMetered + $additionalMonthlyBilling;
+
+        $collectionRate = 0.0;
+        if ($billedCurrentMeteredYtd > 0.01) {
+            $collectionRate = min(100.0, round(($collectedCurrentPlusArrearsCy / $billedCurrentMeteredYtd) * 100, 1));
+        }
+
+        // Pending arrears + per-zone unpaid: same FIFO as AR Aging, with billing/as-of at bill-month snapshot
+        // and payment cut-off at today (AR screen often uses a later payment date than billing; using one date for all inflated unpaid).
+        $fifoAsOf = $snapshotEnd->copy()->startOfDay();
+        $fifoBillingCutoff = $snapshotEnd->copy()->startOfDay();
+        $fifoPaymentCutoff = $snapshotEnd->copy()->startOfDay();
+        $fifoArRows = collect();
+        try {
+            $fifoArRows = $this->runArAgingFifoAccountQuery(
+                $fifoAsOf,
+                $fifoBillingCutoff,
+                $fifoPaymentCutoff,
+                $zoneRoute !== '' ? $zoneRoute : '',
+                '',
+                '',
+                ''
+            );
+            $pendingArrears = round($fifoArRows->sum(fn ($r) => (float) ($r->total_balance ?? 0)), 2);
+        } catch (\Throwable $e) {
+            try {
+                Log::warning('Visual summary AR aging total failed, using consumer_zone balances: ' . $e->getMessage());
+            } catch (\Throwable $e2) {
+            }
+            $pendingArrears = (float) DB::table('consumer_zone')
+                ->when($zoneRoute !== '', fn ($q) => $q->where('zone_code', $zoneRoute))
+                ->sum(DB::raw('GREATEST(COALESCE(balance, 0), 0)'));
+        }
+
+        $revenueChartLabels = [];
+        $revenueChartData = [];
+        for ($i = 11; $i >= 0; $i--) {
+            $m = $chartAnchor->copy()->subMonths($i)->startOfMonth();
+            $mStart = $m->copy()->startOfDay();
+            $mEnd = $m->copy()->endOfMonth();
+            if ($mEnd->gt($todayEnd)) {
+                $mEnd = $todayEnd->copy();
+            }
+            $revenueChartLabels[] = $m->format('M');
+            if ($mStart->gt($todayEnd)) {
+                $revenueChartData[] = 0.0;
+            } else {
+                $revenueChartData[] = $paymentSumBetween($mStart, $mEnd);
+            }
+        }
+
+        $statusCount = function (string $rawSql) use ($consumerExistsForStatus): int {
+            return (int) $consumerExistsForStatus()->whereRaw($rawSql)->count();
+        };
+        $activeConsumers = $statusCount("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')");
+        $pendingConsumers = $statusCount("UPPER(TRIM(COALESCE(status_code, ''))) IN ('P', 'PENDING')");
+        $disconnectedConsumers = $statusCount("UPPER(TRIM(COALESCE(status_code, ''))) IN ('X', 'DISCONNECTED', 'D')");
+        $statusOther = max(0, $totalConsumers - $activeConsumers - $pendingConsumers - $disconnectedConsumers);
+        $statusChartData = [
+            $activeConsumers,
+            $pendingConsumers + $statusOther,
+            $disconnectedConsumers,
+        ];
+
+        $zoneKeySql = 'COALESCE(dr.zone, mrs.zone, cz.zone_code)';
+        // Collection Report "Summary by Zone" totals for the Visual Summary bill month (same joins, filters, date rules).
+        $zoneCollectionsQuery = $collectionPaymentsBase();
+        $applyCollectionReportDateRange($zoneCollectionsQuery, $periodStart, $periodEnd);
+        $zoneCollectionsQuery
+            ->select(DB::raw($zoneKeySql . ' as zone'), DB::raw('SUM(cp.payment_amount) as total'))
+            ->groupBy(DB::raw($zoneKeySql))
+            ->orderBy(DB::raw($zoneKeySql));
+
+        if ($zoneRoute !== '') {
+            $zoneSingleTotalQuery = $collectionPaymentsBase();
+            $applyCollectionReportDateRange($zoneSingleTotalQuery, $periodStart, $periodEnd);
+            $zoneCollectionsRows = collect([(object) [
+                'zone' => $zoneRoute,
+                'total' => (float) $zoneSingleTotalQuery->sum('cp.payment_amount'),
+            ]]);
+        } else {
+            $zoneCollectionsRows = $zoneCollectionsQuery->get();
+        }
+
+        $zoneCollectionsRows = $zoneCollectionsRows
+            ->filter(function ($r) {
+                $z = trim((string) ($r->zone ?? ''));
+
+                return $z !== '';
+            })
+            ->values();
+
+        $zoneChartLabels = $zoneCollectionsRows->map(function ($r) {
+            return 'Zone ' . trim((string) ($r->zone ?? ''));
+        })->values()->all();
+        $zoneChartData = $zoneCollectionsRows->map(fn ($r) => (float) $r->total)->values()->all();
+        if ($zoneChartLabels === []) {
+            $zoneChartLabels = ['—'];
+            $zoneChartData = [0.0];
+        }
+
+        if ($fifoArRows->isNotEmpty()) {
+            $ids = $fifoArRows->pluck('consumer_zone_id')->filter()->unique()->values();
+            $idToZone = $ids->isNotEmpty()
+                ? DB::table('consumer_zone')->whereIn('id', $ids)->pluck('zone_code', 'id')
+                : collect();
+            // Same per-zone total as AR Aging Summary → "AR Summary per Zone" → Total Balance (FIFO sum by zone_code).
+            $zoneUnpaidRows = $fifoArRows
+                ->groupBy(function ($r) use ($idToZone) {
+                    return trim((string) ($idToZone[$r->consumer_zone_id] ?? ''));
+                })
+                ->reject(fn ($items, $zoneKey) => $zoneKey === '')
+                ->map(function ($items, $zoneKey) {
+                    return (object) [
+                        'zone_code' => $zoneKey,
+                        'total_unpaid' => round($items->sum(fn ($row) => (float) ($row->total_balance ?? 0)), 2),
+                    ];
+                })
+                ->sortBy(fn ($row) => $row->zone_code)
+                ->values();
+        } else {
+            $zoneUnpaidQuery = $baseConsumerQuery()
+                ->whereNotNull('zone_code')
+                ->where('zone_code', '!=', '')
+                ->select('zone_code', DB::raw('SUM(GREATEST(COALESCE(balance, 0), 0)) as total_unpaid'))
+                ->groupBy('zone_code')
+                ->orderBy('zone_code');
+
+            $zoneUnpaidRows = $zoneRoute !== ''
+                ? collect([(object) [
+                    'zone_code' => $zoneRoute,
+                    'total_unpaid' => round((float) $baseConsumerQuery()
+                        ->sum(DB::raw('GREATEST(COALESCE(balance, 0), 0)')), 2),
+                ]])
+                : $zoneUnpaidQuery->get();
+        }
+
+        $zoneUnpaidChartLabels = $zoneUnpaidRows->map(fn ($r) => 'Zone ' . $r->zone_code)->values()->all();
+        $zoneUnpaidChartData = $zoneUnpaidRows->map(fn ($r) => (float) $r->total_unpaid)->values()->all();
+        if ($zoneUnpaidChartLabels === []) {
+            $zoneUnpaidChartLabels = ['—'];
+            $zoneUnpaidChartData = [0.0];
+        }
+
+        $activeStatusSql = "UPPER(TRIM(COALESCE(cz.status_code, ''))) IN ('A', 'ACTIVE')";
+
+        $topConsumption = DB::table('downloaded_readings as dr')
+            ->join('consumer_zone as cz', function ($join) {
+                $join->whereRaw(
+                    'TRIM(dr.account_number) COLLATE utf8mb4_unicode_ci = TRIM(cz.account_no) COLLATE utf8mb4_unicode_ci'
+                );
+            })
+            ->select(
+                'dr.account_number',
+                'dr.account_name',
+                'dr.zone',
+                DB::raw('SUM(COALESCE(dr.consumption, 0)) as total_consumption')
+            )
+            ->whereBetween('dr.reading_date', [$periodStart->toDateString(), $periodEnd->toDateString()])
+            ->whereNotNull('dr.account_name')
+            ->where('dr.account_name', '!=', '')
+            ->whereNotNull('dr.account_number')
+            ->where('dr.account_number', '!=', '')
+            ->whereRaw($activeStatusSql)
+            ->when(Schema::hasColumn('consumer_zone', 'created_at'), function ($q) use ($snapshotEnd) {
+                $q->where(function ($w) use ($snapshotEnd) {
+                    $w->whereNull('cz.created_at')
+                        ->orWhere('cz.created_at', '<=', $snapshotEnd);
+                });
+            })
+            ->when($zoneRoute !== '', function ($q) use ($zoneRoute) {
+                $q->where(function ($w) use ($zoneRoute) {
+                    $w->where('dr.zone', $zoneRoute)
+                        ->orWhere('cz.zone_code', $zoneRoute);
+                });
+            })
+            ->groupBy('dr.account_number', 'dr.account_name', 'dr.zone')
+            ->orderByDesc('total_consumption')
+            ->limit(10)
+            ->get();
+
+        // Top outstanding: use FIFO total_balance (same as AR Aging detail "balance") when available;
+        // otherwise consumer_zone.balance (stored field may differ from ledgers until sync).
+        if ($fifoArRows->isNotEmpty()) {
+            $fifoConsumerIds = $fifoArRows->pluck('consumer_zone_id')->filter()->unique()->values();
+            $metaQuery = DB::table('consumer_zone')->whereIn('id', $fifoConsumerIds)
+                ->whereRaw("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')");
+            if ($zoneRoute !== '') {
+                $metaQuery->where('zone_code', $zoneRoute);
+            }
+            if (Schema::hasColumn('consumer_zone', 'created_at')) {
+                $metaQuery->where(function ($w) use ($snapshotEnd) {
+                    $w->whereNull('created_at')
+                        ->orWhere('created_at', '<=', $snapshotEnd);
+                });
+            }
+            $fifoMeta = $metaQuery->get()->keyBy('id');
+
+            $topOutstanding = $fifoArRows
+                ->filter(fn ($r) => isset($fifoMeta[$r->consumer_zone_id]))
+                ->groupBy('consumer_zone_id')
+                ->map(function ($rows, $czId) use ($fifoMeta) {
+                    $m = $fifoMeta[$czId];
+
+                    return (object) [
+                        'account_name' => $m->account_name,
+                        'zone_code' => $m->zone_code,
+                        'balance' => round($rows->sum(fn ($row) => (float) ($row->total_balance ?? 0)), 2),
+                    ];
+                })
+                ->filter(fn ($o) => $o->balance > 0)
+                ->sortByDesc('balance')
+                ->take(10)
+                ->values();
+        } else {
+            $topOutstanding = $baseConsumerQuery()
+                ->whereRaw("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')")
+                ->select('account_name', 'zone_code', 'balance')
+                ->where('balance', '>', 0)
+                ->orderByDesc('balance')
+                ->orderByDesc('id')
+                ->limit(10)
+                ->get();
+        }
+
+        return view('reports.system-report.visual-summary', [
+            'totalConsumers' => $totalConsumers,
+            'monthlyRevenue' => $monthlyRevenue,
+            'collectionRate' => $collectionRate,
+            'pendingArrears' => $pendingArrears,
+            'revenueChartLabels' => $revenueChartLabels,
+            'revenueChartData' => $revenueChartData,
+            'statusChartData' => $statusChartData,
+            'zoneChartLabels' => $zoneChartLabels,
+            'zoneChartData' => $zoneChartData,
+            'zoneUnpaidChartLabels' => $zoneUnpaidChartLabels,
+            'zoneUnpaidChartData' => $zoneUnpaidChartData,
+            'topConsumption' => $topConsumption,
+            'topOutstanding' => $topOutstanding,
+            'topTablesMonthLabel' => $billMonth->format('F Y'),
+            'zoneOptions' => $zoneOptions,
+            'filters' => [
+                'zone_route' => $zoneRoute,
+                'bill_month' => $billMonthInput,
+            ],
+        ]);
     }
 }

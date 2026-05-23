@@ -81,7 +81,7 @@ class DashboardController extends Controller
                 DB::raw("
                     CASE 
                         WHEN cp.paid_at IS NOT NULL THEN 'paid'
-                        WHEN mrs.due_date IS NOT NULL AND mrs.due_date < NOW() AND (cp.paid_at IS NULL OR cp.paid_at = '') THEN 'overdue'
+                        WHEN mrs.due_date IS NOT NULL AND mrs.due_date < NOW() AND cp.paid_at IS NULL THEN 'overdue'
                         ELSE LOWER(COALESCE(dr.status, 'pending'))
                     END as billing_status
                 ")
