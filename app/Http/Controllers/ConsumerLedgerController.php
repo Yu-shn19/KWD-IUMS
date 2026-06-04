@@ -40,28 +40,88 @@ class ConsumerLedgerController extends Controller
     }
 
     /**
-     * Matches getLedger() summary.balance / ledger.blade.php footer Current Balance for the same year scope.
-     *
-     * @param  string|int|null  $year  Omit or null/'' for all years (no WHERE on date).
+     * Same visibility rules as Account Ledger F10 (exclude pending/cancelled BAM).
      */
-    public static function computeLedgerFooterBalance(int $consumerZoneId, $year = null): float
+    public static function applyVisibleLedgerScope($query): void
     {
-        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-            ->where(function ($q) {
-                $q->whereNull('billing_adjustment_id')
-                    ->orWhereHas('billingAdjustment', function ($q2) {
-                        $q2->where('status', 'Approved');
-                    });
-            });
+        $query->where(function ($q) {
+            $q->whereNull('billing_adjustment_id')
+                ->orWhereHas('billingAdjustment', function ($q2) {
+                    $q2->where('status', 'Approved');
+                });
+        });
+    }
 
-        if ($year !== null && $year !== '') {
-            $ledgersQuery->whereYear('date', $year);
+    /**
+     * Same row ordering as getLedger() so running balance matches the on-screen ledger.
+     */
+    public static function applyAccountLedgerDisplayOrder($query): void
+    {
+        $query->orderByRaw('CAST(date AS DATE) ASC')
+            ->orderByRaw("
+        CASE
+            WHEN UPPER(TRIM(trans)) IN ('PAYMENT', 'CM') THEN
+                COALESCE(
+                    (SELECT cp.created_at
+                     FROM consumer_payments cp
+                     WHERE cp.id = consumer_ledgers.consumer_payment_id
+                     LIMIT 1),
+                    (SELECT cp2.created_at
+                     FROM consumer_payments cp2
+                     WHERE cp2.reading_id = consumer_ledgers.downloaded_reading_id
+                     ORDER BY cp2.created_at DESC, cp2.id DESC
+                     LIMIT 1),
+                    (SELECT cp3.created_at
+                     FROM consumer_payments cp3
+                     WHERE cp3.or_number = REPLACE(consumer_ledgers.reference, '-SC', '')
+                     ORDER BY cp3.created_at DESC, cp3.id DESC
+                     LIMIT 1),
+                     (SELECT ba.created_at
+                     FROM billing_adjustments ba
+                     WHERE ba.id = consumer_ledgers.billing_adjustment_id
+                     LIMIT 1),
+                    consumer_ledgers.txtime,
+                    consumer_ledgers.created_at
+                )
+            WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN
+                COALESCE(
+                    (SELECT dr.created_at
+                     FROM downloaded_readings dr
+                     WHERE dr.id = consumer_ledgers.downloaded_reading_id
+                     LIMIT 1),
+                    (SELECT dr2.created_at
+                     FROM downloaded_readings dr2
+                     WHERE dr2.schedule_id = consumer_ledgers.schedule_id
+                     ORDER BY dr2.created_at DESC, dr2.id DESC
+                     LIMIT 1),
+                     (SELECT ba2.created_at
+                     FROM billing_adjustments ba2
+                     WHERE ba2.id = consumer_ledgers.billing_adjustment_id
+                     LIMIT 1),
+                    consumer_ledgers.txtime,
+                    consumer_ledgers.created_at
+                )
+            ELSE
+                COALESCE(consumer_ledgers.txtime, consumer_ledgers.created_at)
+        END ASC
+    ")
+            ->orderBy('id', 'asc');
+    }
+
+    /**
+     * Footer Current Balance for Account Ledger (all years, optional date cutoff).
+     */
+    public static function computeAccountLedgerFooterBalance(int $consumerZoneId, ?string $cutoffDateYmd = null): float
+    {
+        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+        self::applyVisibleLedgerScope($ledgersQuery);
+
+        if ($cutoffDateYmd !== null && $cutoffDateYmd !== '') {
+            $ledgersQuery->whereDate('date', '<=', $cutoffDateYmd);
         }
 
-        $ledgers = $ledgersQuery->orderByRaw('CAST(date AS DATE) ASC')
-            ->orderByRaw("CASE WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN 0 WHEN UPPER(TRIM(trans)) = 'PAYMENT' THEN 1 ELSE 2 END ASC")
-            ->orderBy('id', 'asc')
-            ->get();
+        self::applyAccountLedgerDisplayOrder($ledgersQuery);
+        $ledgers = $ledgersQuery->get(['debit', 'credit', 'trans']);
 
         $runningBalance = 0.00;
         foreach ($ledgers as $ledger) {
@@ -69,6 +129,71 @@ class ConsumerLedgerController extends Controller
         }
 
         return round($runningBalance, 2);
+    }
+
+    /**
+     * @param  iterable<int|string>  $consumerIds
+     */
+    public static function computeAccountLedgerFooterBalancesBulk(iterable $consumerIds, ?string $cutoffDateYmd = null): \Illuminate\Support\Collection
+    {
+        $balances = [];
+        foreach (collect($consumerIds)->filter()->unique() as $consumerId) {
+            $balances[(int) $consumerId] = self::computeAccountLedgerFooterBalance((int) $consumerId, $cutoffDateYmd);
+        }
+
+        return collect($balances);
+    }
+
+    /**
+     * Matches getLedger() summary.balance / ledger.blade.php footer Current Balance for the same year scope.
+     *
+     * @param  string|int|null  $year  Omit or null/'' for all years (no WHERE on date).
+     */
+    public static function computeLedgerFooterBalance(int $consumerZoneId, $year = null): float
+    {
+        if ($year !== null && $year !== '') {
+            $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+            self::applyVisibleLedgerScope($ledgersQuery);
+            $ledgersQuery->whereYear('date', $year);
+            self::applyAccountLedgerDisplayOrder($ledgersQuery);
+            $ledgers = $ledgersQuery->get(['debit', 'credit', 'trans']);
+
+            $runningBalance = 0.00;
+            foreach ($ledgers as $ledger) {
+                $runningBalance = self::nextRunningBalance($runningBalance, $ledger);
+            }
+
+            return round($runningBalance, 2);
+        }
+
+        return self::computeAccountLedgerFooterBalance($consumerZoneId);
+    }
+
+    /**
+     * Recalculated running balance immediately before the ledger row with id $beforeThisLedgerId is applied
+     * (same ordering and nextRunningBalance rules as getLedger / footer). Used for surcharge "Arrears" display.
+     */
+    public static function computeRunningBalanceBeforeLedgerEntry(int $consumerZoneId, int $beforeThisLedgerId, $year = null): float
+    {
+        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+        self::applyVisibleLedgerScope($ledgersQuery);
+
+        if ($year !== null && $year !== '') {
+            $ledgersQuery->whereYear('date', $year);
+        }
+
+        self::applyAccountLedgerDisplayOrder($ledgersQuery);
+        $ledgers = $ledgersQuery->get(['id', 'debit', 'credit', 'trans']);
+
+        $runningBalance = 0.00;
+        foreach ($ledgers as $ledger) {
+            if ((int) $ledger->id === (int) $beforeThisLedgerId) {
+                return round($runningBalance, 2);
+            }
+            $runningBalance = self::nextRunningBalance($runningBalance, $ledger);
+        }
+
+        return 0.00;
     }
 
     
@@ -107,82 +232,15 @@ class ConsumerLedgerController extends Controller
             ], 404);
         }
 
-        // Get ledger entries directly from ConsumerLedger table - NO CALCULATIONS
-        // Just display exactly what's stored in the database
-        // Exclude BAM entries with status Pending or Cancelled (only show Approved in consumer-facing Account Ledger)
-        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-            ->where(function ($q) {
-                $q->whereNull('billing_adjustment_id')
-                    ->orWhereHas('billingAdjustment', function ($q2) {
-                        $q2->where('status', 'Approved');
-                    });
-            });
-        
-        // Apply year filter if provided
+        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumer->id);
+        self::applyVisibleLedgerScope($ledgersQuery);
+
         if ($year && $year != '') {
             $ledgersQuery->whereYear('date', $year);
         }
-        
-        // Get ledgers ordered by date (ascending - oldest to newest)
-        // Use CAST to ensure proper date ordering if stored as string
-        // Secondary sort by ID to maintain order for same-date entries
-        // Get ledgers ordered by transaction date (ascending - oldest to newest).
-        // For same-date rows:
-        // - PAYMENT uses consumer_payments.created_at
-        // - BILLING/BILL uses downloaded_readings.created_at
-        // - fallback to ledger txtime/created_at
-        // Final tie-breaker is ID for deterministic ordering.
-        $ledgers = $ledgersQuery
-            ->orderByRaw('CAST(date AS DATE) ASC')
-            ->orderByRaw("
-        CASE
-            WHEN UPPER(TRIM(trans)) IN ('PAYMENT', 'CM') THEN
-                COALESCE(
-                    (SELECT cp.created_at
-                     FROM consumer_payments cp
-                     WHERE cp.id = consumer_ledgers.consumer_payment_id
-                     LIMIT 1),
-                    (SELECT cp2.created_at
-                     FROM consumer_payments cp2
-                     WHERE cp2.reading_id = consumer_ledgers.downloaded_reading_id
-                     ORDER BY cp2.created_at DESC, cp2.id DESC
-                     LIMIT 1),
-                    (SELECT cp3.created_at
-                     FROM consumer_payments cp3
-                     WHERE cp3.or_number = REPLACE(consumer_ledgers.reference, '-SC', '')
-                     ORDER BY cp3.created_at DESC, cp3.id DESC
-                     LIMIT 1),
-                    (SELECT ba.created_at
-                     FROM billing_adjustments ba
-                     WHERE ba.id = consumer_ledgers.billing_adjustment_id
-                     LIMIT 1),
-                    consumer_ledgers.txtime,
-                    consumer_ledgers.created_at
-                )
-            WHEN UPPER(TRIM(trans)) IN ('BILLING','BILL') THEN
-                COALESCE(
-                    (SELECT dr.created_at
-                     FROM downloaded_readings dr
-                     WHERE dr.id = consumer_ledgers.downloaded_reading_id
-                     LIMIT 1),
-                    (SELECT dr2.created_at
-                     FROM downloaded_readings dr2
-                     WHERE dr2.schedule_id = consumer_ledgers.schedule_id
-                     ORDER BY dr2.created_at DESC, dr2.id DESC
-                     LIMIT 1),
-                    (SELECT ba2.created_at
-                     FROM billing_adjustments ba2
-                     WHERE ba2.id = consumer_ledgers.billing_adjustment_id
-                     LIMIT 1),
-                    consumer_ledgers.txtime,
-                    consumer_ledgers.created_at
-                )
-            ELSE
-                COALESCE(consumer_ledgers.txtime, consumer_ledgers.created_at)
-        END ASC
-    ")
-            ->orderBy('id', 'asc')
-            ->get();
+
+        self::applyAccountLedgerDisplayOrder($ledgersQuery);
+        $ledgers = $ledgersQuery->get();
         
         \Log::info('Ledgers fetched from database', [
             'consumer_zone_id' => $consumer->id,

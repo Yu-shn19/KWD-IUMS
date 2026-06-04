@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ConsumerZoneOne; // MAO NI AKOANG GI ADD
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -151,4 +152,107 @@ class ReaderController extends Controller
             ], 500);
         }
     }
+    
+    
+        /**
+     * GET /api/consumer/zone?account_no=...
+     * Returns consumer_zone row fields used by the mobile app (lat/lng for maps). apil ni sa akoang gi add
+     * Authenticated readers only (api.reader middleware).
+     */
+    public function getConsumerZone(Request $request)
+    {
+        $accountNo = trim((string) $request->query('account_no', ''));
+        if ($accountNo === '' || strlen($accountNo) < 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Query parameter account_no is required.',
+            ], 422);
+        }
+
+        $normalized = str_replace('-', '', $accountNo);
+
+        $consumer = ConsumerZoneOne::where(function ($query) use ($accountNo, $normalized) {
+            $query->where('account_no', $accountNo)
+                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
+                ->orWhereRaw('UPPER(TRIM(account_no)) = ?', [strtoupper(trim($accountNo))]);
+        })->first();
+
+        if (! $consumer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Consumer not found for this account number.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'consumer' => [
+                'id' => $consumer->id,
+                'account_no' => $consumer->account_no,
+                'account_name' => $consumer->account_name,
+                'latitude' => $consumer->latitude,
+                'longitude' => $consumer->longitude,
+                'zone_code' => $consumer->zone_code ?? null,
+                'meter_number' => $consumer->meter_number ?? null,
+            ],
+        ]);
+    }
+    
+    
+    /**
+     * POST /api/consumer/coordinates
+     * Save latitude/longitude on consumer_zone (ConsumerZoneOne) for the given account_no.
+     * Authenticated readers only (api.reader middleware). MAO NI AKOANG GI ADD 
+     */
+    public function saveConsumerCoordinates(Request $request)
+    {
+        $accountNo = trim((string) $request->input('account_no', ''));
+        $latitude = $request->input('latitude');
+        $longitude = $request->input('longitude');
+
+        if ($accountNo === '' || $latitude === null || $longitude === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'account_no, latitude, and longitude are required.',
+            ], 422);
+        }
+
+        $lat = filter_var($latitude, FILTER_VALIDATE_FLOAT);
+        $lng = filter_var($longitude, FILTER_VALIDATE_FLOAT);
+        if ($lat === false || $lng === false || $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid latitude or longitude.',
+            ], 422);
+        }
+
+        $normalized = str_replace('-', '', $accountNo);
+
+        $consumer = ConsumerZoneOne::where(function ($query) use ($accountNo, $normalized) {
+            $query->where('account_no', $accountNo)
+                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
+                ->orWhereRaw('UPPER(TRIM(account_no)) = ?', [strtoupper(trim($accountNo))]);
+        })->first();
+
+        if (!$consumer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Consumer not found for this account number.',
+            ], 404);
+        }
+
+        $consumer->latitude = $lat;
+        $consumer->longitude = $lng;
+        $consumer->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Coordinates saved for '.$consumer->account_no.'.',
+            'account_no' => $consumer->account_no,
+            'latitude' => $lat,
+            'longitude' => $lng,
+        ]);
+    }
 }
+
+

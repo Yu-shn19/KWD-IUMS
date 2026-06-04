@@ -280,47 +280,22 @@ use Illuminate\Support\Facades\Storage;
               <a class="nav-link dropdown-toggle" href="#" id="alertsDropdown" role="button" data-toggle="dropdown"
                 aria-haspopup="true" aria-expanded="false">
                 <i class="fas fa-bell fa-fw"></i>
-                <span class="badge badge-danger badge-counter">3+</span>
+                <span class="badge badge-danger badge-counter" id="disconnectionAlertBadge" style="display: none;">0</span>
               </a>
               <div class="dropdown-list dropdown-menu dropdown-menu-right shadow animated--grow-in"
                 aria-labelledby="alertsDropdown">
                 <h6 class="dropdown-header">
                   Alerts Center
                 </h6>
-                <a class="dropdown-item d-flex align-items-center" href="#">
-                  <div class="mr-3">
-                    <div class="icon-circle bg-primary">
-                      <i class="fas fa-file-alt text-white"></i>
-                    </div>
+                <div id="disconnectionAlertsList">
+                  <div class="dropdown-item text-center small text-gray-500" id="disconnectionAlertsEmpty">
+                    No new disconnection alerts
                   </div>
-                  <div>
-                    <div class="small text-gray-500">December 12, 2026</div>
-                    <span class="font-weight-bold">A new monthly report is ready to download!</span>
-                  </div>
+                </div>
+                <a class="dropdown-item text-center small text-danger" href="#" id="clearDisconnectionAlerts">
+                  Clear all notifications
                 </a>
-                <a class="dropdown-item d-flex align-items-center" href="#">
-                  <div class="mr-3">
-                    <div class="icon-circle bg-success">
-                      <i class="fas fa-donate text-white"></i>
-                    </div>
-                  </div>
-                  <div>
-                    <div class="small text-gray-500">December 7, 2026</div>
-                  consumer has been assigned to a meter reader
-                  </div>
-                </a>
-                <a class="dropdown-item d-flex align-items-center" href="#">
-                  <div class="mr-3">
-                    <div class="icon-circle bg-warning">
-                      <i class="fas fa-exclamation-triangle text-white"></i>
-                    </div>
-                  </div>
-                  <div>
-                    <div class="small text-gray-500">December 2, 2026</div>
-                  Admin requested to assign a meter reader to a consumer
-                  </div>
-                </a>
-                <a class="dropdown-item text-center small text-gray-500" href="#">Show All Alerts</a>
+                <a class="dropdown-item text-center small text-gray-500" href="{{ route('disconnection.assignments') }}">View Disconnection Orders</a>
               </div>
             </li>
             <li class="nav-item dropdown no-arrow mx-1">
@@ -567,6 +542,315 @@ use Illuminate\Support\Facades\Storage;
             </div>
           </div>
         </div>
+
+        <script>
+        (function() {
+          const POLL_MS = 10000;
+          const ALERT_KEEP_HOURS = 8;
+          const LAST_SEEN_KEY = 'hwd:last-disconnection-alert-seen-at';
+          const ALERT_CACHE_KEY = 'hwd:disconnection-alert-cache';
+          const routeUrl = '{{ route("disconnection.notifications.newly-disconnected") }}';
+          const assignmentsUrl = '{{ route("disconnection.assignments") }}';
+          const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+          const badgeEl = document.getElementById('disconnectionAlertBadge');
+          const listEl = document.getElementById('disconnectionAlertsList');
+          const emptyEl = document.getElementById('disconnectionAlertsEmpty');
+          const clearBtn = document.getElementById('clearDisconnectionAlerts');
+
+          if (!badgeEl || !listEl) return;
+
+          const normalizeText = (value) => (value || '').toString().trim();
+
+          const escapeHtml = (value) => {
+            return (value || '').toString()
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#039;');
+          };
+
+          const getLastSeen = () => {
+            const saved = localStorage.getItem(LAST_SEEN_KEY);
+            if (saved) return saved;
+            const nowIso = new Date().toISOString();
+            localStorage.setItem(LAST_SEEN_KEY, nowIso);
+            return nowIso;
+          };
+
+          const setLastSeen = (isoDate) => {
+            if (!isoDate) return;
+            localStorage.setItem(LAST_SEEN_KEY, isoDate);
+          };
+
+          const setBadgeCount = (count) => {
+            if (!count || count <= 0) {
+              badgeEl.style.display = 'none';
+              badgeEl.textContent = '0';
+              return;
+            }
+            badgeEl.style.display = 'inline-block';
+            badgeEl.textContent = count > 99 ? '99+' : String(count);
+          };
+
+          const getCutoffMs = () => Date.now() - (ALERT_KEEP_HOURS * 60 * 60 * 1000);
+
+          const loadCachedAlerts = () => {
+            try {
+              const raw = localStorage.getItem(ALERT_CACHE_KEY);
+              const parsed = raw ? JSON.parse(raw) : [];
+              return Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+              return [];
+            }
+          };
+
+          const saveCachedAlerts = (items) => {
+            try {
+              localStorage.setItem(ALERT_CACHE_KEY, JSON.stringify(items || []));
+            } catch (e) {
+              // Ignore storage write issues.
+            }
+          };
+
+          const isWithinRetention = (item) => {
+            const iso = normalizeText(item?.disconnected_at);
+            if (!iso) return false;
+            const ts = new Date(iso).getTime();
+            if (!Number.isFinite(ts)) return false;
+            return ts >= getCutoffMs();
+          };
+
+          const pruneExpiredAlerts = (items) => {
+            return (Array.isArray(items) ? items : []).filter(isWithinRetention);
+          };
+
+          const mergeAlerts = (incoming, existing) => {
+            const map = new Map();
+            (Array.isArray(existing) ? existing : []).forEach((item) => {
+              if (item?.id != null) map.set(String(item.id), item);
+            });
+            (Array.isArray(incoming) ? incoming : []).forEach((item) => {
+              if (item?.id != null) map.set(String(item.id), item);
+            });
+            return Array.from(map.values()).sort((a, b) => {
+              const aTs = new Date(a?.disconnected_at || 0).getTime();
+              const bTs = new Date(b?.disconnected_at || 0).getTime();
+              return bTs - aTs;
+            });
+          };
+
+          const playAlertSound = () => {
+            try {
+              const AudioCtx = window.AudioContext || window.webkitAudioContext;
+              if (!AudioCtx) return;
+
+              const ctx = new AudioCtx();
+              const oscillator = ctx.createOscillator();
+              const gainNode = ctx.createGain();
+
+              // Power-off / click-style tone: short, sharp, descending pitch.
+              oscillator.type = 'square';
+              oscillator.frequency.setValueAtTime(920, ctx.currentTime);
+              oscillator.frequency.exponentialRampToValueAtTime(220, ctx.currentTime + 0.22);
+
+              gainNode.gain.setValueAtTime(0.0001, ctx.currentTime);
+              gainNode.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.015);
+              gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.26);
+
+              oscillator.connect(gainNode);
+              gainNode.connect(ctx.destination);
+              oscillator.start(ctx.currentTime);
+              oscillator.stop(ctx.currentTime + 0.27);
+            } catch (e) {
+              // Silent fail if browser blocks autoplay/audio context.
+            }
+          };
+
+          const speakDisconnection = (consumerName, count = 1) => {
+            try {
+              if (!('speechSynthesis' in window)) return;
+
+              const safeName = normalizeText(consumerName) || 'A consumer';
+              const text = count === 1
+                ? `${safeName} was disconnected.`
+                : `${count} consumers were disconnected. Latest is ${safeName}.`;
+
+              const utterance = new SpeechSynthesisUtterance(text);
+              utterance.rate = 0.95;
+              utterance.pitch = 0.95;
+              utterance.volume = 1.0;
+
+              const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+              const preferredVoice = voices.find((voice) => /en-US|en-GB|English/i.test((voice.lang || '') + ' ' + (voice.name || '')));
+              if (preferredVoice) utterance.voice = preferredVoice;
+
+              // Prevent stacking old announcements and always read latest.
+              window.speechSynthesis.cancel();
+              window.speechSynthesis.speak(utterance);
+            } catch (e) {
+              // Silent fail if browser blocks speech synthesis.
+            }
+          };
+
+          const renderAlerts = (items) => {
+            listEl.innerHTML = '';
+            if (!Array.isArray(items) || items.length === 0) {
+              listEl.appendChild(emptyEl || document.createElement('div'));
+              if (!emptyEl) {
+                listEl.innerHTML = '<div class="dropdown-item text-center small text-gray-500">No new disconnection alerts</div>';
+              }
+              return;
+            }
+
+            items.forEach((item) => {
+              const accountName = normalizeText(item.account_name) || 'Unknown consumer';
+              const accountNo = normalizeText(item.account_no) || 'N/A';
+              const when = normalizeText(item.disconnected_at_human) || 'just now';
+              const disconnector = normalizeText(item.disconnector_name) || 'Disconnector';
+              const disconnectedAt = normalizeText(item.disconnected_at);
+              const dateSaved = disconnectedAt && disconnectedAt.includes('T')
+                ? disconnectedAt.split('T')[0]
+                : (disconnectedAt ? disconnectedAt.substring(0, 10) : '');
+              const viewUrl = dateSaved
+                   ? `${assignmentsUrl}?disconnected_from=${encodeURIComponent(dateSaved)}&disconnected_to=${encodeURIComponent(dateSaved)}`
+              : `${assignmentsUrl}`;
+
+              const row = document.createElement('a');
+              row.className = 'dropdown-item d-flex align-items-center';
+              row.href = viewUrl;
+              row.innerHTML = `
+                <div class="mr-3">
+                  <div class="icon-circle bg-danger">
+                    <i class="fas fa-unlink text-white"></i>
+                  </div>
+                </div>
+                <div>
+                  <div class="small text-gray-500">${escapeHtml(when)}</div>
+                  <span class="font-weight-bold">${escapeHtml(accountName)} (${escapeHtml(accountNo)}) was disconnected by ${escapeHtml(disconnector)}.</span>
+                </div>
+              `;
+              listEl.appendChild(row);
+            });
+          };
+
+          const showPopup = (count, firstItem) => {
+            const accountName = normalizeText(firstItem?.account_name) || 'A consumer';
+            const accountNo = normalizeText(firstItem?.account_no);
+            const disconnector = normalizeText(firstItem?.disconnector_name) || 'Unknown disconnector';
+            const disconnectedAt = normalizeText(firstItem?.disconnected_at);
+            const dateSaved = disconnectedAt && disconnectedAt.includes('T')
+              ? disconnectedAt.split('T')[0]
+              : (disconnectedAt ? disconnectedAt.substring(0, 10) : '');
+            const firstLabel = accountNo ? `${accountName} (${accountNo})` : accountName;
+            const viewUrl = dateSaved
+              ? `${assignmentsUrl}?status=disconnected&date_saved=${encodeURIComponent(dateSaved)}`
+              : `${assignmentsUrl}?status=disconnected`;
+            const message = count === 1
+              ? `${firstLabel} was disconnected by ${disconnector} from the mobile app.`
+              : `${count} consumers were newly marked as disconnected from the mobile app. Latest: ${firstLabel}, disconnected by ${disconnector}.`;
+
+            if (typeof Swal !== 'undefined') {
+              Swal.fire({
+                icon: 'warning',
+                title: 'New Disconnection Alert',
+                text: message,
+                confirmButtonText: 'View',
+                showCancelButton: true,
+                cancelButtonText: 'Close'
+              }).then((result) => {
+                if (result.isConfirmed) {
+                  window.location.href = viewUrl;
+                }
+              });
+            } else {
+              alert(message);
+            }
+          };
+
+          const poll = async () => {
+            try {
+              let cached = pruneExpiredAlerts(loadCachedAlerts());
+              const since = encodeURIComponent(getLastSeen());
+              const res = await fetch(`${routeUrl}?since=${since}`, {
+                method: 'GET',
+                headers: {
+                  'Accept': 'application/json',
+                  'X-CSRF-TOKEN': csrfToken
+                },
+                credentials: 'same-origin'
+              });
+              if (!res.ok) return;
+              const data = await res.json();
+              if (!data?.success) return;
+
+              const items = Array.isArray(data.items) ? data.items : [];
+              const count = Number(data.count || items.length || 0);
+              cached = pruneExpiredAlerts(mergeAlerts(items, cached));
+              saveCachedAlerts(cached);
+              renderAlerts(cached);
+              setBadgeCount(cached.length);
+
+              if (count > 0) {
+                playAlertSound();
+                speakDisconnection(items?.[0]?.account_name, count);
+                showPopup(count, items[0]);
+                const latestIso = items
+                  .map((x) => x?.disconnected_at)
+                  .filter(Boolean)
+                  .sort()
+                  .pop();
+                setLastSeen(latestIso || data.server_time || new Date().toISOString());
+              }
+            } catch (e) {
+              // Silent fail to avoid disrupting page usage.
+              const cached = pruneExpiredAlerts(loadCachedAlerts());
+              saveCachedAlerts(cached);
+              renderAlerts(cached);
+              setBadgeCount(cached.length);
+            }
+          };
+
+          const initialCached = pruneExpiredAlerts(loadCachedAlerts());
+          saveCachedAlerts(initialCached);
+          renderAlerts(initialCached);
+          setBadgeCount(initialCached.length);
+
+          if (clearBtn) {
+            clearBtn.addEventListener('click', (e) => {
+              e.preventDefault();
+
+              const clearNow = () => {
+                saveCachedAlerts([]);
+                renderAlerts([]);
+                setBadgeCount(0);
+              };
+
+              if (typeof Swal !== 'undefined') {
+                Swal.fire({
+                  icon: 'question',
+                  title: 'Clear notifications?',
+                  text: 'This will remove all disconnection alerts from the bell.',
+                  showCancelButton: true,
+                  confirmButtonText: 'Clear all',
+                  cancelButtonText: 'Cancel'
+                }).then((result) => {
+                  if (result.isConfirmed) {
+                    clearNow();
+                  }
+                });
+              } else {
+                if (window.confirm('Clear all disconnection notifications?')) {
+                  clearNow();
+                }
+              }
+            });
+          }
+
+          poll();
+          setInterval(poll, POLL_MS);
+        })();
+        </script>
 
         <script>
         // Wait for jQuery to be available

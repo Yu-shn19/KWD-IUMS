@@ -11,18 +11,24 @@ use App\Http\Controllers\MeterReadingController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\DisconnectionController;
+use App\Http\Controllers\DisconnectionNotificationController;
 use App\Http\Controllers\PricingTierController;
 use App\Http\Controllers\CollectionController;
 use App\Http\Controllers\BillingAdjustmentController;
 use App\Http\Controllers\PenaltyController;
 use App\Http\Controllers\LRO_ConsumerLedgerController;
 use App\Http\Controllers\SettingController;
+use App\Http\Controllers\ConsumerActivationCronController;
+
+// Shared-hosting cron (Hostinger hPanel → Cron Jobs). No login; requires secret token in .env.
+Route::get('/cron/consumer-activate-pending', [ConsumerActivationCronController::class, 'activatePending'])
+    ->name('cron.consumer-activate-pending');
 
 // Public routes (no authentication required)
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
-Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-Route::post('/register', [AuthController::class, 'register']);
+//Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
+//Route::post('/register', [AuthController::class, 'register']);
 
 // Protected routes (authentication and admin role required)
 Route::middleware(['auth', 'role:admin'])->group(function () {
@@ -261,10 +267,9 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/ar-aging-summary', [ReportController::class, 'arAgingSummary'])->name('ar-aging-summary');
     Route::get('/ar-aging-summary/export', [ReportController::class, 'exportArAgingSummary'])->name('ar-aging-summary.export'); 
 
-    // service-request-report page route
-    Route::get('/service-request-report', function () {
-        return view('reports.system-report.service-request-report');
-    })->name('service-request-report'); 
+    // Consumer Ledger Report (traditional ledger card; view at service-request-report path)
+    Route::get('/service-request-report', [ReportController::class, 'consumerLedgerReport'])->name('service-request-report');
+    Route::get('/service-request-report/export', [ReportController::class, 'exportConsumerLedgerReport'])->name('service-request-report.export');
      
     // consumers-for-disconnection page route
     Route::get('/consumer-for-disconnection', [ReportController::class, 'consumersForDisconnection'])->name('consumer-for-disconnection');
@@ -310,6 +315,9 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::delete('/billing-payment/delete', [BillingProcessController::class, 'deletePayment'])->name('billing-payment.delete');
     // Update consumer meter readings (previous/current) for main consumer page
     Route::post('/consumer/update-meter-reading', [MeterReadingController::class, 'updateConsumerMeterReading'])->name('consumer.update-meter-reading');
+     // the first Meter Reading Preparation via BillingProcessController::getPreviousReading().
+    Route::post('/consumer/update-base-reading', [MeterReadingController::class, 'updateConsumerBaseReading'])->name('consumer.update-base-reading');
+    
     Route::post('/consumer/verify-edit-pin', [ConsumerController::class, 'verifyEditPin'])->name('consumer.verify-edit-pin');
     // Settings: Consumer edit PIN (for main-consumer page Edit/Delete/Save Previous Reading)
     Route::get('/settings/consumer-edit-pin', [SettingController::class, 'showConsumerEditPin'])->name('settings.consumer-edit-pin');
@@ -362,8 +370,12 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::post('/disconnection/generate-notice', [DisconnectionController::class, 'generateNotice'])->name('disconnection.generate-notice');
     Route::post('/disconnection/print', [DisconnectionController::class, 'printNotice'])->name('disconnection.print');
     Route::post('/disconnection/save-and-assign', [DisconnectionController::class, 'saveAndAssign'])->name('disconnection.save-and-assign');
+    Route::post('/disconnection/orders/{order}/update', [DisconnectionController::class, 'updateOrder'])->name('disconnection.orders.update');
     Route::get('/disconnection/assignments', [DisconnectionController::class, 'assignments'])->name('disconnection.assignments');
+     Route::get('/disconnection/assignments/export', [DisconnectionController::class, 'exportAssignments'])->name('disconnection.assignments.export');
     Route::post('/disconnection/assign-orders', [DisconnectionController::class, 'assignOrders'])->name('disconnection.assign-orders');
+     Route::get('/disconnection/notifications/newly-disconnected', [DisconnectionNotificationController::class, 'index'])
+        ->name('disconnection.notifications.newly-disconnected');
 
     // Pricing Tiers Management routes
     Route::resource('pricing-tiers', PricingTierController::class);

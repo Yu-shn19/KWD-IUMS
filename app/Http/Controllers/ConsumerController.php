@@ -51,7 +51,7 @@ class ConsumerController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index(Request $request)
+     public function index(Request $request)
     {
         $consumer = self::resolveConsumerFromRequest($request, true);
 
@@ -59,6 +59,10 @@ class ConsumerController extends Controller
         $meterReading = null;
 
         if ($consumer) {
+            $consumer->setAttribute(
+                'latest_disconnected_at',
+                optional($consumer->latestDisconnectedAtForDisplay())->toIso8601String()
+            );
             $latestBill = $this->getLatestBillFromDownloadedReadings($consumer->account_no);
             $meterReading = $this->getLatestMeterReading($consumer->account_no);
         }
@@ -173,6 +177,10 @@ class ConsumerController extends Controller
             ->first();
 
         if ($consumer) {
+              $consumer->setAttribute(
+                'latest_disconnected_at',
+                optional($consumer->latestDisconnectedAtForDisplay())->toIso8601String()
+            );
             $latestBill = $this->getLatestBillFromDownloadedReadings($consumer->account_no);
             $meterReading = $this->getLatestMeterReading($consumer->account_no);
 
@@ -197,6 +205,7 @@ class ConsumerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'install_date' => 'nullable|date',
+             'transaction_date' => 'nullable|date',
             'account_no' => 'required|string|unique:consumer_zone,account_no',
             'account_name' => 'required|string',
             'address1' => 'nullable|string',
@@ -224,8 +233,9 @@ class ConsumerController extends Controller
         }
 
         try {
-            $data = $request->all();
-            
+            $data = $validator->validated();
+            ConsumerZoneOne::syncInstallActivationFields($data);
+
             $consumer = ConsumerZoneOne::create($data);
 
             return response()->json([
@@ -240,22 +250,28 @@ class ConsumerController extends Controller
             ], 500);
         }
     }
-
     /**
      * Display the specified resource.
      */
     public function show(ConsumerZoneOne $consumer)
     {
+         $consumer->setAttribute(
+            'latest_disconnected_at',
+            optional($consumer->latestDisconnectedAtForDisplay())->toIso8601String()
+        );
         $latestBill = $this->getLatestBillFromDownloadedReadings($consumer->account_no);
         $meterReading = $this->getLatestMeterReading($consumer->account_no);
 
         return view('Files.main-consumer', compact('consumer', 'latestBill', 'meterReading'));
     }
 
-    /**
+   /**
      * Get latest meter reading for main-consumer card.
      * Current Reading = downloaded_readings.current_reading (latest row by account).
      * Previous Reading = consumer_ledgers.reading from the last BILLING transaction for this consumer.
+     *
+     * Also exposes base_reading info (from consumer_zone) which is used as the
+     * starting meter value for NEW consumers with no historical readings.
      */
     private function getLatestMeterReading($accountNumber)
     {
@@ -291,17 +307,31 @@ class ConsumerController extends Controller
         $previousReading = $ledgerPrevious !== null ? (int) $ledgerPrevious['reading'] : 0;
         $previousDate = $ledgerPrevious !== null ? ($ledgerPrevious['date'] ?? null) : null;
 
-        // If no downloaded_reading and no ledger, return null
-        if ($dr === null && $ledgerPrevious === null) {
-            return null;
+        // Base Reading (consumer master): starting value for new consumers without history
+        $baseReading = null;
+        $baseReadingDate = null;
+        if (Schema::hasColumn('consumer_zone', 'base_reading')) {
+            $base = ConsumerZoneOne::where('account_no', $accountNumber)
+                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
+                ->first(['base_reading', 'base_reading_date']);
+            if ($base) {
+                $baseReading = $base->base_reading !== null ? (int) $base->base_reading : null;
+                $baseReadingDate = $base->base_reading_date
+                    ? \Carbon\Carbon::parse($base->base_reading_date)->format('Y-m-d')
+                    : null;
+            }
         }
 
+        // Always return the object so the consumer profile can render the
+        // Base Reading section even when no readings/ledger exist (new consumer).
         return (object) [
             'schedule_id' => $scheduleId,
             'current_reading' => $currentReading,
             'current_reading_date' => $currentDate,
             'previous_reading' => $previousReading,
             'previous_reading_date' => $previousDate,
+            'base_reading' => $baseReading,
+            'base_reading_date' => $baseReadingDate,
         ];
     }
 
@@ -544,66 +574,18 @@ class ConsumerController extends Controller
         }
     }
 
-    // /**
-    //  * Update the specified resource in storage.
-    //  */
-    // public function update(Request $request, ConsumerZoneOne $consumer)
-    // {
-    //     $validator = Validator::make($request->all(), [
-    //         'install_date' => 'nullable|date',
-    //         'account_no' => 'required|string|unique:consumer_zone,account_no,' . $consumer->id,
-    //         'account_name' => 'required|string',
-    //         'address1' => 'nullable|string',
-    //         'latitude' => 'nullable|numeric|between:-90,90',
-    //         'longitude' => 'nullable|numeric|between:-180,180',
-    //         'zone_code' => 'required|string',
-    //         'category_code' => 'nullable|string',
-    //         'meter_number' => 'nullable|string',
-    //         'meter_brand' => 'nullable|string',
-    //         'rate_code' => 'nullable|string',
-    //         'status_code' => 'nullable|string',
-    //         'sequence' => 'nullable|integer',
-    //         'consumer_deposit' => 'nullable|numeric',
-    //         'installation_fee' => 'nullable|numeric',
-    //         'installation_balance' => 'nullable|numeric',
-    //         'balance' => 'nullable|numeric',
-    //         'cons_ctrl' => 'nullable|string',
-    //     ]);
-
-    //     if ($validator->fails()) {
-    //         return response()->json([
-    //             'success' => false,
-    //             'errors' => $validator->errors()
-    //         ], 422);
-    //     }
-
-    //     try {
-    //         $data = $request->all();
-            
-    //         $consumer->update($data);
-
-    //         return response()->json([
-    //             'success' => true,
-    //             'message' => 'Consumer updated successfully!',
-    //             'consumer' => $consumer->fresh()
-    //         ], 200);
-    //     } catch (\Exception $e) {
-    //         return response()->json([
-    //             'success' => false,
-    //             'message' => 'Failed to update consumer: ' . $e->getMessage()
-    //         ], 500);
-    //     }
-    // }
+    
     
     /**
      * Update the specified resource in storage.
      */
-    public function update(Request $request, ConsumerZoneOne $consumer)
+      public function update(Request $request, ConsumerZoneOne $consumer)
     {
         $billDiscChanged = $this->consumerBillDiscChangedFromRequest($request, $consumer);
 
         $rules = [
             'install_date' => 'nullable|date',
+            'transaction_date' => 'nullable|date',
             'account_no' => 'required|string|unique:consumer_zone,account_no,' . $consumer->id,
             'account_name' => 'required|string',
             'address1' => 'nullable|string',
@@ -643,10 +625,19 @@ class ConsumerController extends Controller
 
         try {
             $data = $request->except(['_token', '_method']);
+            ConsumerZoneOne::syncInstallActivationFields($data, $consumer);
             $oldAccountNo = trim((string) ($consumer->account_no ?? ''));
             $oldAccountName = trim((string) ($consumer->account_name ?? ''));
             $newAccountNo = trim((string) ($data['account_no'] ?? $oldAccountNo));
             $newAccountName = trim((string) ($data['account_name'] ?? $oldAccountName));
+            
+             $fresh = $consumer->fresh();
+            if ($fresh) {
+                $fresh->setAttribute(
+                    'latest_disconnected_at',
+                    optional($fresh->latestDisconnectedAtForDisplay())->toIso8601String()
+                );
+            }
 
             DB::transaction(function () use ($consumer, $data, $oldAccountNo, $newAccountNo, $oldAccountName, $newAccountName) {
                 $consumer->update($data);
@@ -662,7 +653,7 @@ class ConsumerController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Consumer updated successfully!',
-                'consumer' => $consumer->fresh()
+                 'consumer' => $fresh
             ], 200);
         } catch (\Exception $e) {
             return response()->json([

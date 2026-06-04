@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
 use App\Models\ConsumerPayment;
+use App\Models\ConsumerZoneOne;
 use App\Models\Penalty;
 use App\Models\LROLedger;
 use Carbon\Carbon;
@@ -375,6 +376,229 @@ class MeterReadingController extends Controller
         }
         return null;
     }
+    
+    
+    /**
+     * Update the previous_reading for a consumer's latest meter reading schedule
+     * from the main-consumer page (Meter Reading card → Save Previous Reading).
+     *
+     * The new value is stored as a MANUAL OVERRIDE on the schedule:
+     *   - meter_reading_schedules.previous_reading           (kept in sync)
+     *   - meter_reading_schedules.previous_reading_override  (signals override)
+     *   - meter_reading_schedules.previous_reading_override_at / _by
+     *
+     * BillingProcessController::getPreviousReading() inspects this override
+     * before any other source so the next Meter Reading Preparation will use
+     * the corrected value as Prev. Read.
+     *
+     * The existing BILLING entry in consumer_ledgers and any downloaded_readings
+     * rows are intentionally NOT touched — they remain historical records.
+     */
+    public function updateConsumerMeterReading(Request $request)
+    {
+        $validated = $request->validate([
+            'schedule_id'      => 'required|integer|exists:meter_reading_schedules,id',
+            'account_no'       => 'required|string',
+            'previous_reading' => 'required|integer|min:0',
+        ]);
+
+        $scheduleId = (int) $validated['schedule_id'];
+        $accountNo  = trim((string) $validated['account_no']);
+        $newPrev    = (int) $validated['previous_reading'];
+
+        try {
+            $schedule = MeterReadingSchedule::find($scheduleId);
+            if (!$schedule) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Meter reading schedule not found.',
+                ], 404);
+            }
+
+            $normalizedAccount = str_replace('-', '', $accountNo);
+            $scheduleAccount = trim((string) $schedule->account_number);
+            $normalizedScheduleAccount = str_replace('-', '', $scheduleAccount);
+            if (
+                $scheduleAccount !== $accountNo
+                && $normalizedScheduleAccount !== $normalizedAccount
+                && strtoupper($scheduleAccount) !== strtoupper($accountNo)
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Account number does not match the schedule.',
+                ], 422);
+            }
+
+            $oldPrev = $schedule->previous_reading !== null ? (int) $schedule->previous_reading : null;
+
+            $hasOverrideColumn = Schema::hasColumn('meter_reading_schedules', 'previous_reading_override');
+
+            $schedule->previous_reading = $newPrev;
+            if ($hasOverrideColumn) {
+                $schedule->previous_reading_override = $newPrev;
+                $schedule->previous_reading_override_at = Carbon::now();
+                $schedule->previous_reading_override_by = optional(auth()->user())->name;
+            }
+            $schedule->save();
+
+            Log::info('Consumer previous_reading override saved (next-billing only)', [
+                'schedule_id'  => $scheduleId,
+                'account_no'   => $accountNo,
+                'old_previous' => $oldPrev,
+                'new_previous' => $newPrev,
+                'has_override_column' => $hasOverrideColumn,
+                'user'         => optional(auth()->user())->name,
+            ]);
+
+            return response()->json([
+                'success'          => true,
+                'message'          => 'Previous reading saved. It will take effect on the next billing.',
+                'schedule_id'      => $scheduleId,
+                'previous_reading' => $newPrev,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('updateConsumerMeterReading failed: ' . $e->getMessage(), [
+                'schedule_id' => $scheduleId,
+                'account_no'  => $accountNo,
+                'trace'       => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to save previous reading: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Save the BASE READING for a consumer (consumer_zone.base_reading).
+     *
+     * Used for NEW consumers whose water meter is NOT brand-new — i.e. the
+     * meter already shows a non-zero value but no readings have been billed
+     * yet. The base reading is consumed by
+     * BillingProcessController::getPreviousReading() as the last-resort
+     * fallback (Priority 4) so the first Meter Reading Preparation uses the
+     * configured starting value instead of 0.
+     */
+    public function updateConsumerBaseReading(Request $request)
+    {
+        $validated = $request->validate([
+            'account_no'        => 'required|string',
+            'base_reading'      => 'required|integer|min:0',
+            'base_reading_date' => 'nullable|date',
+        ]);
+
+        $accountNo   = trim((string) $validated['account_no']);
+        $newBase     = (int) $validated['base_reading'];
+        $baseDate    = $validated['base_reading_date'] ?? null;
+
+        if (!Schema::hasColumn('consumer_zone', 'base_reading')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Base reading is not supported in this database (missing column). Run the latest migrations.',
+            ], 500);
+        }
+
+        try {
+            $normalizedAccount = str_replace('-', '', $accountNo);
+            $upperAccount = strtoupper($accountNo);
+
+            $consumer = ConsumerZoneOne::where('account_no', $accountNo)
+                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
+                ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [$upperAccount])
+                ->first();
+
+            if (!$consumer) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Consumer not found.',
+                ], 404);
+            }
+
+            // Refuse to set a base reading once the consumer already has any
+            // reading history (downloaded readings, completed/in-progress
+            // schedules, or BILLING ledger rows). The base value would
+            // conflict with established billing data.
+            $hasDownloadedReading = DB::table('downloaded_readings')
+                ->where(function ($query) use ($accountNo, $normalizedAccount, $upperAccount) {
+                    $query->where('account_number', $accountNo)
+                        ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount])
+                        ->orWhereRaw("UPPER(TRIM(account_number)) = ?", [$upperAccount]);
+                })
+                ->exists();
+
+            $hasScheduleHistory = MeterReadingSchedule::where(function ($query) use ($accountNo, $normalizedAccount, $upperAccount) {
+                    $query->where('account_number', $accountNo)
+                        ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount])
+                        ->orWhereRaw("UPPER(TRIM(account_number)) = ?", [$upperAccount]);
+                })
+                ->where(function ($query) {
+                    $query->whereNotNull('current_reading')
+                        ->orWhereNotNull('reading_date')
+                        ->orWhereIn('status', ['Completed', 'Verified', 'In Progress']);
+                })
+                ->exists();
+
+            $hasBillingLedger = DB::table('consumer_ledgers')
+                ->where('consumer_zone_id', $consumer->id)
+                ->whereIn('trans', ['BILLING', 'BILL'])
+                ->whereNotNull('reading')
+                ->where('reading', '>', 0)
+                ->exists();
+
+            if ($hasDownloadedReading || $hasScheduleHistory || $hasBillingLedger) {
+                Log::info('updateConsumerBaseReading blocked: consumer has reading history', [
+                    'account_no'             => $accountNo,
+                    'has_downloaded_reading' => $hasDownloadedReading,
+                    'has_schedule_history'   => $hasScheduleHistory,
+                    'has_billing_ledger'     => $hasBillingLedger,
+                    'user'                   => optional(auth()->user())->name,
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Base reading is locked: this consumer already has Current/Previous reading history.',
+                ], 422);
+            }
+
+            $oldBase = $consumer->base_reading !== null ? (int) $consumer->base_reading : null;
+
+            $consumer->base_reading = $newBase;
+            $consumer->base_reading_date = $baseDate
+                ? Carbon::parse($baseDate)->format('Y-m-d')
+                : Carbon::now()->format('Y-m-d');
+            $consumer->base_reading_at = Carbon::now();
+            $consumer->base_reading_by = optional(auth()->user())->name;
+            $consumer->save();
+
+            Log::info('Consumer base_reading saved from main-consumer page', [
+                'account_no' => $accountNo,
+                'old_base'   => $oldBase,
+                'new_base'   => $newBase,
+                'base_date'  => $consumer->base_reading_date,
+                'user'       => optional(auth()->user())->name,
+            ]);
+
+            return response()->json([
+                'success'           => true,
+                'message'           => 'Base reading saved. It will be used on the first Meter Reading Preparation.',
+                'account_no'        => $consumer->account_no,
+                'base_reading'      => $newBase,
+                'base_reading_date' => $consumer->base_reading_date instanceof \DateTimeInterface
+                    ? $consumer->base_reading_date->format('Y-m-d')
+                    : (string) $consumer->base_reading_date,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('updateConsumerBaseReading failed: ' . $e->getMessage(), [
+                'account_no' => $accountNo,
+                'trace'      => $e->getTraceAsString(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to save base reading: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    
     /**
      * Assign schedules by zone to a specific reader
      */
@@ -4196,7 +4420,7 @@ class MeterReadingController extends Controller
                 // Keep original computed values when ledger fallback lookup fails.
             }
         }
-
+        
         // Senior discount based on ledger/billing volume.
         // Rule:
         // - Applies automatically only when consumer has SC flag + valid OSCA ID.
@@ -4371,7 +4595,7 @@ class MeterReadingController extends Controller
                     $arrearsCy = round($arrearsCy + $shortfall, 2);
                 }
             }
-
+            
             // Normalize split for unpaid/non-OR flow:
             // - Keep current month's principal as Current Bill (from billing period principal)
             // - Allocate the remaining balance to Arrears CY

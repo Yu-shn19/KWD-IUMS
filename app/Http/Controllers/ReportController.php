@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\ConsumerLedgerMultiSheetExport;
+use App\Models\ConsumerZoneOne;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
+use App\Services\ConsumerLedgerCardBuilder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Log;
@@ -60,7 +63,7 @@ class ReportController extends Controller
 
         return round($baseBill + $penalty, 2);
     }
-
+    
     protected function resolveMonthlyBillingTotalAmount(Carbon $monthStart, string $zone = '', ?Carbon $asOf = null): float
     {
         $monthStart = $monthStart->copy()->startOfMonth();
@@ -1495,7 +1498,7 @@ class ReportController extends Controller
             ->back()
             ->with('error', 'Excel export is not available. Laravel Excel package is missing.');
     }
-
+    
     /**
      * FIFO AR aging: one row per account with bucket columns and total_balance (same logic as AR Aging Summary).
      */
@@ -1884,7 +1887,7 @@ class ReportController extends Controller
             ]);
         } catch (\Throwable $e) {}
 
-        // FIFO aging SQL (shared with Visual Summary pending arrears via runArAgingFifoAccountQuery).
+         // FIFO aging SQL (shared with Visual Summary pending arrears via runArAgingFifoAccountQuery).
         $fifoRows = $this->runArAgingFifoAccountQuery(
             $asOf,
             $billingCutOff,
@@ -2314,7 +2317,7 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) <= 0
+                        AND DATEDIFF(?, aging_date) <= 0
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS current,
@@ -2322,8 +2325,8 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) > 0
-                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 0
+                             AND DATEDIFF(?, aging_date) > 0
+                             AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 0
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS _30,
@@ -2331,7 +2334,7 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 1
+                             AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 1
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS _60,
@@ -2339,7 +2342,7 @@ class ReportController extends Controller
                         CASE
                             WHEN unpaid_amount > 0
                              AND trans <> 'DM'
-                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 2
+                             AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 2
                             THEN unpaid_amount ELSE 0
                         END
                     ), 2) AS _90,
@@ -2348,7 +2351,7 @@ class ReportController extends Controller
                             WHEN unpaid_amount > 0
                              AND (
                                  trans = 'DM'
-                            OR PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) >= 3
+                                 OR PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) >= 3
                              )
                             THEN unpaid_amount ELSE 0
                         END
@@ -2377,9 +2380,9 @@ class ReportController extends Controller
             if ($fifoRows->isNotEmpty()) {
                 $consumerMeta = DB::table('consumer_zone')
                     ->select('id', 'account_name')
-                    ->whereIn('id', $fifoRows->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values())
+                    ->whereIn('id', $fifoRows->pluck('consumer_zone_id')->filter()->values())
                     ->get()
-                    ->keyBy(fn ($m) => (int) $m->id);
+                    ->keyBy('id');
             }
 
             $detailRecords = [];
@@ -2478,14 +2481,14 @@ class ReportController extends Controller
                 ->with('error', 'Error exporting AR aging summary: ' . $e->getMessage());
         }
     }
-
+    
     /**
      * Visual Summary: KPIs, charts, and tables backed by the database.
      *
      * Query: zone_route (empty = all), bill_month (Y-m).
      * Consumer counts / status / arrears use a snapshot end of min(selected bill month end, today), with NULL created_at treated as included.
      * Monthly revenue KPI uses the selected bill month (clipped to today); the revenue line chart uses rolling 12 months to today.
-     * Top consumption sums readings in the bill month for accounts joined to active consumer_zone rows; top outstanding uses FIFO total_balance when AR aging SQL runs (same as AR Aging), else consumer_zone.balance.
+     * Top consumption: bill-month readings that are individually paid, active consumers with zero AR balance (FIFO or consumer_zone.balance), ranked by consumption; top outstanding uses FIFO total_balance when AR aging SQL runs (same as AR Aging), else consumer_zone.balance.
      * Pending arrears / unpaid-by-zone FIFO: billing & aging as-of = bill-month snapshot end (min(month end, today));
      * payment cut-off = today so ledger payments through the run date apply (aligns with AR Aging when payment cut-off is later than billing).
      */
@@ -2604,44 +2607,46 @@ class ReportController extends Controller
             return (float) $q->sum('cp.payment_amount');
         };
 
-        $monthlyRevenue = $paymentSumBetween($periodStart, $periodEnd);
+        $monthlyAmountCollected = $paymentSumBetween($periodStart, $periodEnd);
 
-        // Collection Efficiency numerator baseline provided by finance:
-        // Jan-Mar carry-in (Current + Arrears CY), then add Collection Report breakdown from April onward.
-        $openingCurrentPlusArrearsCy = 1557349.94 + 1239625.75;
-        $collectionBaselineStart = Carbon::create(2026, 4, 1)->startOfDay();
-        $collectionBreakdownStart = $billMonthStart->gte($collectionBaselineStart)
-            ? $collectionBaselineStart->copy()
-            : $ytdStart->copy();
-        $efficiencyNumeratorQuery = $collectionPaymentsBase();
-        $applyCollectionReportDateRange($efficiencyNumeratorQuery, $collectionBreakdownStart, $periodEnd);
-        $collectedCurrentPlusArrearsCy = (float) $efficiencyNumeratorQuery->sum(
-            DB::raw('COALESCE(cp.current_bill, 0) + COALESCE(cp.arrears_cy, 0)')
+        // Monthly Service Rev. (648): sum lro_ledger amounts tied to ORs in the same
+        // payment scope/date window as Amount Collected (zone/date filters included).
+        $monthlyPaymentsForServiceRev = $collectionPaymentsBase();
+        $applyCollectionReportDateRange($monthlyPaymentsForServiceRev, $periodStart, $periodEnd);
+        $monthlyOrNumbers = $monthlyPaymentsForServiceRev
+            ->whereNotNull('cp.or_number')
+            ->where('cp.or_number', '!=', '')
+            ->distinct()
+            ->pluck('cp.or_number')
+            ->map(fn ($or) => trim((string) $or))
+            ->filter(fn ($or) => $or !== '' && strtoupper($or) !== 'N/A')
+            ->values();
+
+        $monthlyServiceRev648 = 0.0;
+        if ($monthlyOrNumbers->isNotEmpty()) {
+            $remarks = $monthlyOrNumbers
+                ->map(fn ($or) => 'Payment OR#' . $or)
+                ->values()
+                ->all();
+
+            $monthlyServiceRev648 = (float) DB::table('lro_ledger')
+                ->whereIn('remarks', $remarks)
+                ->sum('amount');
+        }
+
+        // Monthly Revenue rule (requested):
+        // Amount Collected - Service Rev. (648)
+        $monthlyRevenue = max(0.0, round($monthlyAmountCollected - $monthlyServiceRev648, 2));
+
+        // Collection Efficiency numerator (monthly, requested):
+        // Current + Arrears (CY) + Arrears (PY)
+        $collectionEfficiencyBase = $collectionPaymentsBase();
+        $applyCollectionReportDateRange($collectionEfficiencyBase, $periodStart, $periodEnd);
+        $monthlyCurrentAndArrears = (float) $collectionEfficiencyBase->sum(
+            DB::raw('COALESCE(cp.current_bill, 0) + COALESCE(cp.arrears_cy, 0) + COALESCE(cp.arrears_py, 0)')
         );
-        if ($billMonthStart->gte($collectionBaselineStart)) {
-            $collectedCurrentPlusArrearsCy += $openingCurrentPlusArrearsCy;
-        }
-
-        // 4.1 denominator baseline provided by finance:
-        // opening current-metered (Jan-Mar gap-adjusted) + April billing current-metered,
-        // then add Monthly Billing total amount for each succeeding month (May onward).
-        $openingCurrentMetered = 3556007.52;
-        $aprilBillingCurrentMetered = 2367347.29;
-        $rollingBillingStart = Carbon::create(2026, 5, 1)->startOfMonth();
-        $additionalMonthlyBilling = 0.0;
-        if ($billMonthStart->gte($rollingBillingStart)) {
-            $monthCursor = $rollingBillingStart->copy();
-            while ($monthCursor->lte($billMonthStart)) {
-                $additionalMonthlyBilling += $this->resolveMonthlyBillingTotalAmount($monthCursor, $zoneRoute, $periodEnd);
-                $monthCursor->addMonth();
-            }
-        }
-        $billedCurrentMeteredYtd = $openingCurrentMetered + $aprilBillingCurrentMetered + $additionalMonthlyBilling;
 
         $collectionRate = 0.0;
-        if ($billedCurrentMeteredYtd > 0.01) {
-            $collectionRate = min(100.0, round(($collectedCurrentPlusArrearsCy / $billedCurrentMeteredYtd) * 100, 1));
-        }
 
         // Pending arrears + per-zone unpaid: same FIFO as AR Aging, with billing/as-of at bill-month snapshot
         // and payment cut-off at today (AR screen often uses a later payment date than billing; using one date for all inflated unpaid).
@@ -2668,6 +2673,13 @@ class ReportController extends Controller
             $pendingArrears = (float) DB::table('consumer_zone')
                 ->when($zoneRoute !== '', fn ($q) => $q->where('zone_code', $zoneRoute))
                 ->sum(DB::raw('GREATEST(COALESCE(balance, 0), 0)'));
+        }
+
+        // Collection Efficiency denominator (requested):
+        // Total Balance
+        if ($pendingArrears > 0.01) {
+            $collectionRate = round(($monthlyCurrentAndArrears / $pendingArrears) * 100, 1);
+            $collectionRate = max(0.0, min(100.0, $collectionRate));
         }
 
         $revenueChartLabels = [];
@@ -2782,24 +2794,53 @@ class ReportController extends Controller
 
         $activeStatusSql = "UPPER(TRIM(COALESCE(cz.status_code, ''))) IN ('A', 'ACTIVE')";
 
-        $topConsumption = DB::table('downloaded_readings as dr')
+        $outstandingConsumerIds = collect();
+        if ($fifoArRows->isNotEmpty()) {
+            $outstandingConsumerIds = $fifoArRows
+                ->filter(fn ($r) => (float) ($r->total_balance ?? 0) > 0.01)
+                ->pluck('consumer_zone_id')
+                ->filter()
+                ->unique();
+        }
+        $storedOutstandingIds = $baseConsumerQuery()
+            ->whereRaw('COALESCE(balance, 0) > 0.01')
+            ->pluck('id');
+        $excludeConsumerIds = $outstandingConsumerIds
+            ->merge($storedOutstandingIds)
+            ->unique()
+            ->values();
+
+        $readingBillSql = 'ROUND(COALESCE(dr.current_bill, 0) + CASE WHEN COALESCE(dr.current_bill, 0) > 0 THEN 20 ELSE 0 END, 2)';
+        $readingPaidSql = '(SELECT COALESCE(SUM(CASE WHEN cp.payment_amount > 0 THEN cp.payment_amount + COALESCE(cp.senior_citizen_discount, 0) ELSE 0 END), 0) FROM consumer_payments cp WHERE cp.reading_id = dr.id)';
+        $paidReadingSql = "(LOWER(TRIM(COALESCE(dr.status, ''))) = 'paid' OR ({$readingPaidSql}) + 0.01 >= ({$readingBillSql}))";
+
+        $topConsumptionQuery = DB::table('downloaded_readings as dr')
             ->join('consumer_zone as cz', function ($join) {
                 $join->whereRaw(
                     'TRIM(dr.account_number) COLLATE utf8mb4_unicode_ci = TRIM(cz.account_no) COLLATE utf8mb4_unicode_ci'
                 );
             })
             ->select(
-                'dr.account_number',
-                'dr.account_name',
-                'dr.zone',
-                DB::raw('SUM(COALESCE(dr.consumption, 0)) as total_consumption')
+                'cz.id as consumer_zone_id',
+                'cz.account_no as account_number',
+                'cz.account_name',
+                DB::raw('COALESCE(MAX(dr.zone), cz.zone_code) as zone'),
+                DB::raw('SUM(COALESCE(dr.consumption, 0)) as total_consumption'),
+                DB::raw('SUM(COALESCE(dr.current_bill, 0)) as total_amount'),
+                DB::raw("SUM({$readingBillSql}) as total_amount_billed"),
+                DB::raw("SUM({$readingPaidSql}) as total_amount_paid")
             )
             ->whereBetween('dr.reading_date', [$periodStart->toDateString(), $periodEnd->toDateString()])
-            ->whereNotNull('dr.account_name')
-            ->where('dr.account_name', '!=', '')
             ->whereNotNull('dr.account_number')
-            ->where('dr.account_number', '!=', '')
+            ->whereRaw("TRIM(dr.account_number) <> ''")
+            ->whereNotNull('cz.account_name')
+            ->whereRaw("TRIM(cz.account_name) <> ''")
             ->whereRaw($activeStatusSql)
+            ->whereRaw('COALESCE(cz.balance, 0) <= 0.01')
+            ->whereRaw($paidReadingSql)
+            ->when($excludeConsumerIds->isNotEmpty(), function ($q) use ($excludeConsumerIds) {
+                $q->whereNotIn('cz.id', $excludeConsumerIds->all());
+            })
             ->when(Schema::hasColumn('consumer_zone', 'created_at'), function ($q) use ($snapshotEnd) {
                 $q->where(function ($w) use ($snapshotEnd) {
                     $w->whereNull('cz.created_at')
@@ -2812,10 +2853,13 @@ class ReportController extends Controller
                         ->orWhere('cz.zone_code', $zoneRoute);
                 });
             })
-            ->groupBy('dr.account_number', 'dr.account_name', 'dr.zone')
+            ->groupBy('cz.id', 'cz.account_no', 'cz.account_name', 'cz.zone_code')
+            ->havingRaw('SUM(COALESCE(dr.consumption, 0)) > 0')
+            ->havingRaw('total_amount_paid + 0.01 >= total_amount_billed')
             ->orderByDesc('total_consumption')
-            ->limit(10)
-            ->get();
+            ->limit(10);
+
+        $topConsumption = $topConsumptionQuery->get();
 
         // Top outstanding: use FIFO total_balance (same as AR Aging detail "balance") when available;
         // otherwise consumer_zone.balance (stored field may differ from ledgers until sync).
@@ -2882,5 +2926,219 @@ class ReportController extends Controller
                 'bill_month' => $billMonthInput,
             ],
         ]);
+    }
+
+    /**
+     * Consumer Ledger Report (traditional ledger card layout).
+     */
+    public function consumerLedgerReport(Request $request)
+    {
+        $filters = $this->consumerLedgerFiltersFromRequest($request);
+        $zones = $this->consumerLedgerZoneOptions();
+
+        $consumersQuery = $this->consumerLedgerConsumersQuery($filters);
+        $selectedConsumer = null;
+        $ledgerRows = collect();
+        $beginning = null;
+
+        if ($filters['account_no'] !== '') {
+            $selectedConsumer = (clone $consumersQuery)->first();
+            if ($selectedConsumer) {
+                $card = app(ConsumerLedgerCardBuilder::class)->build($selectedConsumer, $filters);
+                $ledgerRows = $card['rows'];
+                $beginning = $card['beginning'];
+            }
+        }
+
+        $consumerList = $filters['account_no'] === ''
+            ? $this->sortConsumerLedgerConsumersAsc(
+                (clone $consumersQuery)->get(['id', 'account_no', 'account_name', 'meter_number'])
+            )
+            : collect();
+
+        $consumerCount = (clone $consumersQuery)->count();
+
+        return view('reports.system-report.service-request-report', [
+            'zones' => $zones,
+            'filters' => $filters,
+            'selectedConsumer' => $selectedConsumer,
+            'ledgerRows' => $ledgerRows,
+            'beginning' => $beginning,
+            'consumerList' => $consumerList,
+            'consumerCount' => $consumerCount,
+        ]);
+    }
+
+    /**
+     * Multi-sheet Excel export: one sheet per consumer (Consumer_Ledger_Report.xlsx).
+     */
+    public function exportConsumerLedgerReport(Request $request)
+    {
+        @ini_set('memory_limit', '1024M');
+        @ini_set('max_execution_time', '300');
+
+        $filters = $this->consumerLedgerFiltersFromRequest($request);
+
+        if ($this->consumerLedgerFiltersAreEmpty($filters)) {
+            return redirect()
+                ->route('service-request-report', $request->query())
+                ->with('error', 'Select a Zone before exporting.');
+        }
+
+        $consumers = $this->sortConsumerLedgerConsumersAsc(
+            $this->consumerLedgerConsumersQuery($filters)->get()
+        );
+
+        if ($consumers->isEmpty()) {
+            return redirect()
+                ->route('service-request-report', $request->query())
+                ->with('error', 'No consumers matched the selected filters.');
+        }
+
+        if ($consumers->count() > 500) {
+            return redirect()
+                ->route('service-request-report', $request->query())
+                ->with('error', 'Too many consumers ('.$consumers->count().'). Narrow Status or Zone. Maximum 500 per export.');
+        }
+
+        if (! class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
+            return redirect()
+                ->route('service-request-report', $request->query())
+                ->with('error', 'Excel export is not available. Install maatwebsite/excel.');
+        }
+
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new ConsumerLedgerMultiSheetExport($consumers, $filters),
+            'Consumer_Ledger_Report.xlsx'
+        );
+    }
+
+    /**
+     * @return array{status: string, zone: string, as_of: string, account_no: string}
+     */
+    protected function consumerLedgerFiltersFromRequest(Request $request): array
+    {
+        $asOfInput = trim((string) $request->input('as_of', ''));
+        try {
+            $asOf = $asOfInput !== ''
+                ? Carbon::parse($asOfInput)->format('Y-m-d')
+                : Carbon::now()->format('Y-m-d');
+        } catch (\Exception $e) {
+            $asOf = Carbon::now()->format('Y-m-d');
+        }
+
+        return [
+            'status' => trim((string) $request->input('status', '')),
+            'zone' => trim((string) $request->input('zone', '')),
+            'as_of' => $asOf,
+            'account_no' => trim((string) $request->input('account_no', '')),
+        ];
+    }
+
+    /**
+     * @param  array{status: string, zone: string, as_of: string, account_no: string}  $filters
+     */
+    protected function consumerLedgerFiltersAreEmpty(array $filters): bool
+    {
+        return $filters['zone'] === '';
+    }
+
+    protected function consumerLedgerZoneOptions(): array
+    {
+        return ConsumerZoneOne::query()
+            ->select('zone_code')
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
+            ->distinct()
+            ->orderBy('zone_code')
+            ->pluck('zone_code')
+            ->toArray();
+    }
+
+    /**
+     * @param  array{status: string, zone: string, as_of: string, account_no: string}  $filters
+     */
+    protected function consumerLedgerConsumersQuery(array $filters)
+    {
+        $query = ConsumerZoneOne::query()
+            ->whereNotNull('account_no');
+
+        $this->applyConsumerLedgerAccountNoAscOrder($query);
+
+        if ($filters['zone'] !== '') {
+            $query->where('zone_code', $filters['zone']);
+        }
+
+        $this->applyConsumerLedgerStatusFilter($query, $filters['status'] ?? '');
+
+        if ($filters['account_no'] !== '') {
+            $query->where('account_no', $filters['account_no']);
+        }
+
+        // As-of date limits ledger rows in ConsumerLedgerCardBuilder, not which consumers appear in the list/export.
+
+        return $query;
+    }
+
+    /**
+     * Ascending account order (e.g. 081-12-4428 by last segment 4428, then full account_no).
+     */
+    protected function applyConsumerLedgerAccountNoAscOrder($query): void
+    {
+        $dbDriver = DB::connection()->getDriverName();
+        if (in_array($dbDriver, ['mysql', 'mariadb'], true)) {
+            $query->orderByRaw(
+                'CAST(SUBSTRING_INDEX(TRIM(COALESCE(account_no, "")), "-", -1) AS UNSIGNED) ASC'
+            );
+        }
+
+        $query->orderBy('account_no', 'asc');
+    }
+
+    /**
+     * @param  Collection<int, ConsumerZoneOne>  $consumers
+     * @return Collection<int, ConsumerZoneOne>
+     */
+    protected function sortConsumerLedgerConsumersAsc(Collection $consumers): Collection
+    {
+        $dbDriver = DB::connection()->getDriverName();
+        if (in_array($dbDriver, ['mysql', 'mariadb'], true)) {
+            return $consumers->values();
+        }
+
+        $accountTailKey = static function (?string $accountNo): int {
+            $acc = trim((string) $accountNo);
+            if ($acc === '') {
+                return 0;
+            }
+            $pos = strrpos($acc, '-');
+            $tail = $pos === false ? $acc : substr($acc, $pos + 1);
+
+            return (int) preg_replace('/\D/', '', $tail);
+        };
+
+        return $consumers
+            ->sortBy([
+                fn ($consumer) => $accountTailKey($consumer->account_no ?? null),
+                fn ($consumer) => strtolower(trim((string) ($consumer->account_no ?? ''))),
+            ])
+            ->values();
+    }
+
+    protected function applyConsumerLedgerStatusFilter($query, string $status): void
+    {
+        if ($status === '' || $status === 'All Status') {
+            return;
+        }
+
+        $statusMap = [
+            'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
+            'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
+            'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
+        ];
+
+        if (isset($statusMap[$status])) {
+            $query->whereIn('status_code', $statusMap[$status]);
+        }
     }
 }

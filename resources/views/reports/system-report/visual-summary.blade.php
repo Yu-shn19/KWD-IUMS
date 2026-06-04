@@ -82,11 +82,11 @@
                             </div>
                         </div>
                     </form>
-
+                    
                     <div class="d-sm-flex align-items-center justify-content-between mb-4">
                         <h1 class="h3 mb-0 text-gray-800">Visual Summary</h1>
                         <div>
-                            <a href="{{ route('visual-summary', array_filter(['zone_route' => $filters['zone_route'] ?? '', 'bill_month' => $filters['bill_month'] ?? ''], fn ($v) => $v !== null && $v !== '')) }}" class="btn btn-primary btn-sm mr-2">
+                           <a href="{{ route('visual-summary', array_filter(['zone_route' => $filters['zone_route'] ?? '', 'bill_month' => $filters['bill_month'] ?? ''], fn ($v) => $v !== null && $v !== '')) }}" class="btn btn-primary btn-sm mr-2">
                                 <i class="fas fa-sync-alt mr-1"></i>Refresh
                             </a>
                             <button class="btn btn-success btn-sm">
@@ -238,7 +238,7 @@
                             </div>
                         </div>
                     </div>
-
+                    
                     <!-- Total balance per zone (same FIFO sums as AR Aging → AR Summary per Zone) -->
                     <div class="row mb-4">
                         <div class="col-lg-12">
@@ -259,30 +259,32 @@
                         <div class="col-lg-6">
                             <div class="card shadow mb-4">
                                 <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                                    <h6 class="m-0 font-weight-bold text-primary">Top 10 Consumers by Consumption <span class="text-muted font-weight-normal">(active · {{ $topTablesMonthLabel }})</span></h6>
+                                    <h6 class="m-0 font-weight-bold text-primary">Top 10 Consumption Rankings (Fully Paid) <span class="text-muted font-weight-normal">(active · {{ $topTablesMonthLabel }})</span></h6>
                                 </div>
                                 <div class="card-body p-0">
                                     <div class="table-responsive" style="max-height: 400px; overflow: auto;">
                                         <table class="table table-sm table-hover mb-0" style="font-size: 12px;">
                                             <thead class="thead-light" style="position: sticky; top: 0;">
                                                 <tr>
-                                                    <th class="py-2 px-3">#</th>
-                                                    <th class="py-2 px-3">Account Name</th>
-                                                    <th class="py-2 px-3">Zone</th>
-                                                    <th class="text-right py-2 px-3">Consumption (m³)</th>
+                                                    <th class="text-center py-2 px-3">Rank</th>
+                                                    <th class="py-2 px-3">Consumer Name</th>
+                                                    <th class="text-center py-2 px-3">Zone</th>
+                                                    <th class="text-center py-2 px-3">Total Consumption (m³)</th>
+                                                    <th class="text-center py-2 px-3">Amount</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 @forelse ($topConsumption as $idx => $row)
                                                     <tr>
-                                                        <td class="py-2 px-3">{{ $idx + 1 }}</td>
-                                                        <td class="py-2 px-3">{{ $row->account_name }}</td>
-                                                        <td class="py-2 px-3">{{ $row->zone ?? '—' }}</td>
-                                                        <td class="text-right py-2 px-3">{{ number_format((float) $row->total_consumption) }}</td>
+                                                        <td class="text-center py-2 px-3">{{ $idx + 1 }}</td>
+                                                        <td class="py-2 px-3">{{ $row->account_name ?? '—' }}</td>
+                                                        <td class="text-center py-2 px-3">{{ $row->zone ?? '—' }}</td>
+                                                        <td class="text-center py-2 px-3">{{ number_format((float) ($row->total_consumption ?? 0)) }}</td>
+                                                        <td class="text-center py-2 px-3">₱ {{ number_format((float) ($row->total_amount ?? 0), 2) }}</td>
                                                     </tr>
                                                 @empty
                                                     <tr>
-                                                        <td colspan="4" class="py-3 px-3 text-center text-muted">No consumption data for active accounts in {{ $topTablesMonthLabel }}.</td>
+                                                        <td colspan="5" class="py-3 px-3 text-center text-muted">No consumption data for active accounts in {{ $topTablesMonthLabel }}.</td>
                                                     </tr>
                                                 @endforelse
                                             </tbody>
@@ -303,19 +305,19 @@
                                         <table class="table table-sm table-hover mb-0" style="font-size: 12px;">
                                             <thead class="thead-light" style="position: sticky; top: 0;">
                                                 <tr>
-                                                    <th class="py-2 px-3">#</th>
-                                                    <th class="py-2 px-3">Account Name</th>
-                                                    <th class="py-2 px-3">Zone</th>
-                                                    <th class="text-right py-2 px-3">Balance</th>
+                                                    <th class="text-center py-2 px-3">Rank</th>
+                                                    <th class="py-2 px-3">Consumer Name</th>
+                                                    <th class="text-center py-2 px-3">Zone</th>
+                                                    <th class="text-center py-2 px-3">Amount</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 @forelse ($topOutstanding as $idx => $row)
                                                     <tr>
-                                                        <td class="py-2 px-3">{{ $idx + 1 }}</td>
+                                                        <td class="text-center py-2 px-3">{{ $idx + 1 }}</td>
                                                         <td class="py-2 px-3">{{ $row->account_name ?? '—' }}</td>
-                                                        <td class="py-2 px-3">{{ $row->zone_code ?? '—' }}</td>
-                                                        <td class="text-right py-2 px-3 text-danger">₱ {{ number_format((float) $row->balance, 2) }}</td>
+                                                        <td class="text-center py-2 px-3">{{ $row->zone_code ?? '—' }}</td>
+                                                        <td class="text-center py-2 px-3 text-danger">₱ {{ number_format((float) $row->balance, 2) }}</td>
                                                     </tr>
                                                 @empty
                                                     <tr>
@@ -455,7 +457,6 @@
             }
         }
     });
-
     // Total balance by zone (FIFO), same per-zone totals as AR Aging → AR Summary per Zone
     var ctxZoneUnpaid = document.getElementById("zoneUnpaidBalanceChart");
     var zoneUnpaidChart = new Chart(ctxZoneUnpaid, {

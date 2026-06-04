@@ -35,7 +35,7 @@
     </a>
     <div id="collapseBootstrap" class="collapse" aria-labelledby="headingBootstrap" data-parent="#accordionSidebar">
       <div class="collapse-inner-modern">
-        <a class="collapse-item" href="consumer">
+           <a class="collapse-item" href="{{ route('consumer') }}">
           <i class="fas fa-circle small-icon"></i> Consumers
         </a>
         <a class="collapse-item" href="#">
@@ -119,11 +119,14 @@
     </a>
     <div id="collapseReport" class="collapse" aria-labelledby="headingTable" data-parent="#accordionSidebar">
       <div class="collapse-inner-modern">
-        <a class="collapse-item" href="billing-status">
+              <a class="collapse-item" href="{{ route('billing-status') }}">
           <i class="fas fa-circle small-icon"></i> Billing Status
         </a>
-        <a class="collapse-item" href="systemreport">
+         <a class="collapse-item" href="{{ route('systemreport') }}">
           <i class="fas fa-circle small-icon"></i> System Reports
+        </a>
+         <a class="collapse-item" href="{{ route('disconnection.assignments') }}">
+          <i class="fas fa-circle small-icon"></i> Disconnected consumer
         </a>
       </div>
     </div>
@@ -139,7 +142,7 @@
     </a>
     <div id="collapseOptions" class="collapse" aria-labelledby="headingTable" data-parent="#accordionSidebar">
       <div class="collapse-inner-modern">
-        <a class="collapse-item" href="simple-tables.html">
+              <a class="collapse-item" href="#">
           <i class="fas fa-circle small-icon"></i> System Setting
         </a>
         <a class="collapse-item" href="{{ route('settings.consumer-edit-pin') }}">
@@ -173,6 +176,37 @@
  
 </ul>
 <!-- End Sidebar -->
+
+<script>
+(function () {
+  document.addEventListener('DOMContentLoaded', function () {
+    var sidebar = document.querySelector('.modern-sidebar');
+    if (!sidebar || typeof window.jQuery === 'undefined') {
+      return;
+    }
+    var $ = window.jQuery;
+    $('#accordionSidebar').on('shown.bs.collapse', '.collapse', function () {
+      var panel = this;
+      requestAnimationFrame(function () {
+        var cRect = panel.getBoundingClientRect();
+        var sRect = sidebar.getBoundingClientRect();
+        var pad = 16;
+        var maxScroll = sidebar.scrollHeight - sidebar.clientHeight;
+        if (cRect.bottom > sRect.bottom - pad) {
+          var overflow = cRect.bottom - sRect.bottom + pad;
+          var next = Math.min(maxScroll, sidebar.scrollTop + overflow);
+          sidebar.scrollTo({ top: next, behavior: 'smooth' });
+        } else if (cRect.top < sRect.top + pad) {
+          var under = sRect.top + pad - cRect.top;
+          var prev = Math.max(0, sidebar.scrollTop - under);
+          sidebar.scrollTo({ top: prev, behavior: 'smooth' });
+        }
+      });
+    });
+  });
+})();
+</script>
+
 
 <style>
   /* ===== PREMIUM COLOR PALETTE ===== */

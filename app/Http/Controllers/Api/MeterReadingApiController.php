@@ -72,7 +72,7 @@ class MeterReadingApiController extends Controller
         ]);
     }
 
-    /**
+      /**
      * Get assigned schedules for a reader with downloaded reading status
      */
     public function getAssignedSchedules(Request $request)
@@ -154,7 +154,7 @@ class MeterReadingApiController extends Controller
             $query->where('bill_month', $latestBillMonth);
         }
 
-        // Order by status priority (active routes first), then by sedr_number
+        // Order by status priority (active routes first), then by account # tail (after last "-")
         $schedules = $query->orderByRaw("
             CASE 
                 WHEN status = 'Assigned' THEN 1
@@ -162,7 +162,7 @@ class MeterReadingApiController extends Controller
                 WHEN status = 'Completed' THEN 3
                 ELSE 4
             END
-        ")->orderBy('sedr_number')->get();
+        ")->orderByAccountNumberTail()->get();
 
         // Get downloaded readings for this reader (only for current bill_month schedules)
         $downloadedReadings = collect();

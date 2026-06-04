@@ -14,33 +14,33 @@
                 @include('consumer.nav-tabs', ['activeTab' => 'consumer'])
 
                 <!-- Simple Action Buttons -->
-                <div class="bg-white px-3 py-2 border-bottom mb-3">
-                    <div class="d-flex justify-content-between align-items-center">
+                <div class="bg-white px-2 px-md-3 py-2 border-bottom mb-3">
+                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-stretch align-items-md-center">
                         <!-- Navigation Controls -->
-                        <div class="d-flex align-items-center gap-2">
-                            <button class="btn btn-outline-secondary btn-sm">
+                        <div class="d-flex align-items-center justify-content-center justify-content-md-start flex-wrap mb-2 mb-md-0">
+                            <button type="button" class="btn btn-outline-secondary btn-sm mr-1 mb-1">
                                 <i class="fas fa-step-backward"></i>
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm">
+                            <button type="button" class="btn btn-outline-secondary btn-sm mr-1 mb-1">
                                 <i class="fas fa-chevron-left"></i>
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm">
+                            <button type="button" class="btn btn-outline-secondary btn-sm mr-1 mb-1">
                                 <i class="fas fa-chevron-right"></i>
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm">
+                            <button type="button" class="btn btn-outline-secondary btn-sm mr-1 mb-1">
                                 <i class="fas fa-step-forward"></i>
                             </button>
                         </div>
 
                         <!-- Action Buttons -->
-                        <div class="d-flex align-items-center gap-2">
-                            <button class="btn btn-success btn-sm" data-toggle="modal" data-target="#newConsumerModal" data-bs-toggle="modal" data-bs-target="#newConsumerModal">
+                        <div class="d-flex align-items-center justify-content-center justify-content-md-end flex-wrap">
+                            <button type="button" class="btn btn-success btn-sm mr-1 mb-1" data-toggle="modal" data-target="#newConsumerModal" data-bs-toggle="modal" data-bs-target="#newConsumerModal">
                                 <i class="fas fa-plus me-1"></i>New
                             </button>
-                            <button class="btn btn-primary btn-sm" id="editConsumerBtn" disabled>
+                            <button type="button" class="btn btn-primary btn-sm mr-1 mb-1" id="editConsumerBtn" disabled>
                                 <i class="fas fa-edit me-1"></i>Edit
                             </button>
-                            <button class="btn btn-danger btn-sm" id="deleteConsumerBtn" disabled>
+                            <button type="button" class="btn btn-danger btn-sm mb-1" id="deleteConsumerBtn" disabled>
                                 <i class="fas fa-trash me-1"></i>Delete
                             </button>
                         </div>
@@ -48,9 +48,12 @@
                 </div>
 
                 <!-- Main Content Area -->
-                <div class="p-3 bg-light main-consumer-content">
+                <div class="p-2 p-md-3 bg-light main-consumer-content">
                     <style>
                         .main-consumer-content { font-size: 1.05rem; }
+                        @media (max-width: 575.98px) {
+                            .main-consumer-content { font-size: 1rem; }
+                        }
                         .main-consumer-content .card-header h6 { font-size: 1.125rem; }
                         .main-consumer-content .table { font-size: 1rem; }
                         .main-consumer-content .table thead th {
@@ -128,6 +131,15 @@
                                 <div class="card-body p-0 consumer-info-body" id="consumerInfoCard">
                                     @if($consumer)
                                     <div class="p-3">
+                                    <div class="row g-3 mb-2">
+                                        <div class="col-12">
+                                            <label class="form-label fw-semibold text-primary mb-1">
+                                                <i class="fas fa-calendar-check me-1"></i>Transaction Date
+                                            </label>
+                                            <input type="text" class="form-control form-control-sm" id="transactionDateDisplay"
+                                                value="{{ $consumer->transaction_date ? $consumer->transaction_date->format('m/d/Y') : '' }}" readonly>
+                                        </div>
+                                    </div>
                                     <div class="row g-3">
                                         <div class="col-md-6">
                                             <div class="consumer-info-panel">
@@ -181,7 +193,7 @@
                                             <div class="consumer-info-panel">
                                             <div class="mb-3">
                                                 <label class="form-label">Status</label>
-                                                <input type="text" class="form-control form-control-sm" id="status"
+                                                <input type="text" class="form-control form-control-sm" id="consumerStatusDisplay"
                                                     value="{{ $consumer->status_label }}" readonly>
                                             </div>
                                             <div class="mb-3">
@@ -233,37 +245,7 @@
                             </div>
 
                             <div class="row g-3 mb-3">
-                                <div class="col-lg-6">
-                                    <!-- Charges Table Card -->
-                                    <div class="card h-100">
-                                        <div class="card-header bg-primary text-white">
-                                            <h6 class="mb-0">Charges Entry</h6>
-                                        </div>
-                                        <div class="card-body p-0">
-                                            <div class="table-responsive">
-                                                <table class="table table-hover mb-0">
-                                                    <thead class="table-light">
-                                                        <tr>
-                                                            <th>Date</th>
-                                                            <th>Description</th>
-                                                            <th class="text-end">Charge</th>
-                                                            <th class="text-end">Amortization</th>
-                                                            <th class="text-end">Balance</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        <tr>
-                                                            <td colspan="5" class="text-center text-muted py-4">
-                                                                <i class="fas fa-inbox mb-2 d-block"></i>
-                                                                No charges recorded
-                                                            </td>
-                                                        </tr>
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                               
 
                                 @php
                                     $latestBillMonthLabel = ($latestBill && $latestBill->bill_month)
@@ -331,56 +313,133 @@
                                         </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            <!-- Meter Reading Card -->
-                            <div class="card">
-                                <div class="card-header bg-primary text-white">
-                                    <h6 class="mb-0">Meter Reading</h6>
-                                </div>
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col-md-6">
-                                            <div class="card bg-light">
-                                                <div class="card-body">
-                                                    <h6 class="text-success">Current Reading</h6>
-                                                    <div class="row">
-                                                        <div class="col-6">
-                                                            <small class="text-muted">Date</small>
-                                                            <div class="fw-bold" id="meterReadingCurrentDate">{{ $meterReading && $meterReading->current_reading_date ? \Carbon\Carbon::parse($meterReading->current_reading_date)->format('m/d/Y') : '—' }}</div>
-                                                        </div>
-                                                        <div class="col-6">
-                                                            <small class="text-muted">Reading</small>
-                                                            <div class="fw-bold" id="meterReadingCurrentValue">{{ $meterReading && $meterReading->current_reading !== null ? $meterReading->current_reading : '—' }}</div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
+                                <!-- Meter Reading Card -->
+                                <div class="col-lg-6">
+                                    <div class="card shadow-sm border-0 h-100">
+                                        <div class="card-header bg-primary text-white py-3">
+                                            <h6 class="mb-0 fw-semibold">Meter Reading</h6>
+                                            <small class="d-block opacity-75 mt-1">Current and previous reading</small>
                                         </div>
-                                        <div class="col-md-6">
-                                            <div class="card bg-light">
-                                                <div class="card-body">
-                                                    <h6 class="text-info">Previous Reading</h6>
-                                                    <div class="row">
-                                                        <div class="col-6">
-                                                            <small class="text-muted">Date</small>
-                                                            <div class="fw-bold" id="meterReadingPrevDate">{{ $meterReading && $meterReading->previous_reading_date ? \Carbon\Carbon::parse($meterReading->previous_reading_date)->format('m/d/Y') : '—' }}</div>
-                                                        </div>
-                                                        <div class="col-6">
-                                                            <small class="text-muted">Reading</small>
-                                                            <input type="number" min="0" step="1" class="form-control form-control-sm fw-bold d-inline-block" id="meterReadingPrevValue" value="{{ $meterReading ? $meterReading->previous_reading : 0 }}" style="max-width: 100px;" placeholder="0">
+                                        <div class="card-body">
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <div class="card bg-light h-100">
+                                                        <div class="card-body">
+                                                            <h6 class="text-success">Current Reading</h6>
+                                                            <div class="row">
+                                                                <div class="col-6">
+                                                                    <small class="text-muted">Date</small>
+                                                                    <div class="fw-bold" id="meterReadingCurrentDate">{{ $meterReading && $meterReading->current_reading_date ? \Carbon\Carbon::parse($meterReading->current_reading_date)->format('m/d/Y') : '—' }}</div>
+                                                                </div>
+                                                                <div class="col-6">
+                                                                    <small class="text-muted">Reading</small>
+                                                                    <div class="fw-bold" id="meterReadingCurrentValue">{{ $meterReading && $meterReading->current_reading !== null ? $meterReading->current_reading : '—' }}</div>
+                                                                </div>
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                    <div class="meter-reading-save-block mt-2" style="{{ ($consumer && $meterReading && $meterReading->schedule_id) ? '' : 'display:none;' }}">
-                                                        <input type="hidden" id="meterReadingScheduleId" value="{{ $meterReading && $meterReading->schedule_id ? $meterReading->schedule_id : '' }}">
-                                                        <input type="hidden" id="meterReadingAccountNo" value="{{ $consumer ? $consumer->account_no : '' }}">
-                                                        <div class="mt-2">
-                                                            <button type="button" class="btn btn-sm btn-primary" id="meterReadingSavePrevBtn"><i class="fas fa-save mr-1"></i>Save Previous Reading</button>
-                                                            <span class="small text-muted ml-2" id="meterReadingSaveStatus"></span>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <div class="card bg-light h-100">
+                                                        <div class="card-body">
+                                                            <h6 class="text-info">Previous Reading</h6>
+                                                            <div class="row">
+                                                                <div class="col-6">
+                                                                    <small class="text-muted">Date</small>
+                                                                    <div class="fw-bold" id="meterReadingPrevDate">{{ $meterReading && $meterReading->previous_reading_date ? \Carbon\Carbon::parse($meterReading->previous_reading_date)->format('m/d/Y') : '—' }}</div>
+                                                                </div>
+                                                                <div class="col-6">
+                                                                    <small class="text-muted">Reading</small>
+                                                                    <input type="number" min="0" step="1" class="form-control form-control-sm fw-bold d-inline-block" id="meterReadingPrevValue" value="{{ $meterReading ? $meterReading->previous_reading : 0 }}" style="max-width: 100px;" placeholder="0">
+                                                                </div>
+                                                            </div>
+                                                            <div class="meter-reading-save-block mt-2" style="{{ ($consumer && $meterReading && $meterReading->schedule_id) ? '' : 'display:none;' }}">
+                                                                <input type="hidden" id="meterReadingScheduleId" value="{{ $meterReading && $meterReading->schedule_id ? $meterReading->schedule_id : '' }}">
+                                                                <input type="hidden" id="meterReadingAccountNo" value="{{ $consumer ? $consumer->account_no : '' }}">
+                                                                <div class="mt-2">
+                                                                    <button type="button" class="btn btn-sm btn-primary" id="meterReadingSavePrevBtn"><i class="fas fa-save mr-1"></i>Save Previous Reading</button>
+                                                                    <span class="small text-muted ml-2" id="meterReadingSaveStatus"></span>
+                                                                </div>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </div>
+
+                                            @php
+                                                $baseReading = $meterReading->base_reading ?? null;
+                                                $baseReadingDate = $meterReading->base_reading_date ?? null;
+                                                $hasReadingHistory = $meterReading && (
+                                                    !empty($meterReading->schedule_id)
+                                                    || !empty($meterReading->previous_reading_date)
+                                                    || !empty($meterReading->current_reading_date)
+                                                    || ($meterReading->current_reading !== null && $meterReading->current_reading !== '')
+                                                    || ($meterReading->previous_reading !== null && $meterReading->previous_reading !== '' && (int) $meterReading->previous_reading > 0)
+                                                );
+                                                $baseDisabled = $hasReadingHistory ? 'disabled' : '';
+                                            @endphp
+
+                                            @if($consumer)
+                                            <div class="card shadow-sm border mt-3 overflow-hidden {{ $hasReadingHistory ? 'base-reading-locked' : '' }}" id="meterReadingBaseBlock" data-has-history="{{ $hasReadingHistory ? '1' : '0' }}" style="border-left: 4px solid #0d6efd !important;">
+                                                <div class="card-body p-3 bg-white">
+                                                    <div class="row g-3 align-items-start">
+                                                        <div class="col-lg-7">
+                                                            <div class="d-flex align-items-center gap-2 mb-2">
+                                                                <span class="rounded-circle bg-primary text-white d-inline-flex align-items-center justify-content-center" style="width: 2rem; height: 2rem;">
+                                                                    <i class="fas fa-tachometer-alt" aria-hidden="true"></i>
+                                                                </span>
+                                                                <div>
+                                                                    <h6 class="mb-0 fw-semibold text-dark">Base reading
+                                                                        <span class="badge bg-secondary ms-2 align-middle" id="meterReadingBaseLockedBadge" style="{{ $hasReadingHistory ? '' : 'display:none;' }}">
+                                                                            <i class="fas fa-lock me-1"></i>Locked
+                                                                        </span>
+                                                                    </h6>
+                                                                    <span class="small text-secondary">Starting meter value for first billing</span>
+                                                                </div>
+                                                            </div>
+                                                            <p class="small text-dark mb-0 lh-base" style="max-width: 42rem;">
+                                                                Use this when the account is new but the meter is <strong>not</strong> at zero.
+                                                                The value becomes the <strong>previous reading</strong> on the first Meter Reading Preparation when there is no history yet.
+                                                            </p>
+                                                            <div class="alert alert-info py-2 px-3 small mb-0 mt-2" role="status" id="meterReadingBaseHistoryAlert" style="{{ $hasReadingHistory ? '' : 'display:none;' }}">
+                                                                <i class="fas fa-info-circle me-1"></i>This consumer already has reading history — base reading is locked to prevent conflicts with existing billing data.
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-lg-5">
+                                                            <div class="rounded-3 border bg-light p-3 text-center h-100 d-flex flex-column justify-content-center">
+                                                                <span class="text-uppercase small fw-semibold text-secondary" style="letter-spacing: .06em;">Saved base</span>
+                                                                <span class="display-6 fw-bold text-primary my-1 lh-1" id="meterReadingBaseSaved">{{ $baseReading !== null ? $baseReading : '—' }}</span>
+                                                                <span class="small text-secondary" id="meterReadingBaseSavedDate">
+                                                                    @if($baseReadingDate)
+                                                                        {{ \Carbon\Carbon::parse($baseReadingDate)->format('m/d/Y') }}
+                                                                    @else
+                                                                        No date set
+                                                                    @endif
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <hr class="my-3 text-secondary opacity-25">
+                                                    <div class="row g-3 align-items-end">
+                                                        <div class="col-sm-4 col-md-3">
+                                                            <label class="form-label small fw-semibold text-dark mb-1" for="meterReadingBaseValue">Base reading</label>
+                                                            <input type="number" min="0" step="1" class="form-control fw-bold" id="meterReadingBaseValue" value="{{ $baseReading !== null ? $baseReading : '' }}" placeholder="e.g. 1500" inputmode="numeric" {{ $baseDisabled }}>
+                                                        </div>
+                                                        <div class="col-sm-4 col-md-3">
+                                                            <label class="form-label small fw-semibold text-dark mb-1" for="meterReadingBaseDate">As of date</label>
+                                                            <input type="date" class="form-control" id="meterReadingBaseDate" value="{{ $baseReadingDate ?? '' }}" {{ $baseDisabled }}>
+                                                        </div>
+                                                        <div class="col-sm-4 col-md-6 d-flex flex-wrap align-items-end gap-2">
+                                                            <button type="button" class="btn btn-primary" id="meterReadingSaveBaseBtn" {{ $baseDisabled }}>
+                                                                <i class="fas fa-save me-1"></i>Save base reading
+                                                            </button>
+                                                            <span class="small fw-medium" id="meterReadingBaseStatus"></span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            @endif
                                         </div>
                                     </div>
                                 </div>
@@ -433,6 +492,18 @@
                     <input type="hidden" id="edit_consumer_id" name="consumer_id">
                     <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
                         <div class="row">
+                            <div class="col-12">
+                                <div class="mb-3">
+                                    <label for="edit_transaction_date" class="form-label fw-semibold">
+                                        <i class="fas fa-calendar-check me-1 text-primary"></i>Transaction Date
+                                    </label>
+                                    <input type="date" class="form-control" id="edit_transaction_date" name="transaction_date">
+                                    <small class="text-muted">Date this consumer transaction was filed.</small>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label for="edit_installation_date" class="form-label">Installation Date <span class="text-danger">*</span></label>
@@ -461,10 +532,10 @@
                                         <option value="Residential" data-code="12">Residential</option>
                                         <option value="Government" data-code="22">Government</option>
                                         <option value="Commercial/Industrial C" data-code="32">Commercial/Industrial C</option>
-                                        <option value="Commercial A" data-code="33">Commercial A</option>
-                                        <option value="Commercial B" data-code="34">Commercial B</option>
+                                        <option value="Commercial A" data-code="33" disabled>Commercial A</option>
+                                        <option value="Commercial B" data-code="34" disabled>Commercial B</option>
                                         <option value="Commercial D" data-code="35">Commercial D</option>
-                                        <option value="Whole Sale/Bulk" data-code="36">Whole Sale/Bulk</option>
+                                        <option value="Whole Sale/Bulk" data-code="36" disabled>Whole Sale/Bulk</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
@@ -600,10 +671,23 @@
                     @csrf
                     <div class="modal-body">
                         <div class="row">
+                            <div class="col-12">
+                                <div class="mb-3">
+                                    <label for="transaction_date" class="form-label fw-semibold">
+                                        <i class="fas fa-calendar-check me-1 text-primary"></i>Transaction Date <span class="text-danger">*</span>
+                                    </label>
+                                    <input type="date" class="form-control" id="transaction_date" name="transaction_date" required>
+                                    <small class="text-muted">Date this consumer transaction was filed.</small>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label for="installation_date" class="form-label">Installation Date <span class="text-danger">*</span></label>
                                     <input type="date" class="form-control" id="installation_date" name="installation_date" >
+                                    <small class="text-muted">Date that the consumer's water meter is installed.</small>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -628,10 +712,10 @@
                                         <option value="Residential" data-code="12">Residential</option>
                                         <option value="Government" data-code="22">Government</option>
                                         <option value="Commercial/Industrial C" data-code="32">Commercial/Industrial C</option>
-                                        <option value="Commercial A" data-code="33">Commercial A</option>
-                                        <option value="Commercial B" data-code="34">Commercial B</option>
+                                        <option value="Commercial A" data-code="33" disabled>Commercial A</option>
+                                        <option value="Commercial B" data-code="34" disabled>Commercial B</option>
                                         <option value="Commercial D" data-code="35">Commercial D</option>
-                                        <option value="Whole Sale/Bulk" data-code="36">Whole Sale/Bulk</option>
+                                        <option value="Whole Sale/Bulk" data-code="36" disabled>Whole Sale/Bulk</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
@@ -651,11 +735,11 @@
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label for="status" class="form-label">Status <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="status" name="status" required>
+                                    <label for="new_status" class="form-label">Status <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="new_status" name="status" required>
                                         <option value="">Select Status</option>
-                                        <option value="A" selected>A</option>
-                                        <option value="P">P</option>
+                                         <option value="P"selected>P</option>
+                                        <option value="A">A</option>
                                         <option value="X">X</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
@@ -842,6 +926,107 @@
                 });
             });
         }
+
+        // Save Base Reading (Meter Reading card → Base Reading section) - requires PIN
+        const meterReadingSaveBaseBtn = document.getElementById('meterReadingSaveBaseBtn');
+        if (meterReadingSaveBaseBtn) {
+            meterReadingSaveBaseBtn.addEventListener('click', function() {
+                const accountNoEl = document.getElementById('meterReadingAccountNo');
+                const baseInput = document.getElementById('meterReadingBaseValue');
+                const baseDateInput = document.getElementById('meterReadingBaseDate');
+                const statusEl = document.getElementById('meterReadingBaseStatus');
+                const savedEl = document.getElementById('meterReadingBaseSaved');
+                const blockEl = document.getElementById('meterReadingBaseBlock');
+
+                // Defense in depth: refuse to save when the block is locked
+                // (consumer already has Current/Previous reading history).
+                if (blockEl && blockEl.getAttribute('data-has-history') === '1') {
+                    if (statusEl) {
+                        statusEl.textContent = 'Locked — consumer already has reading history.';
+                        statusEl.classList.add('text-danger');
+                    }
+                    return;
+                }
+
+                // The Account # hidden input only renders when a schedule exists.
+                // Fall back to the globally-tracked currentConsumer for new consumers.
+                let accountNo = (accountNoEl && accountNoEl.value)
+                    ? accountNoEl.value
+                    : (currentConsumer && currentConsumer.account_no ? currentConsumer.account_no : '');
+                if (!accountNo) {
+                    if (statusEl) { statusEl.textContent = 'No consumer selected.'; statusEl.classList.add('text-danger'); }
+                    return;
+                }
+                if (!baseInput) return;
+                const baseValue = parseInt(baseInput.value, 10);
+                if (isNaN(baseValue) || baseValue < 0) {
+                    if (statusEl) { statusEl.textContent = 'Enter a valid number.'; statusEl.classList.add('text-danger'); }
+                    return;
+                }
+                const baseDate = (baseDateInput && baseDateInput.value) ? baseDateInput.value : null;
+
+                requestPinThenRun(function() {
+                    meterReadingSaveBaseBtn.disabled = true;
+                    if (statusEl) {
+                        statusEl.textContent = 'Saving...';
+                        statusEl.classList.remove('text-success', 'text-danger');
+                    }
+                    fetch('{{ route("consumer.update-base-reading") }}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]') ? document.querySelector('meta[name="csrf-token"]').getAttribute('content') : ''
+                        },
+                        body: JSON.stringify({
+                            account_no: accountNo,
+                            base_reading: baseValue,
+                            base_reading_date: baseDate
+                        })
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        meterReadingSaveBaseBtn.disabled = false;
+                        if (data.success) {
+                            if (statusEl) {
+                                statusEl.textContent = 'Saved.';
+                                statusEl.classList.remove('text-danger');
+                                statusEl.classList.add('text-success');
+                            }
+                            if (savedEl) {
+                                savedEl.textContent = String(data.base_reading);
+                            }
+                            var dateEl = document.getElementById('meterReadingBaseSavedDate');
+                            if (dateEl) {
+                                var dateStr = data.base_reading_date
+                                    ? (function () {
+                                        try {
+                                            var d = new Date(data.base_reading_date);
+                                            if (!isNaN(d.getTime())) {
+                                                var mm = String(d.getMonth() + 1).padStart(2, '0');
+                                                var dd = String(d.getDate()).padStart(2, '0');
+                                                return mm + '/' + dd + '/' + d.getFullYear();
+                                            }
+                                        } catch (e) {}
+                                        return '';
+                                    })()
+                                    : '';
+                                dateEl.textContent = dateStr || 'No date set';
+                            }
+                        } else if (statusEl) {
+                            statusEl.textContent = data.message || 'Save failed.';
+                            statusEl.classList.add('text-danger');
+                        }
+                    })
+                    .catch(function(err) {
+                        meterReadingSaveBaseBtn.disabled = false;
+                        if (statusEl) { statusEl.textContent = 'Request failed.'; statusEl.classList.add('text-danger'); }
+                        console.error(err);
+                    });
+                });
+            });
+        }
         // Auto-generate Account Number based on Zone, Day, and Card Number
         const categoryCodeLookup = {
             'residential': '12',
@@ -904,6 +1089,17 @@
             $('#newConsumerModal').data('cons-ctrl', consCtrl);
             $('#display_cons_ctrl').val(consCtrl);
             console.log('Generated cons_ctrl:', consCtrl);
+
+            // Default Transaction Date to today when empty so the user doesn't
+            // have to retype it on every new consumer.
+            const $txDate = $('#transaction_date');
+            if ($txDate.length && !$txDate.val()) {
+                const today = new Date();
+                const mm = String(today.getMonth() + 1).padStart(2, '0');
+                const dd = String(today.getDate()).padStart(2, '0');
+                $txDate.val(today.getFullYear() + '-' + mm + '-' + dd);
+            }
+            applyRateCodeRestrictions('#category', '#rate_code');
         });
 
         function generateAccountNumber() {
@@ -938,6 +1134,50 @@
             }
         }
 
+        const rateCodeDisableRulesByCategory = {
+            'RESIDENTIAL': ['B', 'C', 'D'],
+            'GOVERNMENT': ['A', 'C', 'D'],
+            'COMMERCIAL/INDUSTRIAL C': ['A', 'B'],
+            'COMMERCIAL D': ['A', 'B']
+        };
+
+        function applyRateCodeRestrictions(categorySelector, rateCodeSelector) {
+            const category = ($(categorySelector).val() || '').toString().trim().toUpperCase();
+            const disabledCodes = new Set(rateCodeDisableRulesByCategory[category] || []);
+            const $rateCode = $(rateCodeSelector);
+
+            if (!$rateCode.length) {
+                return;
+            }
+
+            let selectedOptionStillAllowed = false;
+
+            $rateCode.find('option').each(function() {
+                const $option = $(this);
+                const code = ($option.val() || '').toString().trim().toUpperCase();
+
+                if (!code) {
+                    $option.prop('disabled', false);
+                    return;
+                }
+
+                const shouldDisable = disabledCodes.has(code);
+                $option.prop('disabled', shouldDisable);
+
+                if ($option.is(':selected') && !shouldDisable) {
+                    selectedOptionStillAllowed = true;
+                }
+            });
+
+            if (!selectedOptionStillAllowed) {
+                const firstAllowed = $rateCode.find('option').filter(function() {
+                    const value = ($(this).val() || '').toString().trim();
+                    return value !== '' && !$(this).prop('disabled');
+                }).first().val() || '';
+                $rateCode.val(firstAllowed);
+            }
+        }
+
         function formatCurrency(value) {
             const amount = Number(value);
             if (!Number.isFinite(amount)) {
@@ -955,52 +1195,6 @@
                 return '0.0';
             }
             return amount.toFixed(1);
-        }
-
-        // Canonical installation date format across UI: YYYY-MM-DD
-        function normalizeDateToYmd(raw) {
-            if (!raw) return '';
-
-            if (raw instanceof Date) {
-                if (Number.isNaN(raw.getTime())) return '';
-                const y = raw.getFullYear();
-                const m = String(raw.getMonth() + 1).padStart(2, '0');
-                const d = String(raw.getDate()).padStart(2, '0');
-                return `${y}-${m}-${d}`;
-            }
-
-            const s = String(raw).trim();
-            if (!s) return '';
-
-            // Accept "YYYY-MM-DD", "YYYY-MM-DD HH:mm:ss", or ISO "YYYY-MM-DDTHH:mm:ssZ"
-            const ymdMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-            if (ymdMatch) {
-                return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
-            }
-
-            // Accept "MM/DD/YYYY"
-            const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-            if (mdyMatch) {
-                const month = String(mdyMatch[1]).padStart(2, '0');
-                const day = String(mdyMatch[2]).padStart(2, '0');
-                return `${mdyMatch[3]}-${month}-${day}`;
-            }
-
-            // Last fallback: parse date and read UTC parts to avoid timezone day shifts.
-            const parsed = new Date(s);
-            if (Number.isNaN(parsed.getTime())) {
-                return '';
-            }
-            const year = parsed.getUTCFullYear();
-            const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
-            const day = String(parsed.getUTCDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
-
-        function formatYmdToMdy(ymd) {
-            const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-            if (!m) return '';
-            return `${m[2]}/${m[3]}/${m[1]}`;
         }
 
         var SC_DISCOUNT_PERCENT = 'SC DISCOUNT';
@@ -1159,6 +1353,30 @@
                     return isNaN(dt.getTime()) ? '—' : (dt.getMonth() + 1).toString().padStart(2, '0') + '/' + dt.getDate().toString().padStart(2, '0') + '/' + dt.getFullYear();
                 } catch (e) { return '—'; }
             };
+            const toDateInputValue = function(d) {
+                if (!d) return '';
+                try {
+                    const dt = new Date(d);
+                    if (isNaN(dt.getTime())) return '';
+                    return dt.getFullYear() + '-'
+                        + String(dt.getMonth() + 1).padStart(2, '0') + '-'
+                        + String(dt.getDate()).padStart(2, '0');
+                } catch (e) { return ''; }
+            };
+
+            // Always reset Base Reading fields first so values from a previously
+            // viewed consumer NEVER leak into the currently selected one.
+            const $baseValue = $('#meterReadingBaseValue');
+            const $baseDate = $('#meterReadingBaseDate');
+            const $baseSaved = $('#meterReadingBaseSaved');
+            const $baseSavedDate = $('#meterReadingBaseSavedDate');
+            const $baseStatus = $('#meterReadingBaseStatus');
+            $baseValue.val('');
+            $baseDate.val('');
+            $baseSaved.text('—');
+            $baseSavedDate.text('No date set');
+            $baseStatus.text('').removeClass('text-success text-danger');
+
             if (!meterReading) {
                 $('#meterReadingCurrentDate').text('—');
                 $('#meterReadingCurrentValue').text('—');
@@ -1166,6 +1384,7 @@
                 $('#meterReadingPrevValue').val(0);
                 $('#meterReadingSaveStatus').text('');
                 $('.meter-reading-save-block').hide();
+                setBaseReadingLocked(false);
                 return;
             }
             $('#meterReadingCurrentDate').text(fmtDate(meterReading.current_reading_date));
@@ -1180,7 +1399,49 @@
                 $('.meter-reading-save-block').hide();
             }
             $('#meterReadingSaveStatus').text('');
+
+            // Repopulate Base Reading from the freshly fetched consumer
+            const hasBase = meterReading.base_reading !== null && meterReading.base_reading !== undefined && meterReading.base_reading !== '';
+            if (hasBase) {
+                $baseValue.val(meterReading.base_reading);
+                $baseSaved.text(meterReading.base_reading);
+            }
+            if (meterReading.base_reading_date) {
+                $baseDate.val(toDateInputValue(meterReading.base_reading_date));
+                $baseSavedDate.text(fmtDate(meterReading.base_reading_date));
+            }
+
+            // Lock the Base Reading editor when the consumer already has
+            // Current/Previous reading data so users can't conflict with
+            // existing billing history.
+            const prevNumeric = parseInt(meterReading.previous_reading, 10);
+            const hasHistory = !!meterReading.schedule_id
+                || !!meterReading.previous_reading_date
+                || !!meterReading.current_reading_date
+                || (meterReading.current_reading !== null
+                    && meterReading.current_reading !== undefined
+                    && meterReading.current_reading !== '')
+                || (!isNaN(prevNumeric) && prevNumeric > 0);
+            setBaseReadingLocked(hasHistory);
         }
+
+        function setBaseReadingLocked(locked) {
+            const $block = $('#meterReadingBaseBlock');
+            if ($block.length === 0) return;
+            $block.attr('data-has-history', locked ? '1' : '0');
+            $block.toggleClass('base-reading-locked', !!locked);
+            $('#meterReadingBaseValue').prop('disabled', !!locked);
+            $('#meterReadingBaseDate').prop('disabled', !!locked);
+            $('#meterReadingSaveBaseBtn').prop('disabled', !!locked);
+            $('#meterReadingBaseHistoryAlert').toggle(!!locked);
+            $('#meterReadingBaseLockedBadge').toggle(!!locked);
+            // If we just unlocked, also clear any stale "Saved." status text so
+            // the user starts fresh.
+            if (!locked) {
+                $('#meterReadingBaseStatus').text('').removeClass('text-success text-danger');
+            }
+        }
+        window.setBaseReadingLocked = setBaseReadingLocked;
         window.updateMeterReadingCard = updateMeterReadingCard;
         
         // Auto-generate Account Number for the EDIT modal when zone, category, or sequence changes
@@ -1205,15 +1466,22 @@
         $('#zone, #category, #card_number').on('change keyup input', function() {
             console.log('Zone, Category, or Card Number changed');
             generateAccountNumber();
+            if (this.id === 'category') {
+                applyRateCodeRestrictions('#category', '#rate_code');
+            }
         });
 
         // Trigger account number re-generation when zone, category, or sequence changes (Edit Consumer)
         $(document).on('change keyup input', '#edit_zone, #edit_category, #edit_card_number', function() {
             generateEditAccountNumber();
+            if (this.id === 'edit_category') {
+                applyRateCodeRestrictions('#edit_category', '#edit_rate_code');
+            }
         });
 
         // Run once in case fields already have values (e.g., form repopulation)
         generateAccountNumber();
+        applyRateCodeRestrictions('#category', '#rate_code');
         if (initialLatestBill) {
             updateLatestBillCard(initialLatestBill);
         } else {
@@ -1247,6 +1515,7 @@
         $('#newConsumerForm').on('submit', function(e) {
             e.preventDefault();
             console.log('Form submitted');
+            const $form = $(this);
             
             // Clear previous errors
             $('.is-invalid').removeClass('is-invalid');
@@ -1258,18 +1527,19 @@
             // Prepare data for consumer_zone table
             const consCtrl = $('#newConsumerModal').data('cons-ctrl') || generateConsCtrl();
             const formData = {
-                _token: $('input[name="_token"]').val(),
-                install_date: $('#installation_date').val(),
-                account_no: $('#account_no').val(),
-                account_name: $('#account_name').val(),
-                address1: $('#address1').val(),
-                zone_code: $('#zone').val(),
-                category_code: $('#category option:selected').data('code'),
-                meter_number: $('#meter_number').val(),
-                meter_brand: $('#meter_brand').val(),
-                rate_code: $('#rate_code').val(),
-                status_code: $('#status').val(),
-                sequence: $('#card_number').val(),
+                _token: $form.find('input[name="_token"]').val(),
+                transaction_date: $form.find('#transaction_date').val(),
+                install_date: $form.find('#installation_date').val(),
+                account_no: $form.find('#account_no').val(),
+                account_name: $form.find('#account_name').val(),
+                address1: $form.find('#address1').val(),
+                zone_code: $form.find('#zone').val(),
+                category_code: $form.find('#category option:selected').data('code'),
+                meter_number: $form.find('#meter_number').val(),
+                meter_brand: $form.find('#meter_brand').val(),
+                rate_code: $form.find('#rate_code').val(),
+                status_code: $form.find('#new_status').val(),
+                sequence: $form.find('#card_number').val(),
                 cons_ctrl: consCtrl, // Auto-generated control number
                 balance: 0.00,
                 consumer_deposit: 0.00,
@@ -1393,9 +1663,11 @@
             // Clear auto-generated fields
             $('#account_no').val('');
             $('#display_cons_ctrl').val('');
+            $('#transaction_date').val('');
             
             // Clear stored cons_ctrl
             $('#newConsumerModal').removeData('cons-ctrl');
+            applyRateCodeRestrictions('#category', '#rate_code');
             
             console.log('Form reset complete');
         }
@@ -1495,9 +1767,22 @@
             $('#editConsumerBtn').prop('disabled', false);
             $('#deleteConsumerBtn').prop('disabled', false);
             
-            // Canonical parse (YYYY-MM-DD) then display as MM/DD/YYYY
-            const installDateYmd = normalizeDateToYmd(consumer.install_date || consumer.installation_date || '');
-            const formattedDate = formatYmdToMdy(installDateYmd);
+            // Format the date - use install_date from consumer_zone table
+            let formattedDate = '';
+            if (consumer.install_date) {
+                let installDate = new Date(consumer.install_date);
+                formattedDate = (installDate.getMonth() + 1) + '/' + installDate.getDate() + '/' + installDate.getFullYear();
+            }
+
+            let formattedTransactionDate = '';
+            if (consumer.transaction_date) {
+                try {
+                    const txDate = new Date(consumer.transaction_date);
+                    if (!isNaN(txDate.getTime())) {
+                        formattedTransactionDate = (txDate.getMonth() + 1) + '/' + txDate.getDate() + '/' + txDate.getFullYear();
+                    }
+                } catch (e) { /* keep empty */ }
+            }
 
             // Update the header dynamically
             updateConsumerHeader(consumer);
@@ -1526,6 +1811,15 @@
             // Update the consumer information card with the new data from consumer_zone table
             const html = `
                 <div class="p-3">
+                <div class="row g-3 mb-2">
+                    <div class="col-12">
+                        <label class="form-label fw-semibold text-primary mb-1">
+                            <i class="fas fa-calendar-check me-1"></i>Transaction Date
+                        </label>
+                        <input type="text" class="form-control form-control-sm" id="transactionDateDisplay"
+                            value="${formattedTransactionDate}" readonly>
+                    </div>
+                </div>
                 <div class="row g-3">
                     <div class="col-md-6">
                         <div class="consumer-info-panel">
@@ -1577,7 +1871,7 @@
                         <div class="consumer-info-panel">
                         <div class="mb-3">
                             <label class="form-label">Status</label>
-                            <input type="text" class="form-control form-control-sm" id="status"
+                            <input type="text" class="form-control form-control-sm" id="consumerStatusDisplay"
                                 value="${consumer.status_label || consumer.status_code || ''}" readonly>
                         </div>
                         <div class="mb-3">
@@ -1680,6 +1974,52 @@
         //     console.log('Consumer saved to sessionStorage');
         // }
          // Update consumer header dynamically
+         
+            function formatDisconnectedAtHuman(iso) {
+            if (!iso) return '';
+            try {
+                var d = new Date(iso);
+                if (isNaN(d.getTime())) return '';
+                var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                var h = d.getHours();
+                var m = d.getMinutes();
+                var am = h >= 12 ? 'PM' : 'AM';
+                h = h % 12;
+                if (h === 0) h = 12;
+                var mm = m < 10 ? '0' + m : m;
+                return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ' ' + h + ':' + mm + ' ' + am;
+            } catch (e) { return ''; }
+        }
+
+        function syncDisconnectedNotice(consumer) {
+            var wrap = document.getElementById('consumerHeaderInfo');
+            if (!wrap) return;
+            var code = String(consumer.status_code || '').trim().toUpperCase();
+            var label = String(consumer.status_label || '').trim();
+            var isDisc = ['X', 'D', 'DISCONNECTED'].indexOf(code) !== -1 || label === 'Disconnected';
+            var el = document.getElementById('consumerDisconnectedNotice');
+            if (!isDisc) {
+                if (el) el.remove();
+                return;
+            }
+            var iso = consumer.latest_disconnected_at || consumer.latestDisconnectedAt;
+            var msg;
+            if (iso) {
+                var human = formatDisconnectedAtHuman(iso);
+                msg = 'This consumer was Disconnected at ' + (human || iso) + '.';
+            } else {
+                msg = 'This consumer was Disconnected; no disconnect timestamp was recorded in disconnection orders.';
+            }
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'consumerDisconnectedNotice';
+                el.className = 'mt-2 p-2 rounded bg-white text-danger small w-100 text-start shadow-sm';
+                el.setAttribute('role', 'status');
+                wrap.appendChild(el);
+            }
+            el.innerHTML = '<i class="fas fa-unlink mr-1" aria-hidden="true"></i>' + msg;
+        }
+
         function updateConsumerHeader(consumer) {
             // Use account_name from consumer_zone table
             let fullName = consumer.account_name || '';
@@ -1723,7 +2063,8 @@
                     headerStatus.classList.add('bg-secondary');
                 }
             }
-
+           
+               syncDisconnectedNotice(consumer);
             // Store consumer in sessionStorage for other tabs
             sessionStorage.setItem('currentConsumer', JSON.stringify(consumer));
 
@@ -1763,37 +2104,34 @@
             }
 
             requestPinThenRun(function() {
-                // Populate edit modal using currently displayed Consumer Information first,
-                // then fall back to currentConsumer payload when needed.
-                const $info = $('#consumerInfoCard');
+                // Populate edit modal with current consumer data from consumer_zone table
                 $('#edit_consumer_id').val(currentConsumer.id);
+                
+                if (currentConsumer.transaction_date) {
+                    try {
+                        const txDate = new Date(currentConsumer.transaction_date);
+                        if (!isNaN(txDate.getTime())) {
+                            $('#edit_transaction_date').val(txDate.toISOString().split('T')[0]);
+                        } else {
+                            $('#edit_transaction_date').val('');
+                        }
+                    } catch (e) { $('#edit_transaction_date').val(''); }
+                } else {
+                    $('#edit_transaction_date').val('');
+                }
 
-                const cardInstallDate = ($info.find('#installationDate').val() || '').trim();
-                const installDateValue = cardInstallDate || currentConsumer.install_date || currentConsumer.installation_date || '';
-                const formattedDate = normalizeDateToYmd(installDateValue);
-                $('#edit_installation_date').val(formattedDate);
-
-                const cardAccountNo = ($info.find('#accountNumber').val() || '').trim();
-                const cardMeterNo = ($info.find('#meterNumber').val() || '').trim();
-                const cardAddress = ($info.find('#address').val() || '').trim();
-                const cardCategoryCode = ($info.find('#displayCategory').val() || '').trim();
-                const cardStatusText = ($info.find('#status').val() || '').trim();
-                const cardAccountName = ($info.find('#accountName').val() || '').trim();
-                const cardMeterBrand = ($info.find('#meterBrand').val() || '').trim();
-                const cardZoneCode = ($info.find('#displayZone').val() || '').replace(/^Zone\s+/i, '').trim();
-                const cardSequence = ($info.find('#sequence').val() || '').trim();
-                const cardRateCode = ($info.find('#rateCode').val() || '').trim();
-                const cardControlNo = ($info.find('#displayCardNumber').val() || '').trim();
-                const cardBillDiscPercent = ($info.find('#billDiscPercent').val() || '').trim();
-                const cardBillDiscAmount = ($info.find('#billDiscAmount').val() || '').trim();
-                const cardOscaId = ($info.find('#oscaIdNumber').val() || '').trim();
-                const cardRemark = ($info.find('#remark').val() || '').trim();
-
-                $('#edit_account_no').val(cardAccountNo || currentConsumer.account_no || '');
-                $('#edit_meter_number').val(cardMeterNo || currentConsumer.meter_number || '');
-                $('#edit_address').val(cardAddress || currentConsumer.address1 || '');
-
-                const categoryCode = cardCategoryCode || currentConsumer.category_code;
+                if (currentConsumer.install_date) {
+                    const date = new Date(currentConsumer.install_date);
+                    const formattedDate = date.toISOString().split('T')[0];
+                    $('#edit_installation_date').val(formattedDate);
+                }
+                
+                $('#edit_account_no').val(currentConsumer.account_no || '');
+                $('#edit_meter_number').val(currentConsumer.meter_number || '');
+                $('#edit_address').val(currentConsumer.address1 || '');
+                
+                $('#edit_category').val('');
+                const categoryCode = currentConsumer.category_code;
                 if (categoryCode) {
                     $('#edit_category option').each(function() {
                         if ($(this).data('code') == categoryCode) {
@@ -1803,44 +2141,29 @@
                     });
                 }
                 
-                const rawStatusCode = String(currentConsumer.status_code || '').trim().toUpperCase();
-                const rawStatusLabel = String(cardStatusText || currentConsumer.status_label || currentConsumer.status || '').trim().toUpperCase();
-                let editStatusCode = 'A';
-                if (rawStatusCode === 'A' || rawStatusCode === 'ACTIVE') {
-                    editStatusCode = 'A';
-                } else if (rawStatusCode === 'P' || rawStatusCode === 'PENDING') {
-                    editStatusCode = 'P';
-                } else if (rawStatusCode === 'X' || rawStatusCode === 'D' || rawStatusCode === 'DISCONNECTED') {
-                    editStatusCode = 'X';
-                } else if (rawStatusLabel === 'ACTIVE') {
-                    editStatusCode = 'A';
-                } else if (rawStatusLabel === 'PENDING') {
-                    editStatusCode = 'P';
-                } else if (rawStatusLabel === 'DISCONNECTED') {
-                    editStatusCode = 'X';
-                }
-                $('#edit_status').val(editStatusCode);
-                $('#edit_rate_code').val(cardRateCode || currentConsumer.rate_code || 'A');
-                $('#edit_account_name').val(cardAccountName || currentConsumer.account_name || '');
+                $('#edit_status').val(currentConsumer.status_code || 'A');
+                $('#edit_rate_code').val(currentConsumer.rate_code || 'A');
+                applyRateCodeRestrictions('#edit_category', '#edit_rate_code');
+                $('#edit_account_name').val(currentConsumer.account_name || '');
                 
                 $('#edit_contact_number').val('');
-                $('#edit_meter_brand').val(cardMeterBrand || currentConsumer.meter_brand || '');
-                $('#edit_zone').val(cardZoneCode || currentConsumer.zone_code || '');
-                $('#edit_card_number').val(cardSequence || currentConsumer.sequence || '');
-                $('#edit_cons_ctrl').val(cardControlNo || currentConsumer.cons_ctrl || '');
-                const edRaw = String(cardBillDiscPercent || (currentConsumer.bill_disc_percent ?? '')).trim();
+                $('#edit_meter_brand').val(currentConsumer.meter_brand || '');
+                $('#edit_zone').val(currentConsumer.zone_code || '');
+                $('#edit_card_number').val(currentConsumer.sequence || '');
+                $('#edit_cons_ctrl').val(currentConsumer.cons_ctrl || '');
+                const edRaw = String(currentConsumer.bill_disc_percent ?? '').trim();
                 const edNum = parseFloat(edRaw);
                 const edIsSc = edRaw.toUpperCase() === 'SC DISCOUNT'
                     || (Number.isFinite(edNum) && Math.abs(edNum - 5) < 0.001);
                 $('#edit_bill_disc_percent').val(edIsSc ? 'SC DISCOUNT' : '');
                 $('#edit_bill_disc_amount').val(edIsSc ? Number(SC_DISCOUNT_AMOUNT).toFixed(1) : (function() {
-                    const a = cardBillDiscAmount || currentConsumer.bill_disc_amount;
+                    const a = currentConsumer.bill_disc_amount;
                     if (a === undefined || a === null || a === '') return '';
                     const n = parseFloat(a);
                     return Number.isFinite(n) ? n.toFixed(1) : '';
                 })());
-                $('#edit_osca_id_no').val(cardOscaId || currentConsumer.osca_id_no || currentConsumer.osca_id || '');
-                $('#edit_remark').val(cardRemark || currentConsumer.remark || currentConsumer.remarks || '');
+                $('#edit_osca_id_no').val(currentConsumer.osca_id_no || currentConsumer.osca_id || '');
+                $('#edit_remark').val(currentConsumer.remark || currentConsumer.remarks || '');
 
                 $('#edit_bill_disc_last_updated_display').text(
                     formatBillDiscUpdatedAtDisplay(currentConsumer.bill_disc_updated_at)
@@ -1900,6 +2223,7 @@
             const updateData = {
                 _token: $('input[name="_token"]').val(),
                 _method: 'PUT',
+                transaction_date: $('#edit_transaction_date').val(),
                 install_date: $('#edit_installation_date').val(),
                 account_no: $('#edit_account_no').val(),
                 account_name: $('#edit_account_name').val(),

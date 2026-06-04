@@ -66,11 +66,12 @@ class ApiReaderAuth
                 ], 401);
             }
 
-            // Verify user is a reader
-            if (strtolower($user->role) !== 'reader') {
+           // Readers and disconnectors use the same mobile login; both need consumer zone/coordinates.
+            $role = strtolower((string) ($user->role ?? ''));
+            if ($role !== 'reader' && $role !== 'disconnector') {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Access denied. Only readers can access this resource.'
+                     'message' => 'Access denied. Only readers and disconnectors can access this resource.'
                 ], 403);
             }
 

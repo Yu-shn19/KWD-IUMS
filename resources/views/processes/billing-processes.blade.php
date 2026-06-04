@@ -334,7 +334,7 @@
                                                     <tr class="text-center border-bottom">
                                                         <th id="thIncludeSurcharge" class="py-3 px-3 font-weight-bold text-dark align-middle" style="min-width: 50px; display: none;">Include</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 70px;">SEDR</th>
-                                                        <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px;">Account #</th>
+                                                        <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 200px;">Account #</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark text-left" style="min-width: 180px;">Account Name</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark text-left" style="min-width: 200px;">Address</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 70px;">Zone</th>
@@ -793,6 +793,33 @@
             let currentSurchargeData = [];
             let currentDataType = ''; // 'surcharge' | 'downloaded' | 'prepared' | ''
 
+            /** Ascending sort by the segment after the last "-" in Account # (e.g. 081-32-625 → 625); used for Meter Reading Preparation + search */
+            function sortRowsByAccountNumber(rows) {
+                if (!Array.isArray(rows)) return [];
+                const tailAfterLastHyphen = (accountNumber) => {
+                    const s = (accountNumber || '').toString().trim();
+                    const i = s.lastIndexOf('-');
+                    return i === -1 ? s : s.slice(i + 1).trim();
+                };
+                const tailNumeric = (accountNumber) => {
+                    const tail = tailAfterLastHyphen(accountNumber);
+                    const n = parseInt(tail, 10);
+                    return Number.isNaN(n) ? null : n;
+                };
+                return [...rows].sort((a, b) => {
+                    const na = tailNumeric(a.account_number);
+                    const nb = tailNumeric(b.account_number);
+                    if (na !== null && nb !== null && na !== nb) return na - nb;
+                    if (na !== null && nb === null) return -1;
+                    if (na === null && nb !== null) return 1;
+                    const ta = tailAfterLastHyphen(a.account_number);
+                    const tb = tailAfterLastHyphen(b.account_number);
+                    let c = ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
+                    if (c !== 0) return c;
+                    return (a.account_number || '').toString().localeCompare((b.account_number || '').toString(), undefined, { numeric: true, sensitivity: 'base' });
+                });
+            }
+
             // Quick lookup elements
             const quickLookupEndpoint = @json(route('billing-processes.account-lookup'));
             const quickLookupForm = document.getElementById('quickLookupForm');
@@ -902,17 +929,18 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        // Store prepared schedules for later saving
-                        preparedSchedules = data.data;
+                        const rows = sortRowsByAccountNumber(data.data);
+                        // Store prepared schedules for later saving (same order as table rows / data-index)
+                        preparedSchedules = rows;
                         canSaveSchedules = data.can_save;
                         
                         // Store data for printing
-                        currentBillingData = data.data;
+                        currentBillingData = rows;
                         currentBillingZone = data.summary.zone;
                         currentBillingMonth = data.summary.bill_month;
                         
                         showAlert('success', data.message);
-                        populateTable(data.data);
+                        populateTable(rows);
                         updateFooter(data.summary);
                         
                         // Show/hide Save button based on whether schedules already exist
@@ -986,14 +1014,15 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        preparedSchedules = data.data;
+                        const rows = sortRowsByAccountNumber(data.data);
+                        preparedSchedules = rows;
                         canSaveSchedules = data.can_save;
-                        currentBillingData = data.data;
+                        currentBillingData = rows;
                         currentBillingZone = data.summary.zone;
                         currentBillingMonth = data.summary.bill_month;
                         isSingleConsumerPreparation = true;
                         showAlert('success', data.message);
-                        populateTable(data.data);
+                        populateTable(rows);
                         updateFooter(data.summary);
                         const saveBtn = document.getElementById('saveSchedulesBtn');
                         if (canSaveSchedules && preparedSchedules.length > 0) {
@@ -1067,14 +1096,15 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        preparedSchedules = data.data;
+                        const rows = sortRowsByAccountNumber(data.data);
+                        preparedSchedules = rows;
                         canSaveSchedules = data.can_save;
-                        currentBillingData = data.data;
+                        currentBillingData = rows;
                         currentBillingZone = data.summary.zone;
                         currentBillingMonth = data.summary.bill_month;
                         isMultipleConsumerPreparation = true;
                         showAlert('success', data.message);
-                        populateTable(data.data);
+                        populateTable(rows);
                         updateFooter(data.summary);
                         const saveBtn = document.getElementById('saveSchedulesBtn');
                         if (canSaveSchedules && preparedSchedules.length > 0) {
@@ -1381,7 +1411,7 @@
                         <td class="text-right py-3 px-3 ${(record.arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.arrears || 0)}</td>
                         <td class="text-right py-3 px-3 text-danger">
                             <span class="font-weight-bold">₱ ${formatNumber(record.calculated_penalty || 0)}</span>
-                            <br><small class="text-muted" style="font-size: 10px;">Base: ₱${formatNumber(record.penalty_base || 0)}</small>
+                            <br><small class="text-muted" style="font-size: 10px;">Base: ₱${formatNumber(record.penalty_base || 0)} (ledger ₱${formatNumber(record.ledger_remaining != null ? record.ledger_remaining : record.penalty_base || 0)})</small>
                         </td>
                         <td class="text-right py-3 px-3"><span class="font-weight-bold ${(record.total || 0) > 0 ? 'text-success' : 'text-muted'}">₱ ${formatNumber(record.total || 0)}</span></td>
                         <td class="text-center py-3 px-3"><span class="badge badge-danger px-3 py-1">${record.status || 'Past Due'}</span></td>
@@ -1511,10 +1541,11 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            populateTable(data.data);
+                            const rows = sortRowsByAccountNumber(data.data);
+                            populateTable(rows);
                             
                             // Store data for printing
-                            currentBillingData = data.data;
+                            currentBillingData = rows;
                             currentBillingZone = zone || 'All Zones';
                             currentBillingMonth = 'Search Results';
                             
@@ -1743,6 +1774,8 @@
 
             function exportExcel() {
                 const zone = document.getElementById('zoneSelect').value;
+                const processType = document.getElementById('processSelect')?.value || '';
+                const readingDate = document.getElementById('readingDateInput')?.value || '';
                 
                 showAlert('info', 'Exporting data to EXCEL...');
 
@@ -1754,7 +1787,9 @@
                     },
                     body: JSON.stringify({
                         format: 'excel',
-                        zone: zone
+                        zone: zone,
+                        process_type: processType,
+                        reading_date: readingDate
                     })
                 })
                 .then(response => {
@@ -2589,14 +2624,11 @@
                     return raw || 'UNKNOWN';
                 };
 
-                const isBillPrinting = (currentDataType === 'downloaded');
                 currentBillingData.forEach(record => {
                     const category = resolveCategoryCode(record);
                     const volume = parseFloat(record.volume ?? record.consumption ?? 0) || 0;
                     const currentBill = parseFloat(record.current_bill ?? record.total ?? 0) || 0;
-                    const amount = isBillPrinting
-                        ? currentBill + (currentBill > 0 ? 20.00 : 0.00)
-                        : currentBill;
+                    const amount = currentBill;
 
                     if (!categoryData[category]) {
                         categoryData[category] = {

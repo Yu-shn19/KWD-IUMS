@@ -6,7 +6,7 @@
     /* Embed mode: show only the Account Ledger table (no sidebar, header, tabs, or summary card) */
     body.ledger-embed #wrapper .sidebar,
     body.ledger-embed #content > div:not(#container-wrapper),
-    body.ledger-embed #container-wrapper > .card.shadow.mb-3,
+    body.ledger-embed #container-wrapper > .ledger-filter-card,
     body.ledger-embed .scroll-to-top { display: none !important; }
     body.ledger-embed #content-wrapper { margin-left: 0 !important; }
     body.ledger-embed #container-wrapper { padding-top: 0.5rem !important; }
@@ -30,60 +30,60 @@
                 <!-- Container Fluid-->
                 <div class="container-fluid" id="container-wrapper">
                     <!-- Filter and Summary Row -->
-                    <div class="card shadow mb-3">
-                        <div class="card-body py-2">
-                            <div class="row align-items-center">
+                    <div class="card shadow mb-3 ledger-filter-card">
+                        <div class="card-body py-2 py-md-3">
+                            <div class="row align-items-start align-items-md-end">
                                 <!-- Year Filter -->
-                                <div class="col-md-2">
-                                    <label class="small font-weight-bold mb-1">YEAR (leave blank for all)</label>
-                                    <input type="text" class="form-control form-control-sm" id="ledgerYear" placeholder="e.g., 2025">
-    </div>
+                                <div class="col-12 col-md-4 col-lg-2 mb-3 mb-lg-0">
+                                    <label class="small font-weight-bold mb-1 d-block">YEAR <span class="d-none d-sm-inline">(leave blank for all)</span><span class="d-sm-none text-muted font-weight-normal">(blank = all)</span></label>
+                                    <input type="text" class="form-control form-control-sm" id="ledgerYear" placeholder="e.g., 2025" inputmode="numeric" autocomplete="off">
+                                </div>
 
                                 <!-- Financial Summary -->
-                                <div class="col-md-10">
+                                <div class="col-12 col-md-8 col-lg-10">
                                     <div class="row">
-                                        <div class="col-md-2">
+                                        <div class="col-6 col-sm-6 col-md-3 col-lg-2 mb-2 mb-lg-0">
                                             <label class="small font-weight-bold mb-1">TOTAL BILL</label>
-                                            <input type="text" class="form-control form-control-sm text-right" id="totalBill" value="0.00" readonly>
+                                            <input type="text" class="form-control form-control-sm text-right ledger-stat-input" id="totalBill" value="0.00" readonly>
                                         </div>
-                                        <div class="col-md-2">
+                                        <div class="col-6 col-sm-6 col-md-3 col-lg-2 mb-2 mb-lg-0">
                                             <label class="small font-weight-bold mb-1">LATEST BILL</label>
-                                            <input type="text" class="form-control form-control-sm text-right font-weight-bold" id="latestBillAmount" value="0.00" readonly>
+                                            <input type="text" class="form-control form-control-sm text-right font-weight-bold ledger-stat-input" id="latestBillAmount" value="0.00" readonly>
                                         </div>
-                                        <div class="col-md-2">
+                                        <div class="col-6 col-sm-6 col-md-3 col-lg-2 mb-2 mb-lg-0">
                                             <label class="small font-weight-bold mb-1">LOANS</label>
-                                            <input type="text" class="form-control form-control-sm text-right" id="totalLoans" value="0.00" readonly>
+                                            <input type="text" class="form-control form-control-sm text-right ledger-stat-input" id="totalLoans" value="0.00" readonly>
                                         </div>
-                                        <div class="col-md-2">
+                                        <div class="col-6 col-sm-6 col-md-3 col-lg-2 mb-2 mb-lg-0">
                                             <label class="small font-weight-bold mb-1">BALANCE</label>
-                                            <input type="text" class="form-control form-control-sm text-right font-weight-bold text-danger" id="currentBalance" value="0.00" readonly>
+                                            <input type="text" class="form-control form-control-sm text-right font-weight-bold text-danger ledger-stat-input" id="currentBalance" value="0.00" readonly>
                                         </div>
-                                        <div class="col-md-4 d-flex align-items-end">
-                                            <button class="btn btn-primary btn-sm mr-2" id="printLedgerBtn">
+                                        <div class="col-12 col-lg-4 mt-1 mt-lg-0 d-flex align-items-end flex-wrap ledger-filter-actions">
+                                            <button type="button" class="btn btn-primary btn-sm mr-2 mb-2 mb-sm-0" id="printLedgerBtn">
                                                 <i class="fas fa-print mr-1"></i>Print
-      </button>
-                                            <button class="btn btn-secondary btn-sm" id="refreshLedgerBtn">
+                                            </button>
+                                            <button type="button" class="btn btn-secondary btn-sm mb-2 mb-sm-0" id="refreshLedgerBtn">
                                                 <i class="fas fa-sync-alt mr-1"></i>Refresh
-      </button>
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-    </div>
-  </div>
+                        </div>
+                    </div>
    
   <!-- Account Ledger Table -->
                     <div id="ledgerCard" class="card shadow mb-4">
-                        <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                            <h6 class="m-0 font-weight-bold text-primary">Account Ledger - F10</h6>
-                            <div class="d-flex align-items-center">
-                                <span class="badge badge-secondary mr-2 d-none" id="ledgerConsumerStatus">N/A Consumer</span>
-                                <span class="badge badge-primary" id="ledgerAccountBadge">No Account Selected</span>
+                        <div class="card-header py-3 d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between ledger-card-header">
+                            <h6 class="m-0 font-weight-bold text-primary mb-2 mb-md-0 pr-md-2">Account Ledger - F10</h6>
+                            <div class="d-flex align-items-center flex-wrap justify-content-start justify-content-md-end ledger-header-badges">
+                                <span class="badge badge-secondary mr-2 mb-1 mb-md-0 d-none" id="ledgerConsumerStatus">N/A Consumer</span>
+                                <span class="badge badge-primary text-left text-break ledger-account-badge" id="ledgerAccountBadge">No Account Selected</span>
                             </div>
                         </div>
                         <div class="card-body p-0">
-                            <div id="ledgerTableScroll" class="table-responsive" style="max-height: 600px; overflow-y: auto;">
-                                <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 11px;">
+                            <div id="ledgerTableScroll" class="table-responsive ledger-table-scroll">
+                                <table class="table table-sm table-bordered table-hover mb-0 ledger-onscreen-table">
                                     <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                         <tr>
                                             <th class="text-center py-2 px-2" style="min-width: 90px;">TRANS</th>
@@ -113,19 +113,20 @@
     </table>
                             </div>
                         </div>
-                        <div class="card-footer bg-light py-2">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <small class="text-muted">
+                        <div class="card-footer bg-light py-2 py-md-2 ledger-card-footer">
+                            <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center">
+                                <small class="text-muted mb-2 mb-md-0">
                                     <i class="fas fa-info-circle mr-1"></i>
                                     Account Ledger for Year <span id="ledgerYearDisplay">{{ date('Y') }}</span>
                                 </small>
-                                <small class="text-muted">
-                                    Total Transactions: <span class="font-weight-bold text-primary" id="totalTransactions">0</span> | 
-                                    Current Balance: <span class="font-weight-bold text-danger" id="footerBalance">₱ 0.00</span>
+                                <small class="text-muted text-left text-md-right ledger-footer-stats">
+                                    <span class="d-inline-block">Total Transactions: <span class="font-weight-bold text-primary" id="totalTransactions">0</span></span>
+                                    <span class="d-none d-md-inline mx-1">|</span>
+                                    <span class="d-block d-md-inline mt-1 mt-md-0">Current Balance: <span class="font-weight-bold text-danger" id="footerBalance">₱ 0.00</span></span>
                                 </small>
                             </div>
-  </div>
-</div>
+                        </div>
+                    </div>
 
                 </div>
                 <!---Container Fluid-->
@@ -217,6 +218,72 @@
         }
         .bg-penalty {
             background-color: #fff3cd !important; /* Light yellow/warning color for penalties */
+        }
+
+        /* Mobile / small screens: ledger filters, wide table, badges */
+        .ledger-table-scroll {
+            max-height: 600px;
+            overflow-y: auto;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .ledger-onscreen-table {
+            font-size: 11px;
+        }
+        .ledger-onscreen-table thead th {
+            vertical-align: middle;
+        }
+        .ledger-stat-input {
+            font-variant-numeric: tabular-nums;
+        }
+        .ledger-header-badges {
+            width: 100%;
+            max-width: 100%;
+        }
+        .ledger-account-badge {
+            white-space: normal;
+            word-break: break-word;
+            line-height: 1.35;
+            max-width: 100%;
+        }
+        @media (min-width: 768px) {
+            .ledger-header-badges {
+                width: auto;
+                max-width: 72%;
+                justify-content: flex-end;
+            }
+            .ledger-footer-stats {
+                text-align: right;
+                width: auto;
+            }
+        }
+        @media (max-width: 767.98px) {
+            #container-wrapper {
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
+            }
+            .ledger-filter-actions {
+                justify-content: flex-start;
+            }
+            .ledger-table-scroll {
+                max-height: calc(100vh - 15rem);
+            }
+            .ledger-onscreen-table {
+                font-size: 10px;
+            }
+            .ledger-onscreen-table th,
+            .ledger-onscreen-table td {
+                padding-left: 0.35rem !important;
+                padding-right: 0.35rem !important;
+            }
+            .ledger-footer-stats {
+                width: 100%;
+            }
+        }
+        @media (max-width: 575.98px) {
+            .ledger-table-scroll {
+                max-height: calc(100vh - 13.5rem);
+            }
         }
 
         /* Official ledger print (screen: hidden) — larger type, A4-safe */
@@ -694,7 +761,7 @@
                                 <td class="text-center py-1 px-2">${trans}</td>
                                 <td class="text-center py-1 px-2">${date}</td>
                                 <td class="text-center py-1 px-2">${dueDate}</td>
-                                <td class="text-center py-1 px-2">${reference}</td>
+                                <td class="text-center py-1 px-2 text-break">${reference}</td>
                                 <td class="text-center py-1 px-2">${reading}</td>
                                 <td class="text-center py-1 px-2">${volume}</td>
                                 <td class="text-right py-1 px-2">${billAmount > 0 ? formatCurrency(billAmount) : ''}</td>

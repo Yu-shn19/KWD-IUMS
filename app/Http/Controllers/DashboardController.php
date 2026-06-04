@@ -73,27 +73,30 @@ class DashboardController extends Controller
                 ->sum(DB::raw('COALESCE(consumption, 0)'));
         });
 
-        // Get billing status from downloaded_readings and check for overdue based on meter_reading_schedules
-        $billingStatusQuery = DB::table('downloaded_readings as dr')
-            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
-            ->select(
-                DB::raw("
-                    CASE 
-                        WHEN cp.paid_at IS NOT NULL THEN 'paid'
-                        WHEN mrs.due_date IS NOT NULL AND mrs.due_date < NOW() AND cp.paid_at IS NULL THEN 'overdue'
-                        ELSE LOWER(COALESCE(dr.status, 'pending'))
-                    END as billing_status
-                ")
-            )
-            ->get()
-            ->groupBy('billing_status')
-            ->map(fn($group) => $group->count());
+        // Monthly billing status: Paid vs Unpaid (for readings billed within the selected month).
+        $monthlyBilledReadings = DB::table('downloaded_readings as dr')
+            ->whereBetween('dr.reading_date', [$currentMonthStart->toDateString(), $currentMonthEnd->toDateString()])
+            ->whereNotNull('dr.account_number')
+            ->where('dr.account_number', '!=', '')
+            ->count('dr.id');
+
+        $paidMonthlyBilledReadings = DB::table('downloaded_readings as dr')
+            ->whereBetween('dr.reading_date', [$currentMonthStart->toDateString(), $currentMonthEnd->toDateString()])
+            ->whereNotNull('dr.account_number')
+            ->where('dr.account_number', '!=', '')
+            ->whereExists(function ($query) {
+                $query->select(DB::raw(1))
+                    ->from('consumer_payments as cp')
+                    ->whereColumn('cp.reading_id', 'dr.id')
+                    ->whereNotNull('cp.paid_at');
+            })
+            ->count('dr.id');
+
+        $unpaidMonthlyBilledReadings = max(0, $monthlyBilledReadings - $paidMonthlyBilledReadings);
 
         $billingStatus = [
-            'paid' => (int) ($billingStatusQuery['paid'] ?? 0),
-            'pending' => (int) ($billingStatusQuery['pending'] ?? $billingStatusQuery['downloaded'] ?? 0),
-            'overdue' => (int) ($billingStatusQuery['overdue'] ?? 0),
+            'paid' => (int) $paidMonthlyBilledReadings,
+            'unpaid' => (int) $unpaidMonthlyBilledReadings,
         ];
 
         $recentMessages = DB::table('downloaded_readings as dr')
@@ -179,8 +182,10 @@ class DashboardController extends Controller
                 'data' => $consumptionData,
             ],
             'billing_status' => [
-                'labels' => ['Paid', 'Pending', 'Overdue'],
+                'labels' => ['Paid', 'Unpaid'],
                 'data' => array_values($billingStatus),
+                'total' => (int) $monthlyBilledReadings,
+                'period' => $currentMonthStart->format('F Y'),
             ],
         ];
 

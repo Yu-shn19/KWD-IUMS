@@ -9,8 +9,10 @@
     ];
 
     $billingChart = [
-        'labels' => $charts['billing_status']['labels'] ?? ['Paid', 'Pending', 'Overdue'],
-        'data' => $charts['billing_status']['data'] ?? [0, 0, 0],
+        'labels' => $charts['billing_status']['labels'] ?? ['Paid', 'Unpaid'],
+        'data' => $charts['billing_status']['data'] ?? [0, 0],
+        'total' => (int) ($charts['billing_status']['total'] ?? 0),
+        'period' => $charts['billing_status']['period'] ?? now()->format('F Y'),
     ];
 @endphp
 
@@ -406,7 +408,9 @@
             <div class="panel-header">
                 <div>
                     <h6 class="panel-title">Billing Status</h6>
-                    <div style="color:var(--muted); font-size:.82rem;">Click legend to toggle slices</div>
+                    <div style="color:var(--muted); font-size:.82rem;">
+                        As of {{ $billingChart['period'] }}: {{ number_format($billingChart['total']) }} billed accounts
+                    </div>
                 </div>
                 <div class="panel-actions">
                     <button class="btn btn-sm" type="button" onclick="animateBilling()">Animate</button>
@@ -420,8 +424,12 @@
                 <div class="mt-3 text-center small">
                     @foreach ($billingChart['labels'] as $index => $label)
                         @php
-                            $colors = ['text-success', 'text-warning', 'text-danger'];
-                            $colorClass = $colors[$index % count($colors)];
+                            $normalizedLabel = strtolower(trim((string) $label));
+                            $colorClass = match ($normalizedLabel) {
+                                'paid' => 'text-success',
+                                'unpaid', 'overdue' => 'text-danger',
+                                default => 'text-warning',
+                            };
                         @endphp
                         <span class="mr-3">
                             <i class="fas fa-circle {{ $colorClass }}"></i> {{ $label }}
@@ -491,6 +499,16 @@
 <script>
     const consumptionConfig = @json($consumptionChart);
     const billingConfig = @json($billingChart);
+    const billingColorByLabel = {
+        paid: '#22c55e',
+        pending: '#f59e0b',
+        unpaid: '#ef4444',
+        overdue: '#ef4444'
+    };
+    const billingSliceColors = (billingConfig.labels || []).map((label) => {
+        const key = String(label || '').trim().toLowerCase();
+        return billingColorByLabel[key] || '#94a3b8';
+    });
 
     // ---------- Chart.js defaults (cleaner + modern) ----------
     Chart.defaults.font.family = "'Nunito', system-ui, -apple-system, Segoe UI, Roboto, Arial";
@@ -578,7 +596,7 @@
                 labels: billingConfig.labels,
                 datasets: [{
                     data: billingConfig.data,
-                    backgroundColor: ['#22c55e', '#f59e0b', '#ef4444'],
+                    backgroundColor: billingSliceColors,
                     borderWidth: 0,
                     hoverOffset: 6
                 }]

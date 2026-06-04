@@ -2,18 +2,93 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\ConsumerZoneOne;
 use App\Models\ConsumerLedger;
+use App\Models\ConsumerZoneOne;
 use App\Models\DisconnectionOrder;
 use App\Models\MeterReadingSchedule;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Rule;
+use Maatwebsite\Excel\Concerns\FromCollection;
+use Maatwebsite\Excel\Concerns\WithHeadings;
+use Maatwebsite\Excel\Concerns\WithTitle;
+use Maatwebsite\Excel\Facades\Excel;
 
 class DisconnectionController extends Controller
 {
+    private function getOrdersTabData(Request $request): array
+    {
+        $ordersZone = (string) $request->get('orders_zone', '');
+        $ordersStatusFromRequest = (string) $request->get('orders_status', '');
+        $ordersDisconnector = (string) $request->get('orders_disconnector', '');
+        $ordersDateSaved = (string) $request->get('orders_date_saved', '');
+        $viewTab = (string) $request->get('view_tab', 'candidates');
+        if (! in_array($viewTab, ['candidates', 'orders', 'disconnected'], true)) {
+            $viewTab = 'candidates';
+        }
+
+        $applySharedOrderFilters = function ($query) use ($ordersZone, $ordersDisconnector, $ordersDateSaved): void {
+            if ($ordersZone !== '') {
+                $query->where('zone_code', $ordersZone);
+            }
+            if ($ordersDisconnector !== '') {
+                $query->where('disconnector_id', (int) $ordersDisconnector);
+            }
+            if ($ordersDateSaved !== '') {
+                try {
+                    $query->whereDate('created_at', Carbon::parse($ordersDateSaved)->format('Y-m-d'));
+                } catch (\Throwable $e) {
+                    // Ignore invalid date input and keep default results.
+                }
+            }
+        };
+
+        // Saved / Assigned: use status dropdown from the orders filter. When the page was loaded for the
+        // Disconnected tab, the request repeats orders_status=disconnected (hidden field); that must not
+        // narrow this list or both tabs show the same rows when switching without a full reload.
+        $statusForSavedAssignedTab = $ordersStatusFromRequest;
+        if ($viewTab === 'disconnected') {
+            $statusForSavedAssignedTab = '';
+        }
+
+        $ordersQuery = DisconnectionOrder::query()
+            ->with(['disconnector'])
+            ->orderByDesc('created_at');
+        $applySharedOrderFilters($ordersQuery);
+        if ($statusForSavedAssignedTab !== '') {
+            $ordersQuery->where('status', $statusForSavedAssignedTab);
+        }
+        $ordersList = $ordersQuery->limit(500)->get();
+
+        // Disconnected Only tab: always disconnected rows, same zone / disconnector / date filters.
+        $disconnectedQuery = DisconnectionOrder::query()
+            ->with(['disconnector'])
+            ->where('status', 'disconnected')
+            ->orderByDesc('created_at');
+        $applySharedOrderFilters($disconnectedQuery);
+        $disconnectedOrdersList = $disconnectedQuery->limit(500)->get();
+
+        $ordersZoneOptions = DisconnectionOrder::query()
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
+            ->distinct()
+            ->orderBy('zone_code')
+            ->pluck('zone_code');
+
+        return [
+            'ordersList' => $ordersList,
+            'disconnectedOrdersList' => $disconnectedOrdersList,
+            'ordersZone' => $ordersZone,
+            'ordersStatus' => $viewTab === 'disconnected' ? '' : $ordersStatusFromRequest,
+            'ordersDisconnector' => $ordersDisconnector,
+            'ordersDateSaved' => $ordersDateSaved,
+            'ordersZoneOptions' => $ordersZoneOptions,
+            'viewTab' => $viewTab,
+        ];
+    }
+
     /**
      * Display list of consumers eligible for disconnection by zone
      */
@@ -22,35 +97,67 @@ class DisconnectionController extends Controller
         $zone = $request->get('zone');
         $billingMonth = $request->get('billing_month'); // Format: YYYY-MM
         $billingDate = $request->get('billing_date');
-        $filterType = $request->get('filter_type', 'disconnection_date'); // 'disconnection_date' or '3_consecutive'
-        
+        $filterType = $request->get('filter_type', 'disconnection_date'); // disconnection_date | 2_consecutive | 3_consecutive
+        $hasAnyFilter = ! empty($zone) || ! empty($billingMonth) || ! empty($billingDate);
+
+        // Keep the page lightweight on first load: show filters only until user applies at least one filter.
+        if (! $hasAnyFilter) {
+            $zones = ConsumerZoneOne::select('zone_code')
+                ->distinct()
+                ->whereNotNull('zone_code')
+                ->orderBy('zone_code')
+                ->pluck('zone_code');
+
+            $disconnectors = User::where('role', 'disconnector')
+                ->orderBy('name')
+                ->get();
+
+            $consumersByZone = collect();
+            $totalConsumers = 0;
+            $totalOutstanding = 0;
+            $defaultDisconnectionDate = Carbon::today()->addDays(7)->format('Y-m-d');
+
+            return view('disconnection.index', array_merge(compact(
+                'consumersByZone',
+                'zones',
+                'zone',
+                'filterType',
+                'disconnectors',
+                'totalConsumers',
+                'totalOutstanding',
+                'billingDate',
+                'billingMonth',
+                'defaultDisconnectionDate'
+            ), $this->getOrdersTabData($request)));
+        }
+
         // Use different filter based on filter_type parameter
-        if ($filterType === '3_consecutive') {
-            $consumers = $this->getConsumersWith3ConsecutiveUnpaidMonths($request);
-            // The method already returns the view, so we return it directly
-            return $consumers;
+        if (in_array($filterType, ['2_consecutive', '3_consecutive'], true)) {
+            $requiredMonths = $filterType === '2_consecutive' ? 2 : 3;
+
+            return $this->getConsumersWithConsecutiveUnpaidMonths($request, $requiredMonths);
         } else {
             // Default: use disconnection date filter
             // Priority: billing_month > billing_date
             $billingFilter = $billingMonth ?: $billingDate;
-            $isMonthFilter = !empty($billingMonth);
+            $isMonthFilter = ! empty($billingMonth);
             $consumers = $this->getConsumersForDisconnection($zone, $billingFilter, $isMonthFilter);
-            
+
             // Group by zone
             $consumersByZone = $consumers->groupBy('zone_code');
-            
+
             // Get all zones for filter
             $zones = ConsumerZoneOne::select('zone_code')
                 ->distinct()
                 ->whereNotNull('zone_code')
                 ->orderBy('zone_code')
                 ->pluck('zone_code');
-            
+
             // Get disconnectors for dropdown
             $disconnectors = User::where('role', 'disconnector')
                 ->orderBy('name')
                 ->get();
-            
+
             // Calculate totals
             $totalConsumers = $consumers->count();
             $totalOutstanding = $consumers->sum('total_outstanding');
@@ -76,28 +183,32 @@ class DisconnectionController extends Controller
                                 ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'));
                         });
                     }
+
                     return $q->orderBy('disconnection_date')->first();
                 };
                 $schedule = $querySchedule(true);
-                if (!$schedule && $zone) {
+                if (! $schedule && $zone) {
                     $schedule = $querySchedule(false); // fallback: any zone for this billing month
                 }
                 if ($schedule && $schedule->disconnection_date) {
                     $defaultDisconnectionDate = Carbon::parse($schedule->disconnection_date)->format('Y-m-d');
                 }
                 // Fallback: use first consumer's disconnection date from the list (from their schedule)
-                if (!$defaultDisconnectionDate && $consumers->isNotEmpty()) {
+                if (! $defaultDisconnectionDate && $consumers->isNotEmpty()) {
                     $first = $consumers->first();
-                    if (!empty($first->disconnection_date)) {
+                    if (! empty($first->disconnection_date)) {
                         $defaultDisconnectionDate = Carbon::parse($first->disconnection_date)->format('Y-m-d');
                     }
                 }
             }
-            if (!$defaultDisconnectionDate) {
+            if (! $defaultDisconnectionDate) {
                 $defaultDisconnectionDate = Carbon::today()->addDays(7)->format('Y-m-d');
             }
 
-            return view('disconnection.index', compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'));
+            return view('disconnection.index', array_merge(
+                compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
+                $this->getOrdersTabData($request)
+            ));
         }
     }
 
@@ -110,8 +221,8 @@ class DisconnectionController extends Controller
         $billingMonth = $request->get('billing_month');
         $billingDate = $request->get('billing_date');
         $billingFilter = $billingMonth ?: $billingDate;
-        $isMonthFilter = !empty($billingMonth);
-        if (!$billingFilter) {
+        $isMonthFilter = ! empty($billingMonth);
+        if (! $billingFilter) {
             return Carbon::today()->addDays(7)->format('Y-m-d');
         }
         $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
@@ -132,15 +243,17 @@ class DisconnectionController extends Controller
                         ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'));
                 });
             }
+
             return $q->orderBy('disconnection_date')->first();
         };
         $schedule = $querySchedule(true);
-        if (!$schedule && $zone) {
+        if (! $schedule && $zone) {
             $schedule = $querySchedule(false);
         }
         if ($schedule && $schedule->disconnection_date) {
             return Carbon::parse($schedule->disconnection_date)->format('Y-m-d');
         }
+
         return Carbon::today()->addDays(7)->format('Y-m-d');
     }
 
@@ -153,119 +266,71 @@ class DisconnectionController extends Controller
             'consumer_ids' => 'required|array',
             'consumer_ids.*' => 'exists:consumer_zone,id',
             'disconnection_date' => 'required|date',
+            'list_billing_month' => 'nullable|string',
+            'list_billing_date' => 'nullable|date',
+            'financials' => 'nullable|array',
+            'financials.*.this_month_arrears' => 'nullable|numeric|min:0',
+            'financials.*.last_month_arrears' => 'nullable|numeric|min:0',
+            'financials.*.others_ar' => 'nullable|numeric|min:0',
+            'financials.*.total_outstanding' => 'nullable|numeric|min:0',
         ]);
 
-        $consumerIds = $request->input('consumer_ids');
         $disconnectionDate = Carbon::parse($request->input('disconnection_date'));
-        
-        $consumers = ConsumerZoneOne::whereIn('id', $consumerIds)
-            ->with(['ledgers' => function($query) {
-                $query->where('trans', 'BILLING')
-                    ->where(function($q) {
-                        $q->whereNull('credit')->orWhere('credit', 0);
-                    })
-                    ->where('due_date', '<', now())
-                    ->orderBy('due_date', 'desc');
-            }])
-            ->get();
+        $listBillingMonth = $request->input('list_billing_month') ?: null;
+        $listBillingDate = $request->input('list_billing_date') ?: null;
+        $financialsInput = $request->input('financials', []);
 
-        $penaltyLedgersByConsumer = ConsumerLedger::whereIn('consumer_zone_id', $consumers->pluck('id'))
-            ->where('trans', 'PENALTY')
-            ->get()
-            ->groupBy('consumer_zone_id');
+        $consumersWithOutstanding = $this->buildConsumersForDisconnectionNotice(
+            $request->input('consumer_ids'),
+            $listBillingMonth,
+            $listBillingDate,
+            is_array($financialsInput) ? $financialsInput : []
+        );
 
-        $consumersWithOutstanding = $consumers->map(function($consumer) use ($penaltyLedgersByConsumer) {
-            $ledgers = $consumer->ledgers;
-            // Use direct ledger table balance so total is correct (avoids getLedger context issues)
-            $totalAmountDue = $this->getCurrentBalanceFromLedgerTable($consumer);
-
-            $penalties = $penaltyLedgersByConsumer->get($consumer->id, collect());
-
-            $firstLedger = $ledgers->first();
-
-            $thisMonthBill = $firstLedger ? (float)($firstLedger->debit ?? 0) : 0;
-            $firstDueDate = $firstLedger && $firstLedger->due_date ? Carbon::parse($firstLedger->due_date)->format('Y-m-d') : null;
-            $thisMonthPenalty = $firstDueDate ? $penalties->sum(function($p) use ($firstDueDate) {
-                $pDue = $p->due_date ? Carbon::parse($p->due_date)->format('Y-m-d') : null;
-                return $pDue === $firstDueDate ? (float)($p->debit ?? $p->penalty ?? 0) : 0;
-            }) : 0;
-            $thisMonthArrears = $thisMonthBill + $thisMonthPenalty;
-
-            // Last Month/ Arrears CY = remaining amount (total minus This Month/ Arrears)
-            $lastMonthArrears = $totalAmountDue - $thisMonthArrears;
-            $lastMonthArrears = $lastMonthArrears > 0 ? round($lastMonthArrears, 2) : 0;
-
-            $consumer->setAttribute('this_month_arrears', round($thisMonthArrears, 2));
-            $consumer->setAttribute('last_month_arrears', (float) $lastMonthArrears);
-            $consumer->setAttribute('others_ar', 0);
-            $consumer->setAttribute('total_outstanding', $totalAmountDue);
-            $consumer->setAttribute('unpaid_months', $this->adjustUnpaidMonthsForPriorArrears((int) $ledgers->count(), (float) $lastMonthArrears));
-            $consumer->setAttribute('card_number', $consumer->sequence ?? '1');
-
-            return $consumer;
-        })
-        ->filter(function($consumer) {
-            // Exclude consumers with no Last Month/Arrears CY (i.e., only current month due)
-            return $consumer->total_outstanding > 0
-                && ($consumer->last_month_arrears ?? 0) > 0.01;
-        });
-
-        return view('disconnection.notice', compact('consumersWithOutstanding', 'disconnectionDate'));
+        return view('disconnection.notice', compact(
+            'consumersWithOutstanding',
+            'disconnectionDate',
+            'listBillingMonth',
+            'listBillingDate'
+        ));
     }
 
     /**
      * Get consumers who have passed disconnection date from meter_reading_schedules and haven't paid
      */
-    private function getConsumersForDisconnection($zone = null, $billingFilter = null, $isMonthFilter = false)
+    public function getConsumersForDisconnection($zone = null, $billingFilter = null, $isMonthFilter = false)
     {
         $today = Carbon::today();
-        
-        // Get unique account numbers from schedules that have passed due date
-        $query = DB::table('meter_reading_schedules as mrs')
-            ->join('consumer_zone as cz', function($join) {
-                $join->on(DB::raw('mrs.account_number COLLATE utf8mb4_unicode_ci'), '=', DB::raw('cz.account_no COLLATE utf8mb4_unicode_ci'));
-            })
-            ->where('mrs.due_date', '<=', $today)
-            ->whereNotNull('mrs.due_date')
-            ->select('cz.account_no', 'cz.id as consumer_zone_id')
-            ->distinct();
-
-        if ($zone) {
-            $query->where('cz.zone_code', $zone);
-        }
-
-        // Filter by billing month or billing date if provided
-        if ($billingFilter) {
-            if ($isMonthFilter) {
-                // Filter by month (format: YYYY-MM)
-                $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
-                $query->where(function($q) use ($monthCarbon) {
-                    $q->whereYear('mrs.bill_month', $monthCarbon->year)
-                      ->whereMonth('mrs.bill_month', $monthCarbon->month)
-                      ->orWhere(function($subQ) use ($monthCarbon) {
-                          // Also check bill_date falls within the month
-                          $subQ->whereYear('mrs.bill_date', $monthCarbon->year)
-                               ->whereMonth('mrs.bill_date', $monthCarbon->month);
-                      });
-                });
-            } else {
-                // Filter by specific billing date
-                $billingDateCarbon = Carbon::parse($billingFilter);
-                $query->where(function($q) use ($billingDateCarbon) {
-                    $q->whereDate('mrs.bill_date', $billingDateCarbon->format('Y-m-d'))
-                      ->orWhereDate('mrs.bill_month', $billingDateCarbon->format('Y-m-01'))
-                      ->orWhere(function($subQ) use ($billingDateCarbon) {
-                          // Also check if billing date falls within the bill month
-                          $subQ->whereYear('mrs.bill_month', $billingDateCarbon->year)
-                               ->whereMonth('mrs.bill_month', $billingDateCarbon->month);
-                      });
-                });
+        $ledgerCutoffDate = null;
+        if (! empty($billingFilter)) {
+            try {
+                $ledgerCutoffDate = $isMonthFilter
+                    ? Carbon::createFromFormat('Y-m', $billingFilter)->endOfMonth()->format('Y-m-d')
+                    : Carbon::parse($billingFilter)->format('Y-m-d');
+            } catch (\Throwable $e) {
+                $ledgerCutoffDate = null;
             }
         }
 
-        $accountData = $query->get();
-        $accountNos = $accountData->pluck('account_no')->unique();
-        $consumerIds = $accountData->pluck('consumer_zone_id')->unique();
+        // AR-style candidate source:
+        // start from consumer_zone (not schedule-gated) so consumers with valid aging buckets
+        // are not dropped due to missing/non-matching meter_reading_schedules rows.
+        $candidateConsumers = ConsumerZoneOne::query()
+            ->where(function ($q) {
+                $q->whereNull('status_code')
+                    ->orWhereNotIn(DB::raw('UPPER(TRIM(status_code))'), ['X', 'D', 'DISCONNECTED']);
+            });
+
+        if ($zone) {
+            $candidateConsumers->where('zone_code', $zone);
+        }
+
+        $candidateConsumers = $candidateConsumers
+            ->select('id', 'account_no')
+            ->get();
+
+        $accountNos = $candidateConsumers->pluck('account_no')->filter()->unique()->values();
+        $consumerIds = $candidateConsumers->pluck('id')->filter()->unique()->values();
 
         if ($accountNos->isEmpty()) {
             return collect();
@@ -275,90 +340,171 @@ class DisconnectionController extends Controller
         $consumers = ConsumerZoneOne::whereIn('account_no', $accountNos)->get()->keyBy('account_no');
 
         // BULK: Calculate balances using same method as ledger view (running balance calculation)
-        $latestBalances = $this->calculateBalancesBulk($consumerIds);
+        $latestBalances = $this->calculateBalancesBulk($consumerIds, $ledgerCutoffDate);
 
         // BULK: Get all schedules for all accounts (with billing month/date filter if provided), based on due_date
         $schedulesQuery = MeterReadingSchedule::whereIn('account_number', $accountNos)
             ->where('due_date', '<=', $today)
             ->whereNotNull('due_date');
-        
+
         // Filter by billing month or billing date if provided
         if ($billingFilter) {
             if ($isMonthFilter) {
                 // Filter by month (format: YYYY-MM)
                 $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
-                $schedulesQuery->where(function($q) use ($monthCarbon) {
+                $schedulesQuery->where(function ($q) use ($monthCarbon) {
                     $q->whereYear('bill_month', $monthCarbon->year)
-                      ->whereMonth('bill_month', $monthCarbon->month)
-                      ->orWhere(function($subQ) use ($monthCarbon) {
-                          $subQ->whereYear('bill_date', $monthCarbon->year)
-                               ->whereMonth('bill_date', $monthCarbon->month);
-                      });
+                        ->whereMonth('bill_month', $monthCarbon->month)
+                        ->orWhere(function ($subQ) use ($monthCarbon) {
+                            $subQ->whereYear('bill_date', $monthCarbon->year)
+                                ->whereMonth('bill_date', $monthCarbon->month);
+                        });
                 });
             } else {
                 // Filter by specific billing date
                 $billingDateCarbon = Carbon::parse($billingFilter);
-                $schedulesQuery->where(function($q) use ($billingDateCarbon) {
+                $schedulesQuery->where(function ($q) use ($billingDateCarbon) {
                     $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
-                      ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
-                      ->orWhere(function($subQ) use ($billingDateCarbon) {
-                          $subQ->whereYear('bill_month', $billingDateCarbon->year)
-                               ->whereMonth('bill_month', $billingDateCarbon->month);
-                      });
+                        ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
+                        ->orWhere(function ($subQ) use ($billingDateCarbon) {
+                            $subQ->whereYear('bill_month', $billingDateCarbon->year)
+                                ->whereMonth('bill_month', $billingDateCarbon->month);
+                        });
                 });
             }
         }
-        
-        $allSchedules = $schedulesQuery->get()->groupBy('account_number');
 
-        // BULK: Get all billing records for all consumers
-        $allBillings = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
+        $allSchedules = $schedulesQuery->get()->groupBy('account_number');
+        $latestReadingsQuery = MeterReadingSchedule::whereIn('account_number', $accountNos)
+            ->whereNotNull('current_reading');
+        if ($billingFilter) {
+            if ($isMonthFilter) {
+                $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
+                $latestReadingsQuery->where(function ($q) use ($monthCarbon) {
+                    $q->whereYear('bill_month', $monthCarbon->year)
+                        ->whereMonth('bill_month', $monthCarbon->month)
+                        ->orWhere(function ($subQ) use ($monthCarbon) {
+                            $subQ->whereYear('bill_date', $monthCarbon->year)
+                                ->whereMonth('bill_date', $monthCarbon->month);
+                        });
+                });
+            } else {
+                $billingDateCarbon = Carbon::parse($billingFilter);
+                $latestReadingsQuery->where(function ($q) use ($billingDateCarbon) {
+                    $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
+                        ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
+                        ->orWhere(function ($subQ) use ($billingDateCarbon) {
+                            $subQ->whereYear('bill_month', $billingDateCarbon->year)
+                                ->whereMonth('bill_month', $billingDateCarbon->month);
+                        });
+                });
+            }
+        }
+        $latestScheduleReadingsByAccount = $latestReadingsQuery
+            ->orderBy('account_number')
+            ->orderByDesc('reading_date')
+            ->orderByDesc('bill_date')
+            ->orderByDesc('due_date')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('account_number')
+            ->map(function ($items) {
+                $first = $items->first();
+
+                return $first ? (float) ($first->current_reading ?? 0) : 0.0;
+            });
+        $latestCurrentBillsByAccount = DB::table('downloaded_readings')
+            ->whereIn('account_number', $accountNos)
+            ->whereNotNull('current_bill')
+            ->orderBy('account_number')
+            ->orderByDesc('reading_date')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('account_number')
+            ->map(function ($items) {
+                $first = $items->first();
+
+                return $first ? (float) ($first->current_bill ?? 0) : 0.0;
+            });
+
+        // BULK: Get all billing records for all consumers (approved BAM only — same as Account Ledger)
+        $allBillingsQuery = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
             ->whereIn('trans', ['BILLING', 'BILL'])
             ->whereNotNull('due_date')
-            ->where('due_date', '<=', $today)
+            ->where('due_date', '<=', $today);
+        ConsumerLedgerController::applyVisibleLedgerScope($allBillingsQuery);
+        $allBillings = $allBillingsQuery
             ->select('consumer_zone_id', 'schedule_id', 'due_date', 'debit', 'credit', 'balance', 'date')
             ->orderBy('consumer_zone_id')
             ->orderBy('due_date', 'asc')
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
             ->get()
             ->groupBy('consumer_zone_id');
 
         // BULK: Get all payment records for all consumers from consumer_ledgers
-        $allPayments = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
+        $allPaymentsQuery = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
             ->where('trans', 'PAYMENT')
-            ->whereNotNull('schedule_id')
+            ->whereNotNull('schedule_id');
+        ConsumerLedgerController::applyVisibleLedgerScope($allPaymentsQuery);
+        $allPayments = $allPaymentsQuery
             ->select('consumer_zone_id', 'schedule_id', 'date', 'credit')
-            ->get()
-            ->groupBy('consumer_zone_id')
-            ->map(function($payments) {
-                // Group payments by schedule_id for quick lookup
-                return $payments->pluck('schedule_id')->unique()->toArray();
-            });
-
-        // BULK: Get all penalty records for all consumers (used to compute This Month/Arrears vs Last Month/Arrears CY)
-        $penaltyLedgersByConsumer = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
-            ->where('trans', 'PENALTY')
-            ->get()
-            ->groupBy('consumer_zone_id');
-
-        // BULK: Get last PAYMENT date for each consumer from consumer_ledgers
-        $lastPayments = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
-            ->where('trans', 'PAYMENT')
-            ->whereNotNull('date')
-            ->orderBy('consumer_zone_id')
-            ->orderByRaw('CAST(date AS DATE) DESC')
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
             ->get()
             ->groupBy('consumer_zone_id')
             ->map(function ($payments) {
-                return $payments->first();
+                return $payments->pluck('schedule_id')->unique()->toArray();
             });
 
+        // BULK: Get payment credits for FIFO aging allocation (same basis as AR aging buckets)
+        $paymentCreditsQuery = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
+            ->where(function ($q) {
+                $q->whereRaw('UPPER(TRIM(trans)) = ?', ['PAYMENT'])
+                    ->orWhereRaw('UPPER(TRIM(trans)) = ?', ['CM']);
+            })
+            ->where(function ($q) {
+                $q->where('credit', '>', 0)
+                    ->orWhere(function ($cm) {
+                        $cm->whereRaw('UPPER(TRIM(trans)) = ?', ['CM'])
+                            ->where(function ($cmAmount) {
+                                $cmAmount->where('credit', '!=', 0)
+                                    ->orWhere('debit', '<', 0);
+                            });
+                    });
+            });
+        ConsumerLedgerController::applyVisibleLedgerScope($paymentCreditsQuery);
+        $paymentCreditsByConsumer = $paymentCreditsQuery
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
+            ->select('consumer_zone_id', 'trans', 'credit', 'debit')
+            ->get()
+            ->groupBy('consumer_zone_id');
+
+        // BULK: Get all penalty records for all consumers
+        $penaltyLedgersQuery = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
+            ->where('trans', 'PENALTY');
+        ConsumerLedgerController::applyVisibleLedgerScope($penaltyLedgersQuery);
+        $penaltyLedgersByConsumer = $penaltyLedgersQuery
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
+            ->get()
+            ->groupBy('consumer_zone_id');
+
+        // Use AR Aging Summary FIFO SQL basis so disconnection buckets match report output.
+        $arAgingBucketsByConsumer = $this->computeAraAgingBucketsBulk($consumerIds, $ledgerCutoffDate);
+
         $eligibleConsumers = collect();
-        $twoMonthsAgo = Carbon::today()->subMonths(2);
 
         foreach ($accountNos as $accountNo) {
             $consumer = $consumers->get($accountNo);
-            
-            if (!$consumer) {
+
+            if (! $consumer) {
                 continue;
             }
 
@@ -369,147 +515,82 @@ class DisconnectionController extends Controller
             // Derive This Month/Arrears amount from the latest BILL/BILLING entry
             $consumerBillings = $allBillings->get($consumer->id, collect());
 
-            // Check if there has been a PAYMENT transaction within the last 2 months
-            $lastPaymentEntry = $lastPayments->get($consumer->id);
-            $noRecentPayment = !$lastPaymentEntry
-                || Carbon::parse($lastPaymentEntry->date)->lt($twoMonthsAgo);
-            
-            // Only include if they have outstanding balance and no recent payment
-            if ($currentBalance > 0 && $noRecentPayment) {
-                // Calculate unpaid dates based on PAYMENT records and collection table
-                $unpaidDatesData = $this->calculateUnpaidDates(
-                    $consumer->id, 
-                    $allBillings->get($consumer->id, collect()), 
-                    $allPayments->get($consumer->id, [])
-                );
+            // Calculate unpaid dates based on PAYMENT records and collection table
+            $unpaidDatesData = $this->calculateUnpaidDates(
+                $consumer->id,
+                $allBillings->get($consumer->id, collect()),
+                $allPayments->get($consumer->id, [])
+            );
 
-                // Exclude consumers whose Total Amount Due equals only This Month/Arrears (no Last Month/Arrears CY)
-                $lastMonthArrearsAmount = $this->computeLastMonthArrearsAmount(
+            // Get schedules from bulk query
+            $passedSchedules = $allSchedules->get($accountNo, collect());
+
+            // Get the earliest and latest due dates that have passed
+            $earliestDisconnectionDate = $passedSchedules->isNotEmpty() ? $passedSchedules->min('due_date') : null;
+            $latestDisconnectionDate = $passedSchedules->isNotEmpty() ? $passedSchedules->max('due_date') : null;
+
+            $consumer->unpaid_months = $this->adjustUnpaidMonthsForPriorArrears(
+                (int) $unpaidDatesData['unpaid_count'],
+                $this->computeLastMonthArrearsAmount(
                     $currentBalance,
                     $consumerBillings,
                     $penaltyLedgersByConsumer->get($consumer->id, collect())
-                );
+                )
+            );
+            $agingBuckets = $arAgingBucketsByConsumer->get($consumer->id, [
+                'current' => 0.0,
+                'days_30' => 0.0,
+                'days_60' => 0.0,
+                'days_90' => 0.0,
+                'over_90' => 0.0,
+            ]);
 
-                // Skip consumers where Last Month/Arrears CY is effectively zero (<= 0.01)
-                if ($lastMonthArrearsAmount <= 0.01) {
-                    continue;
-                }
-                
-                // Get schedules from bulk query
-                $passedSchedules = $allSchedules->get($accountNo, collect());
-
-                // Get the earliest and latest due dates that have passed
-                $earliestDisconnectionDate = $passedSchedules->isNotEmpty() ? $passedSchedules->min('due_date') : null;
-                $latestDisconnectionDate = $passedSchedules->isNotEmpty() ? $passedSchedules->max('due_date') : null;
-
-                $consumer->unpaid_months = $this->adjustUnpaidMonthsForPriorArrears(
-                    (int) $unpaidDatesData['unpaid_count'],
-                    $lastMonthArrearsAmount
-                );
-                $agingBuckets = $this->computeDisconnectionAgingBreakdown(
-                    $consumerBillings,
-                    $allPayments->get($consumer->id, []),
-                    (float) $currentBalance,
-                    $penaltyLedgersByConsumer->get($consumer->id, collect())
-                );
-                $consumer->total_outstanding = $currentBalance; // Use latest balance from consumer_ledgers
-                $consumer->oldest_unpaid_date = $unpaidDatesData['oldest_unpaid_date'];
-                $consumer->latest_unpaid_date = $unpaidDatesData['latest_unpaid_date'];
-                $consumer->disconnection_date = $earliestDisconnectionDate;
-                $consumer->latest_disconnection_date = $latestDisconnectionDate;
-                $consumer->passed_schedules_count = $passedSchedules->count();
-                $consumer->last_reading = $this->getLatestReadingFromSchedules($passedSchedules);
-                $consumer->aging_current = $agingBuckets['current'];
-                $consumer->aging_30_days = $agingBuckets['days_30'];
-                $consumer->aging_60_days = $agingBuckets['days_60'];
-                $consumer->aging_90_days = $agingBuckets['days_90'];
-                $consumer->aging_over_90 = $agingBuckets['over_90'];
-                
-                $eligibleConsumers->push($consumer);
+            // AR aging-based inclusion: 31–90 day buckets (mapped to Last Month / Arrears CY on notice).
+            $hasLastMonthCyBucket = round((float) ($agingBuckets['days_60'] ?? 0) + (float) ($agingBuckets['days_90'] ?? 0), 2) > 0.01;
+            if (! $hasLastMonthCyBucket) {
+                continue;
             }
+            $consumer->ledger_balance = round((float) $currentBalance, 2);
+            $consumer->total_outstanding = $this->sumIndexAgingOutstanding($agingBuckets);
+            $consumer->notice_soa_total = (float) $consumer->total_outstanding;
+            $consumer->oldest_unpaid_date = $unpaidDatesData['oldest_unpaid_date'];
+            $consumer->latest_unpaid_date = $unpaidDatesData['latest_unpaid_date'];
+            $consumer->disconnection_date = $earliestDisconnectionDate;
+            $consumer->latest_disconnection_date = $latestDisconnectionDate;
+            $consumer->passed_schedules_count = $passedSchedules->count();
+            $consumer->last_reading = (float) ($latestScheduleReadingsByAccount->get($accountNo, 0) ?? 0);
+            $rawCurrentBill = (float) ($latestCurrentBillsByAccount->get($accountNo, 0) ?? 0);
+            $consumer->current_bill = $rawCurrentBill;
+            $consumer->current_bill_with_maintenance = round($rawCurrentBill + 20, 2);
+            $consumer->aging_current = $agingBuckets['current'];
+            $consumer->aging_30_days = $agingBuckets['days_30'];
+            $consumer->aging_60_days = $agingBuckets['days_60'];
+            $consumer->aging_90_days = $agingBuckets['days_90'];
+            $consumer->aging_over_90 = $agingBuckets['over_90'];
+
+            $eligibleConsumers->push($consumer);
         }
 
         return $eligibleConsumers;
     }
 
     /**
-     * Calculate balances in bulk using the same method as ledger view (getLedger)
-     * This ensures the balance matches exactly with what's shown in the Account Ledger view
+     * Account Ledger footer balance (bulk) — same rules as F10 Account Ledger / getLedger().
      */
-    private function calculateBalancesBulk($consumerIds)
+    private function calculateBalancesBulk($consumerIds, $ledgerCutoffDate = null)
     {
-        // Get all ledger entries for all consumers, ordered chronologically
-        $allLedgers = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
-            ->orderBy('consumer_zone_id')
-            ->orderByRaw('CAST(date AS DATE) ASC')
-            ->orderBy('id', 'asc')
-            ->select('consumer_zone_id', 'debit', 'credit', 'balance', 'trans', 'date', 'id')
-            ->get()
-            ->groupBy('consumer_zone_id');
-
-        $balances = [];
-
-        foreach ($allLedgers as $consumerId => $ledgers) {
-            if ($ledgers->isEmpty()) {
-                $balances[$consumerId] = 0.00;
-                continue;
-            }
-
-            // Calculate running balance the same way as getLedger()
-            $runningBalance = 0.00;
-            $firstEntry = $ledgers->first();
-            
-            // If first entry exists, start with its balance minus its debit/credit to get the starting balance
-            if ($firstEntry) {
-                $firstBalance = (float)($firstEntry->balance ?? 0);
-                $firstDebit = (float)($firstEntry->debit ?? 0);
-                $firstCredit = (float)($firstEntry->credit ?? 0);
-                $runningBalance = $firstBalance - $firstDebit + $firstCredit;
-            }
-
-            // Calculate running balance for all entries
-            foreach ($ledgers as $ledger) {
-                $debit = (float)($ledger->debit ?? 0);
-                $credit = (float)($ledger->credit ?? 0);
-                $trans = strtoupper(trim($ledger->trans ?? ''));
-                
-                // Calculate new balance: previous balance + debit - credit
-                $newBalance = $runningBalance + $debit - $credit;
-                
-                // Special handling for PAYMENT entries: if payment exactly matches balance, show 0.00
-                if ($trans === 'PAYMENT' && $credit > 0) {
-                    // If payment exactly matches the previous balance (within 0.01 rounding tolerance), set to 0.00
-                    if (abs($credit - $runningBalance) <= 0.01) {
-                        $newBalance = 0.00;
-                    }
-                    // If payment is slightly more than balance (within 0.01), also set to 0.00
-                    elseif ($runningBalance > 0 && $credit > $runningBalance && ($credit - $runningBalance) <= 0.01) {
-                        $newBalance = 0.00;
-                    }
-                }
-                
-                // Round to 2 decimal places
-                $newBalance = round($newBalance, 2);
-                
-                // Update running balance for next iteration
-                $runningBalance = $newBalance;
-            }
-
-            $balances[$consumerId] = round($runningBalance, 2);
-        }
-
-        return collect($balances);
+        return ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk($consumerIds, $ledgerCutoffDate);
     }
 
     /**
      * Calculate unpaid dates based on BILL/BILLING and PAYMENT records in consumer_ledger.
      * This is used to determine oldest and latest unpaid dates.
-     * Note: Total outstanding is calculated using calculateBalancesBulk() to match ledger view balance exactly.
+     * Note: Total outstanding on the list is the sum of index aging columns (see sumIndexAgingOutstanding()).
      */
     private function calculateUnpaidDates($consumerId, $billings, $paidScheduleIds = [])
     {
         $unpaidDates = [];
-        
+
         if ($billings->isEmpty()) {
             return [
                 'unpaid_count' => 0,
@@ -520,17 +601,17 @@ class DisconnectionController extends Controller
 
         foreach ($billings as $billing) {
             $scheduleId = $billing->schedule_id;
-            $debit = (float)($billing->debit ?? 0);
-            $credit = (float)($billing->credit ?? 0);
+            $debit = (float) ($billing->debit ?? 0);
+            $credit = (float) ($billing->credit ?? 0);
             $dueDate = $billing->due_date;
             $dueDateCarbon = is_string($dueDate) ? Carbon::parse($dueDate) : $dueDate;
-            
+
             // Check if this billing has been paid
             // A billing is considered unpaid if:
             // 1. No PAYMENT record exists with the same schedule_id (when schedule_id exists), AND
             // 2. The billing still has outstanding amount (debit > credit)
             $isPaid = false;
-            
+
             // First check: Payment in consumer_ledgers by schedule_id
             if ($scheduleId && in_array($scheduleId, $paidScheduleIds)) {
                 // Payment exists for this schedule_id, check if it fully covers the bill
@@ -539,15 +620,15 @@ class DisconnectionController extends Controller
                     $isPaid = true;
                 }
             }
-            
+
             // Second check: If no schedule_id, check if debit <= credit (might be paid via other means)
-            if (!$isPaid && !$scheduleId) {
+            if (! $isPaid && ! $scheduleId) {
                 if ($debit <= $credit) {
                     $isPaid = true;
                 }
             }
-            
-            if (!$isPaid) {
+
+            if (! $isPaid) {
                 // Collect unpaid dates
                 if ($dueDate) {
                     $unpaidDates[] = $dueDateCarbon;
@@ -567,7 +648,7 @@ class DisconnectionController extends Controller
 
     private function getLatestReadingFromSchedules($schedules): float
     {
-        if (!$schedules || $schedules->isEmpty()) {
+        if (! $schedules || $schedules->isEmpty()) {
             return 0.0;
         }
 
@@ -575,6 +656,7 @@ class DisconnectionController extends Controller
             return isset($schedule->current_reading) && $schedule->current_reading !== null;
         })->sortByDesc(function ($schedule) {
             $dateRef = $schedule->due_date ?? $schedule->bill_date ?? null;
+
             return $dateRef ? Carbon::parse($dateRef)->timestamp : 0;
         })->first();
 
@@ -588,22 +670,130 @@ class DisconnectionController extends Controller
      *
      * @param  mixed  $billings  BILL/BILLING ledger rows (same basis as list queries)
      */
-    private function computeDisconnectionAgingBreakdown($billings, array $paidScheduleIds, float $currentBalance, $penalties = null): array
+    private function computeDisconnectionAgingBreakdown($billings, array $paidScheduleIds, float $currentBalance, $penalties = null, $paymentCredits = null): array
     {
         $penalties = $penalties ?? collect();
+        $paymentCredits = $paymentCredits ?? collect();
+        $asOf = Carbon::today();
 
-        // Identical definition to generateNotice: last_month_arrears from computeLastMonthArrearsAmount;
-        // this_month_arrears = total - last_month (same as bill + penalty on latest due in that method).
-        $lastMonthArrears = $this->computeLastMonthArrearsAmount($currentBalance, $billings, $penalties);
-        $thisMonthArrears = round(max(0.0, $currentBalance - $lastMonthArrears), 2);
+        // Build charge rows similar to AR aging summary:
+        // charges are BILL/BILLING + PENALTY debits, aged by due_date (fallback date).
+        $charges = collect();
+        foreach ($billings as $billing) {
+            $amount = (float) ($billing->debit ?? 0);
+            if ($amount <= 0) {
+                continue;
+            }
+            $agingDateRaw = $billing->due_date ?? $billing->date ?? null;
+            if (! $agingDateRaw) {
+                continue;
+            }
+            $agingDate = is_string($agingDateRaw) ? Carbon::parse($agingDateRaw) : $agingDateRaw;
+            $transDateRaw = $billing->date ?? $agingDateRaw;
+            $transDate = is_string($transDateRaw) ? Carbon::parse($transDateRaw) : $transDateRaw;
+            $charges->push([
+                'trans' => strtoupper(trim((string) ($billing->trans ?? 'BILLING'))),
+                'amount' => $amount,
+                'aging_date' => $agingDate,
+                'trans_date' => $transDate,
+                'id' => (int) ($billing->id ?? 0),
+            ]);
+        }
+        foreach ($penalties as $penalty) {
+            $amount = (float) ($penalty->debit ?? $penalty->penalty ?? 0);
+            if ($amount <= 0) {
+                continue;
+            }
+            $agingDateRaw = $penalty->due_date ?? $penalty->date ?? null;
+            if (! $agingDateRaw) {
+                continue;
+            }
+            $agingDate = is_string($agingDateRaw) ? Carbon::parse($agingDateRaw) : $agingDateRaw;
+            $transDateRaw = $penalty->date ?? $agingDateRaw;
+            $transDate = is_string($transDateRaw) ? Carbon::parse($transDateRaw) : $transDateRaw;
+            $charges->push([
+                'trans' => 'PENALTY',
+                'amount' => $amount,
+                'aging_date' => $agingDate,
+                'trans_date' => $transDate,
+                'id' => (int) ($penalty->id ?? 0),
+            ]);
+        }
+
+        if ($charges->isEmpty()) {
+            return $this->roundAgingBreakdown([
+                'current' => 0.0,
+                'days_30' => 0.0,
+                'days_60' => 0.0,
+                'days_90' => 0.0,
+                'over_90' => 0.0,
+            ]);
+        }
+
+        $totalPayment = (float) $paymentCredits->sum(function ($entry) {
+            $trans = strtoupper(trim((string) ($entry->trans ?? '')));
+            $credit = (float) ($entry->credit ?? 0);
+            $debit = (float) ($entry->debit ?? 0);
+            if ($trans === 'CM') {
+                return max($credit, max(-$debit, 0));
+            }
+
+            return max($credit, 0);
+        });
+
+        $orderedCharges = $charges->sort(function ($a, $b) {
+            // Match AR order: DM first, then aging_date, trans_date, id.
+            $aDm = $a['trans'] === 'DM' ? 0 : 1;
+            $bDm = $b['trans'] === 'DM' ? 0 : 1;
+            if ($aDm !== $bDm) {
+                return $aDm <=> $bDm;
+            }
+            $agingCmp = $a['aging_date']->timestamp <=> $b['aging_date']->timestamp;
+            if ($agingCmp !== 0) {
+                return $agingCmp;
+            }
+            $dateCmp = $a['trans_date']->timestamp <=> $b['trans_date']->timestamp;
+            if ($dateCmp !== 0) {
+                return $dateCmp;
+            }
+
+            return ((int) $a['id']) <=> ((int) $b['id']);
+        })->values();
 
         $breakdown = [
-            'current' => $thisMonthArrears,
-            'days_30' => max(0.0, $lastMonthArrears),
+            'current' => 0.0,
+            'days_30' => 0.0,
             'days_60' => 0.0,
             'days_90' => 0.0,
             'over_90' => 0.0,
         ];
+
+        $runningTotal = 0.0;
+        foreach ($orderedCharges as $charge) {
+            $prevTotal = $runningTotal;
+            $runningTotal += (float) $charge['amount'];
+
+            $unpaidAmount = max(
+                0.0,
+                max(0.0, $runningTotal - $totalPayment) - max(0.0, $prevTotal - $totalPayment)
+            );
+            if ($unpaidAmount <= 0.0) {
+                continue;
+            }
+
+            $daysDiff = $charge['aging_date']->diffInDays($asOf, false);
+            if ($charge['trans'] === 'DM' || $daysDiff > 90) {
+                $breakdown['over_90'] += $unpaidAmount;
+            } elseif ($daysDiff <= 0) {
+                $breakdown['current'] += $unpaidAmount;
+            } elseif ($daysDiff <= 30) {
+                $breakdown['days_30'] += $unpaidAmount;
+            } elseif ($daysDiff <= 60) {
+                $breakdown['days_60'] += $unpaidAmount;
+            } else {
+                $breakdown['days_90'] += $unpaidAmount;
+            }
+        }
 
         return $this->roundAgingBreakdown($breakdown);
     }
@@ -615,6 +805,181 @@ class DisconnectionController extends Controller
         }
 
         return $breakdown;
+    }
+
+    /**
+     * Compute AR aging buckets using the same FIFO SQL basis as AR Aging Summary report.
+     */
+    private function computeAraAgingBucketsBulk($consumerIds, ?string $cutoffDate = null)
+    {
+        $consumerIds = collect($consumerIds)->filter()->unique()->values();
+        if ($consumerIds->isEmpty()) {
+            return collect();
+        }
+
+        $asOfDate = $cutoffDate ?: Carbon::today()->format('Y-m-d');
+        $billingCutoffDate = $cutoffDate ?: Carbon::today()->format('Y-m-d');
+        $paymentCutoffDate = $cutoffDate ?: Carbon::today()->format('Y-m-d');
+
+        $idPlaceholders = implode(',', array_fill(0, $consumerIds->count(), '?'));
+        $visibleLedgerSql = "
+                  AND (
+                      cl.billing_adjustment_id IS NULL
+                      OR EXISTS (
+                          SELECT 1 FROM billing_adjustments ba
+                          WHERE ba.id = cl.billing_adjustment_id
+                            AND ba.status = 'Approved'
+                      )
+                  )";
+
+        $agingSql = "
+            WITH charges AS (
+                SELECT
+                    cl.consumer_zone_id,
+                    UPPER(TRIM(cl.trans)) AS trans,
+                    cl.id,
+                    cl.`date` AS trans_date,
+                    COALESCE(cl.due_date, cl.`date`) AS aging_date,
+                    cl.debit AS amount
+                FROM consumer_ledgers cl
+                WHERE cl.consumer_zone_id IN ({$idPlaceholders})
+                  AND UPPER(TRIM(cl.trans)) IN ('DM', 'BILLING', 'PENALTY')
+                  AND cl.debit > 0
+                  AND cl.`date` <= ?
+                  {$visibleLedgerSql}
+            ),
+            payments AS (
+                SELECT
+                    cl.consumer_zone_id,
+                    SUM(
+                        CASE
+                            WHEN UPPER(TRIM(cl.trans)) = 'CM'
+                                THEN GREATEST(COALESCE(cl.credit, 0), COALESCE(-cl.debit, 0), 0)
+                            ELSE GREATEST(COALESCE(cl.credit, 0), 0)
+                        END
+                    ) AS total_payment
+                FROM consumer_ledgers cl
+                WHERE cl.consumer_zone_id IN ({$idPlaceholders})
+                  AND UPPER(TRIM(cl.trans)) IN ('PAYMENT', 'CM')
+                  AND (
+                      cl.credit > 0
+                      OR (
+                          UPPER(TRIM(cl.trans)) = 'CM'
+                          AND (COALESCE(cl.credit, 0) <> 0 OR COALESCE(cl.debit, 0) < 0)
+                      )
+                  )
+                  AND cl.`date` <= ?
+                  {$visibleLedgerSql}
+                GROUP BY cl.consumer_zone_id
+            ),
+            ordered AS (
+                SELECT
+                    c.*,
+                    COALESCE(
+                        SUM(c.amount) OVER (
+                            PARTITION BY c.consumer_zone_id
+                            ORDER BY
+                                CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
+                                c.aging_date,
+                                c.trans_date,
+                                c.id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                        ),
+                        0
+                    ) AS prev_total,
+                    SUM(c.amount) OVER (
+                        PARTITION BY c.consumer_zone_id
+                        ORDER BY
+                            CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
+                            c.aging_date,
+                            c.trans_date,
+                            c.id
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS run_total
+                FROM charges c
+            ),
+            unpaid AS (
+                SELECT
+                    o.consumer_zone_id,
+                    o.trans,
+                    o.aging_date,
+                    GREATEST(
+                        0,
+                        GREATEST(0, o.run_total - COALESCE(p.total_payment, 0))
+                        - GREATEST(0, o.prev_total - COALESCE(p.total_payment, 0))
+                    ) AS unpaid_amount
+                FROM ordered o
+                LEFT JOIN payments p ON p.consumer_zone_id = o.consumer_zone_id
+            )
+            SELECT
+                consumer_zone_id,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND DATEDIFF(?, aging_date) <= 0
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS current,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND DATEDIFF(?, aging_date) BETWEEN 1 AND 30
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _30,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND DATEDIFF(?, aging_date) BETWEEN 31 AND 60
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _60,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND trans <> 'DM'
+                         AND DATEDIFF(?, aging_date) BETWEEN 61 AND 90
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _90,
+                ROUND(SUM(
+                    CASE
+                        WHEN unpaid_amount > 0
+                         AND (
+                             trans = 'DM'
+                             OR DATEDIFF(?, aging_date) > 90
+                         )
+                        THEN unpaid_amount ELSE 0
+                    END
+                ), 2) AS _over90
+            FROM unpaid
+            GROUP BY consumer_zone_id
+        ";
+
+        $bindings = array_merge(
+            $consumerIds->all(),
+            [$billingCutoffDate],
+            $consumerIds->all(),
+            [$paymentCutoffDate],
+            [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
+        );
+
+        $rows = collect(DB::select($agingSql, $bindings));
+
+        return $rows->mapWithKeys(function ($row) {
+            return [
+                (int) $row->consumer_zone_id => [
+                    'current' => round((float) ($row->current ?? 0), 2),
+                    'days_30' => round((float) ($row->_30 ?? 0), 2),
+                    'days_60' => round((float) ($row->_60 ?? 0), 2),
+                    'days_90' => round((float) ($row->_90 ?? 0), 2),
+                    'over_90' => round((float) ($row->_over90 ?? 0), 2),
+                ],
+            ];
+        });
     }
 
     /**
@@ -665,6 +1030,140 @@ class DisconnectionController extends Controller
     }
 
     /**
+     * Build notice/print consumer rows using the same financial basis as disconnection index list.
+     *
+     * @param  array<int|string>  $consumerIds
+     * @param  array<int|string, array<string, mixed>>|null  $financialsInput
+     */
+    private function buildConsumersForDisconnectionNotice(
+        array $consumerIds,
+        ?string $listBillingMonth = null,
+        ?string $listBillingDateYmd = null,
+        ?array $financialsInput = null
+    ) {
+        $consumerIds = collect($consumerIds)->filter()->unique()->values();
+        if ($consumerIds->isEmpty()) {
+            return collect();
+        }
+
+        $ledgerCutoffDate = $this->resolveListLedgerCutoffForAging($listBillingMonth, $listBillingDateYmd);
+        $financialsInput = $financialsInput ?? [];
+
+        $consumers = ConsumerZoneOne::whereIn('id', $consumerIds)
+            ->with(['ledgers' => function ($query) {
+                $query->where('trans', 'BILLING')
+                    ->where(function ($q) {
+                        $q->whereNull('credit')->orWhere('credit', 0);
+                    })
+                    ->where('due_date', '<', now())
+                    ->orderBy('due_date', 'desc');
+            }])
+            ->get()
+            ->sortBy(fn ($consumer) => $consumerIds->search($consumer->id))
+            ->values();
+
+        $arAgingBucketsByConsumer = $this->computeAraAgingBucketsBulk($consumerIds, $ledgerCutoffDate);
+
+        return $consumers->map(function ($consumer) use ($arAgingBucketsByConsumer, $financialsInput) {
+            $agingBuckets = $arAgingBucketsByConsumer->get($consumer->id, [
+                'current' => 0.0,
+                'days_30' => 0.0,
+                'days_60' => 0.0,
+                'days_90' => 0.0,
+                'over_90' => 0.0,
+            ]);
+            $posted = $financialsInput[$consumer->id] ?? $financialsInput[(string) $consumer->id] ?? null;
+
+            $this->hydrateConsumerForDisconnectionNotice(
+                $consumer,
+                $agingBuckets,
+                is_array($posted) ? $posted : null
+            );
+
+            return $consumer;
+        })
+            ->filter(function ($consumer) {
+                return $consumer->total_outstanding > 0
+                    && (($consumer->last_month_arrears ?? 0) + ($consumer->others_ar ?? 0) > 0.01);
+            })
+            ->values();
+    }
+
+    /**
+     * Total Outstanding / Total Amount Due on disconnection screens.
+     * Always the sum of the three displayed aging columns (never raw ledger balance).
+     * This Month (days_30) + Last Month CY (days_60) + Other/A/R (days_90 + over_90).
+     */
+    private function sumIndexAgingOutstanding(array $agingBuckets): float
+    {
+        return round(
+            (float) ($agingBuckets['days_30'] ?? 0)
+            + (float) ($agingBuckets['days_60'] ?? 0)
+            + (float) ($agingBuckets['days_90'] ?? 0)
+            + (float) ($agingBuckets['over_90'] ?? 0),
+            2
+        );
+    }
+
+    /**
+     * Map AR aging buckets to notice/index SOA lines.
+     * This Month = days_30; Last Month CY = days_60 + days_90; Other / A/R = over_90 only.
+     *
+     * @return array{this_month_arrears: float, last_month_arrears: float, others_ar: float}
+     */
+    private function mapAgingBucketsToNoticeFinancialLines(array $agingBuckets): array
+    {
+        return [
+            'this_month_arrears' => round((float) ($agingBuckets['days_30'] ?? 0), 2),
+            'last_month_arrears' => round((float) ($agingBuckets['days_60'] ?? 0) + (float) ($agingBuckets['days_90'] ?? 0), 2),
+            'others_ar' => round((float) ($agingBuckets['over_90'] ?? 0), 2),
+        ];
+    }
+
+    /**
+     * Map AR aging buckets onto disconnection notice line items (preview + print).
+     * Total Amount Due = sum of the three SOA lines (matches index Total Outstanding).
+     */
+    private function hydrateConsumerForDisconnectionNotice(
+        ConsumerZoneOne $consumer,
+        array $agingBuckets,
+        ?array $postedFinancials = null
+    ): void {
+        $usePosted = is_array($postedFinancials)
+            && array_key_exists('this_month_arrears', $postedFinancials)
+            && array_key_exists('last_month_arrears', $postedFinancials);
+
+        if ($usePosted) {
+            $thisMonthArrears = round(max(0.0, (float) $postedFinancials['this_month_arrears']), 2);
+            $lastMonthArrears = round(max(0.0, (float) $postedFinancials['last_month_arrears']), 2);
+            $othersAr = round(max(0.0, (float) ($postedFinancials['others_ar'] ?? 0)), 2);
+        } else {
+            $mapped = $this->mapAgingBucketsToNoticeFinancialLines($agingBuckets);
+            $thisMonthArrears = $mapped['this_month_arrears'];
+            $lastMonthArrears = $mapped['last_month_arrears'];
+            $othersAr = $mapped['others_ar'];
+        }
+
+        $totalOutstanding = round($thisMonthArrears + $lastMonthArrears + $othersAr, 2);
+
+        $consumer->setAttribute('this_month_arrears', $thisMonthArrears);
+        $consumer->setAttribute('last_month_arrears', $lastMonthArrears);
+        $consumer->setAttribute('others_ar', $othersAr);
+        $consumer->setAttribute('total_outstanding', $totalOutstanding);
+        $consumer->setAttribute('notice_soa_total', $totalOutstanding);
+
+        $has90DayBucket = (float) ($agingBuckets['days_90'] ?? 0) > 0.01;
+        $consumer->setAttribute('notice_delinquent_months', $has90DayBucket ? 3 : 2);
+
+        $priorBucketsTotal = $lastMonthArrears + $othersAr;
+        $consumer->setAttribute(
+            'unpaid_months',
+            $this->adjustUnpaidMonthsForPriorArrears((int) $consumer->ledgers->count(), $priorBucketsTotal)
+        );
+        $consumer->setAttribute('card_number', $consumer->sequence ?? '1');
+    }
+
+    /**
      * Get the current balance from ledger using the same calculation as ledger view
      * This calls the ConsumerLedgerController to get the exact balance shown in ledger.blade.php
      */
@@ -672,23 +1171,23 @@ class DisconnectionController extends Controller
     {
         try {
             // Use the same method as ledger view to get accurate balance
-            $ledgerController = new ConsumerLedgerController();
-            $request = new \Illuminate\Http\Request();
+            $ledgerController = new ConsumerLedgerController;
+            $request = new Request;
             $request->merge([
                 'account_no' => $consumer->account_no,
-                'year' => '' // Get all records for accurate balance calculation
+                'year' => '', // Get all records for accurate balance calculation
             ]);
-            
+
             $ledgerResponse = $ledgerController->getLedger($request);
             $ledgerData = json_decode($ledgerResponse->getContent(), true);
-            
+
             if (isset($ledgerData['summary']['balance'])) {
-                return round((float)$ledgerData['summary']['balance'], 2);
+                return round((float) $ledgerData['summary']['balance'], 2);
             }
         } catch (\Exception $e) {
-            \Log::error('Error getting balance from ledger for account ' . $consumer->account_no . ': ' . $e->getMessage());
+            \Log::error('Error getting balance from ledger for account '.$consumer->account_no.': '.$e->getMessage());
         }
-        
+
         return $this->getCurrentBalanceFromLedgerTable($consumer);
     }
 
@@ -715,7 +1214,7 @@ class DisconnectionController extends Controller
             return round((float) $lastLedger->balance, 2);
         }
 
-        return round((float)($consumer->balance ?? 0), 2);
+        return round((float) ($consumer->balance ?? 0), 2);
     }
 
     /**
@@ -728,7 +1227,7 @@ class DisconnectionController extends Controller
         }
 
         // Group by month-year
-        $months = $unpaidBills->map(function($bill) {
+        $months = $unpaidBills->map(function ($bill) {
             return $bill->due_date->format('Y-m');
         })->unique()->sort()->values();
 
@@ -741,9 +1240,9 @@ class DisconnectionController extends Controller
         $currentConsecutive = 1;
 
         for ($i = 1; $i < $months->count(); $i++) {
-            $prevMonth = Carbon::parse($months[$i - 1] . '-01');
-            $currentMonth = Carbon::parse($months[$i] . '-01');
-            
+            $prevMonth = Carbon::parse($months[$i - 1].'-01');
+            $currentMonth = Carbon::parse($months[$i].'-01');
+
             // Check if current month is exactly 1 month after previous
             if ($currentMonth->diffInMonths($prevMonth) == 1) {
                 $currentConsecutive++;
@@ -757,21 +1256,46 @@ class DisconnectionController extends Controller
     }
 
     /**
-     * Get consumers with 3 consecutive bill months without payment
+     * Get consumers with N consecutive bill months without payment (no PAYMENT for schedule).
      * OPTIMIZED: Only checks records from 2025 onwards for faster processing
+     *
+     * @param  int  $requiredMonths  2 or 3
      */
-    private function getConsumersWith3ConsecutiveUnpaidMonths(Request $request)
+    private function getConsumersWithConsecutiveUnpaidMonths(Request $request, int $requiredMonths)
     {
+        $requiredMonths = max(2, min(3, $requiredMonths));
+        $filterType = $requiredMonths === 2 ? '2_consecutive' : '3_consecutive';
+
         $zone = $request->get('zone');
-        
-        $query = ConsumerZoneOne::query();
-        
+        $billingMonth = $request->get('billing_month');
+        $billingDate = $request->get('billing_date');
+        $ledgerCutoffDate = null;
+        if (! empty($billingMonth)) {
+            try {
+                $ledgerCutoffDate = Carbon::createFromFormat('Y-m', $billingMonth)->endOfMonth()->format('Y-m-d');
+            } catch (\Throwable $e) {
+                $ledgerCutoffDate = null;
+            }
+        } elseif (! empty($billingDate)) {
+            try {
+                $ledgerCutoffDate = Carbon::parse($billingDate)->format('Y-m-d');
+            } catch (\Throwable $e) {
+                $ledgerCutoffDate = null;
+            }
+        }
+
+        $query = ConsumerZoneOne::query()
+            ->where(function ($q) {
+                $q->whereNull('status_code')
+                    ->orWhereNotIn(DB::raw('UPPER(TRIM(status_code))'), ['X', 'D', 'DISCONNECTED']);
+            });
+
         if ($zone) {
             $query->where('zone_code', $zone);
         }
 
         $consumers = $query->get();
-        
+
         if ($consumers->isEmpty()) {
             $zones = ConsumerZoneOne::select('zone_code')
                 ->distinct()
@@ -779,33 +1303,39 @@ class DisconnectionController extends Controller
                 ->orderBy('zone_code')
                 ->pluck('zone_code');
             $consumersByZone = collect();
-            $filterType = '3_consecutive';
             $disconnectors = User::where('role', 'disconnector')->orderBy('name')->get();
             $totalConsumers = 0;
             $totalOutstanding = 0;
             $billingMonth = $request->get('billing_month');
             $billingDate = $request->get('billing_date');
             $defaultDisconnectionDate = $this->getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate);
-            return view('disconnection.index', compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'));
+
+            return view('disconnection.index', array_merge(
+                compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
+                $this->getOrdersTabData($request)
+            ));
         }
 
         $consumerIds = $consumers->pluck('id');
-        
+
         // OPTIMIZATION: Only check records from 2025 onwards for faster processing
         // This significantly reduces the dataset size and improves performance
         $startDate = Carbon::create(2025, 1, 1)->startOfDay();
         $today = Carbon::today();
-        
+
         // BULK: Get all billings for all consumers at once (only from 2025)
         $allBillings = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
             ->whereIn('trans', ['BILL', 'BILLING'])
             ->whereNotNull('date')
             ->whereNotNull('due_date')
-            ->where(function($q) use ($startDate) {
+            ->where(function ($q) {
                 $q->whereYear('due_date', '>=', 2025)
-                  ->orWhereYear('date', '>=', 2025);
+                    ->orWhereYear('date', '>=', 2025);
             })
             ->where('due_date', '<=', $today)
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
             ->orderBy('consumer_zone_id')
             ->orderBy('due_date', 'desc')
             ->orderBy('date', 'desc')
@@ -813,31 +1343,59 @@ class DisconnectionController extends Controller
             ->groupBy('consumer_zone_id');
 
         // BULK: Calculate balances using same method as ledger view (running balance calculation)
-        $latestBalances = $this->calculateBalancesBulk($consumerIds);
+        $latestBalances = $this->calculateBalancesBulk($consumerIds, $ledgerCutoffDate);
 
         // BULK: Get all payments grouped by consumer (only from 2025)
         // Get paid schedule_ids for quick lookup
         $allPayments = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
             ->where('trans', 'PAYMENT')
             ->whereNotNull('schedule_id')
-            ->where(function($q) use ($startDate) {
+            ->where(function ($q) {
                 $q->whereYear('date', '>=', 2025);
             })
             ->select('consumer_zone_id', 'schedule_id')
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
             ->get()
             ->groupBy('consumer_zone_id')
-            ->map(function($payments) {
+            ->map(function ($payments) {
                 // Return array of paid schedule_ids for quick lookup
                 return $payments->pluck('schedule_id')->unique()->toArray();
             });
 
         $penaltyLedgersByConsumer = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
             ->where('trans', 'PENALTY')
+            ->when($ledgerCutoffDate, function ($query) use ($ledgerCutoffDate) {
+                $query->whereDate('date', '<=', $ledgerCutoffDate);
+            })
             ->get()
             ->groupBy('consumer_zone_id');
 
-        $latestScheduleReadingsByAccount = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
-            ->whereNotNull('current_reading')
+        $latestReadingsQuery = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
+            ->whereNotNull('current_reading');
+        if (! empty($billingMonth)) {
+            $monthCarbon = Carbon::createFromFormat('Y-m', $billingMonth)->startOfMonth();
+            $latestReadingsQuery->where(function ($q) use ($monthCarbon) {
+                $q->whereYear('bill_month', $monthCarbon->year)
+                    ->whereMonth('bill_month', $monthCarbon->month)
+                    ->orWhere(function ($subQ) use ($monthCarbon) {
+                        $subQ->whereYear('bill_date', $monthCarbon->year)
+                            ->whereMonth('bill_date', $monthCarbon->month);
+                    });
+            });
+        } elseif (! empty($billingDate)) {
+            $billingDateCarbon = Carbon::parse($billingDate);
+            $latestReadingsQuery->where(function ($q) use ($billingDateCarbon) {
+                $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
+                    ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
+                    ->orWhere(function ($subQ) use ($billingDateCarbon) {
+                        $subQ->whereYear('bill_month', $billingDateCarbon->year)
+                            ->whereMonth('bill_month', $billingDateCarbon->month);
+                    });
+            });
+        }
+        $latestScheduleReadingsByAccount = $latestReadingsQuery
             ->orderBy('account_number')
             ->orderByDesc('due_date')
             ->orderByDesc('bill_date')
@@ -846,7 +1404,22 @@ class DisconnectionController extends Controller
             ->groupBy('account_number')
             ->map(function ($items) {
                 $first = $items->first();
+
                 return $first ? (float) ($first->current_reading ?? 0) : 0.0;
+            });
+        $latestCurrentBillsByAccount = DB::table('downloaded_readings')
+            ->whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
+            ->whereNotNull('current_bill')
+            ->orderBy('account_number')
+            ->orderByDesc('reading_date')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('account_number')
+            ->map(function ($items) {
+                $first = $items->first();
+
+                return $first ? (float) ($first->current_bill ?? 0) : 0.0;
             });
 
         $eligibleConsumers = collect();
@@ -859,40 +1432,39 @@ class DisconnectionController extends Controller
                 continue;
             }
 
-            // Early exit: Need at least 3 billings to have 3 consecutive months
-            if ($billings->count() < 3) {
+            if ($billings->count() < $requiredMonths) {
                 continue;
             }
 
             // Get current balance from bulk query (latest balance from consumer_ledgers)
             // This matches the ledger view balance which uses the latest balance entry
             $currentBalance = $latestBalances->get($consumer->id, 0);
-            
+
             // Skip if no outstanding balance
             if ($currentBalance <= 0) {
                 continue;
             }
-            
+
             // Calculate unpaid dates based on PAYMENT records and collection table
-                $unpaidDatesData = $this->calculateUnpaidDates(
-                    $consumer->id, 
-                    $billings, 
-                    $allPayments->get($consumer->id, [])
-                );
+            $unpaidDatesData = $this->calculateUnpaidDates(
+                $consumer->id,
+                $billings,
+                $allPayments->get($consumer->id, [])
+            );
 
             // Check for 3 consecutive months without payment (optimized)
             // Create payment collection format for the check method
             $paidScheduleIds = $allPayments->get($consumer->id, []);
-            $paymentsCollection = collect($paidScheduleIds)->map(function($scheduleId) {
-                return (object)[
+            $paymentsCollection = collect($paidScheduleIds)->map(function ($scheduleId) {
+                return (object) [
                     'schedule_id' => $scheduleId,
                     'date' => null, // Not needed for schedule_id-based checking
                 ];
             });
-            
-            $consecutiveUnpaid = $this->check3ConsecutiveUnpaidMonthsOptimized($consumer, $billings, $paymentsCollection);
-            
-            if ($consecutiveUnpaid['has_3_consecutive']) {
+
+            $consecutiveUnpaid = $this->checkConsecutiveUnpaidMonthsOptimized($consumer, $billings, $paymentsCollection, $requiredMonths);
+
+            if ($consecutiveUnpaid['has_consecutive']) {
                 $lastMonthArrearsAmount = $this->computeLastMonthArrearsAmount(
                     $currentBalance,
                     $billings,
@@ -908,24 +1480,29 @@ class DisconnectionController extends Controller
                     (int) $unpaidDatesData['unpaid_count'],
                     $lastMonthArrearsAmount
                 );
-                $consumer->total_outstanding = $currentBalance; // Use exact ledger balance
+                $consumer->ledger_balance = round((float) $currentBalance, 2);
+                $consumer->total_outstanding = $this->sumIndexAgingOutstanding($agingBuckets);
+                $consumer->notice_soa_total = (float) $consumer->total_outstanding;
                 $consumer->consecutive_unpaid_months = $consecutiveUnpaid['months'];
                 $consumer->oldest_unpaid_date = $unpaidDatesData['oldest_unpaid_date'] ?? $consecutiveUnpaid['oldest_date'];
                 $consumer->latest_unpaid_date = $unpaidDatesData['latest_unpaid_date'] ?? $consecutiveUnpaid['latest_date'];
                 $consumer->last_reading = (float) ($latestScheduleReadingsByAccount->get($consumer->account_no, 0) ?? 0);
+                $rawCurrentBill = (float) ($latestCurrentBillsByAccount->get($consumer->account_no, 0) ?? 0);
+                $consumer->current_bill = $rawCurrentBill;
+                $consumer->current_bill_with_maintenance = round($rawCurrentBill + 20, 2);
                 $consumer->aging_current = $agingBuckets['current'];
                 $consumer->aging_30_days = $agingBuckets['days_30'];
                 $consumer->aging_60_days = $agingBuckets['days_60'];
                 $consumer->aging_90_days = $agingBuckets['days_90'];
                 $consumer->aging_over_90 = $agingBuckets['over_90'];
-                
+
                 $eligibleConsumers->push($consumer);
             }
         }
 
         // Group by zone
         $consumersByZone = $eligibleConsumers->groupBy('zone_code');
-        
+
         // Get all zones for filter
         $zones = ConsumerZoneOne::select('zone_code')
             ->distinct()
@@ -942,23 +1519,26 @@ class DisconnectionController extends Controller
         $totalConsumers = $eligibleConsumers->count();
         $totalOutstanding = $eligibleConsumers->sum('total_outstanding');
 
-        $filterType = '3_consecutive';
         $billingMonth = $request->get('billing_month');
         $billingDate = $request->get('billing_date');
         $defaultDisconnectionDate = $this->getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate);
-        return view('disconnection.index', compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'));
+
+        return view('disconnection.index', array_merge(
+            compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
+            $this->getOrdersTabData($request)
+        ));
     }
 
     /**
      * Get default disconnection date from meter_reading_schedules when billing month/date is provided.
      */
-    private function getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate, $consumers = null)
+    public function getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate, $consumers = null)
     {
         $billingFilter = $billingMonth ?: $billingDate;
-        if (!$billingFilter) {
+        if (! $billingFilter) {
             return Carbon::today()->addDays(7)->format('Y-m-d');
         }
-        $isMonthFilter = !empty($billingMonth);
+        $isMonthFilter = ! empty($billingMonth);
         $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
             $q = MeterReadingSchedule::whereNotNull('disconnection_date');
             if ($withZone && $zone) {
@@ -977,10 +1557,11 @@ class DisconnectionController extends Controller
                         ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'));
                 });
             }
+
             return $q->orderBy('disconnection_date')->first();
         };
         $schedule = $querySchedule(true);
-        if (!$schedule && $zone) {
+        if (! $schedule && $zone) {
             $schedule = $querySchedule(false);
         }
         if ($schedule && $schedule->disconnection_date) {
@@ -988,21 +1569,26 @@ class DisconnectionController extends Controller
         }
         if ($consumers && $consumers->isNotEmpty()) {
             $first = $consumers->first();
-            if (!empty($first->disconnection_date)) {
+            if (! empty($first->disconnection_date)) {
                 return Carbon::parse($first->disconnection_date)->format('Y-m-d');
             }
         }
+
         return Carbon::today()->addDays(7)->format('Y-m-d');
     }
 
     /**
-     * Check if consumer has 3 consecutive months without payment (optimized version)
-     * Uses only consumer_ledger records (BILL/BILLING and PAYMENT)
+     * Check if consumer has N consecutive months without payment (optimized version).
+     * Uses only consumer_ledger records (BILL/BILLING and PAYMENT).
+     *
+     * @param  int  $requiredMonths  Minimum consecutive unpaid months (2 or 3)
      */
-    private function check3ConsecutiveUnpaidMonthsOptimized(ConsumerZoneOne $consumer, $billings, $payments)
+    private function checkConsecutiveUnpaidMonthsOptimized(ConsumerZoneOne $consumer, $billings, $payments, int $requiredMonths = 3)
     {
+        $requiredMonths = max(2, $requiredMonths);
+
         $result = [
-            'has_3_consecutive' => false,
+            'has_consecutive' => false,
             'count' => 0,
             'months' => [],
             'oldest_date' => null,
@@ -1015,64 +1601,66 @@ class DisconnectionController extends Controller
 
         // Group billings by month-year based on due_date (only from 2025)
         $startDate = Carbon::create(2025, 1, 1);
-        $billingMonths = $billings->filter(function($billing) use ($startDate) {
+        $billingMonths = $billings->filter(function ($billing) use ($startDate) {
             $dueDate = is_string($billing->due_date) ? Carbon::parse($billing->due_date) : $billing->due_date;
+
             return $dueDate >= $startDate;
-        })->map(function($billing) {
+        })->map(function ($billing) {
             $dueDate = is_string($billing->due_date) ? Carbon::parse($billing->due_date) : $billing->due_date;
+
             return [
                 'month_key' => $dueDate->format('Y-m'),
                 'due_date' => $dueDate,
                 'billing' => $billing,
-                'debit' => (float)($billing->debit ?? 0),
-                'credit' => (float)($billing->credit ?? 0),
-                'balance' => (float)($billing->balance ?? 0),
+                'debit' => (float) ($billing->debit ?? 0),
+                'credit' => (float) ($billing->credit ?? 0),
+                'balance' => (float) ($billing->balance ?? 0),
             ];
         })->sortByDesc('due_date')->values(); // Sort descending to check most recent first
 
         // Check each billing month to see if it's unpaid (optimized with hash maps)
         $unpaidMonths = [];
-        
+
         // Pre-process payments by month and schedule_id for O(1) lookup
         $paymentsByMonth = [];
         $paymentsBySchedule = [];
-        
+
         foreach ($payments as $payment) {
             if ($payment->date) {
                 $paymentDate = Carbon::parse($payment->date);
                 $monthKey = $paymentDate->format('Y-m');
-                
+
                 // Index by month
-                if (!isset($paymentsByMonth[$monthKey])) {
+                if (! isset($paymentsByMonth[$monthKey])) {
                     $paymentsByMonth[$monthKey] = true; // Just track existence
                 }
             }
-            
+
             // Index by schedule_id
             if ($payment->schedule_id) {
                 $paymentsBySchedule[$payment->schedule_id] = true;
             }
         }
-        
+
         foreach ($billingMonths as $billingMonth) {
             $debit = $billingMonth['debit'];
             $credit = $billingMonth['credit'];
             $balance = $billingMonth['balance'];
             $scheduleId = $billingMonth['billing']->schedule_id ?? null;
             $dueDate = $billingMonth['due_date'];
-            
+
             // Check if payment exists for this schedule_id
             $hasPayment = false;
             if ($scheduleId && isset($paymentsBySchedule[$scheduleId])) {
                 $hasPayment = true;
             }
-            
+
             // A billing is considered unpaid if:
             // 1. No PAYMENT record exists with the same schedule_id, AND
             // 2. The billing has outstanding amount (debit > credit) or positive balance
             $isUnpaid = false;
-            
-            if (!$hasPayment) {
+
+            if (! $hasPayment) {
                 // No payment record, check if there's outstanding amount
                 $isUnpaid = ($debit > $credit) || ($balance > 0);
             } else {
@@ -1080,13 +1668,13 @@ class DisconnectionController extends Controller
                 // If debit > credit, there's still outstanding amount
                 $isUnpaid = ($debit > $credit);
             }
-            
+
             if ($isUnpaid) {
                 $unpaidMonths[] = $billingMonth;
             }
         }
 
-        if (count($unpaidMonths) < 3) {
+        if (count($unpaidMonths) < $requiredMonths) {
             return $result;
         }
 
@@ -1097,45 +1685,38 @@ class DisconnectionController extends Controller
             return $result;
         }
 
-        // Check for 3 consecutive months (optimized - stop early when found)
         $consecutiveCount = 1;
         $maxConsecutive = 1;
-        $consecutiveMonths = [$unpaidMonths[0]];
+        $bestStreakMonths = [$unpaidMonths[0]];
 
         for ($i = 1; $i < $unpaidMonths->count(); $i++) {
-            $prevMonth = Carbon::parse($unpaidMonths[$i - 1]['month_key'] . '-01');
-            $currentMonth = Carbon::parse($unpaidMonths[$i]['month_key'] . '-01');
-            
-            // Check if current month is exactly 1 month after previous
+            $prevMonth = Carbon::parse($unpaidMonths[$i - 1]['month_key'].'-01');
+            $currentMonth = Carbon::parse($unpaidMonths[$i]['month_key'].'-01');
+
             if ($currentMonth->diffInMonths($prevMonth) == 1) {
                 $consecutiveCount++;
-                $consecutiveMonths[] = $unpaidMonths[$i];
-                
                 if ($consecutiveCount > $maxConsecutive) {
                     $maxConsecutive = $consecutiveCount;
+                    $bestStreakMonths = $unpaidMonths->slice($i - $consecutiveCount + 1, $consecutiveCount)->values()->all();
                 }
-                
-                // If we found 3 consecutive, we can stop early
-                if ($consecutiveCount >= 3) {
+                if ($consecutiveCount >= $requiredMonths) {
+                    $bestStreakMonths = $unpaidMonths->slice($i - $consecutiveCount + 1, $consecutiveCount)->values()->all();
                     break;
                 }
             } else {
-                // If we already found 3 consecutive, stop
-                if ($maxConsecutive >= 3) {
+                if ($maxConsecutive >= $requiredMonths) {
                     break;
                 }
-                // Reset if not consecutive
                 $consecutiveCount = 1;
-                $consecutiveMonths = [$unpaidMonths[$i]];
             }
         }
 
-        if ($maxConsecutive >= 3) {
-            $result['has_3_consecutive'] = true;
+        if ($maxConsecutive >= $requiredMonths) {
+            $result['has_consecutive'] = true;
             $result['count'] = $maxConsecutive;
-            $result['months'] = collect($consecutiveMonths)->pluck('month_key')->toArray();
-            $result['oldest_date'] = $consecutiveMonths[0]['due_date'];
-            $result['latest_date'] = $consecutiveMonths[count($consecutiveMonths) - 1]['due_date'];
+            $result['months'] = collect($bestStreakMonths)->pluck('month_key')->toArray();
+            $result['oldest_date'] = $bestStreakMonths[0]['due_date'];
+            $result['latest_date'] = $bestStreakMonths[count($bestStreakMonths) - 1]['due_date'];
         }
 
         return $result;
@@ -1146,6 +1727,19 @@ class DisconnectionController extends Controller
      */
     public function printNotice(Request $request)
     {
+        $request->validate([
+            'consumer_ids' => 'required|array',
+            'consumer_ids.*' => 'exists:consumer_zone,id',
+            'disconnection_date' => 'nullable|date',
+            'list_billing_month' => 'nullable|string',
+            'list_billing_date' => 'nullable|date',
+            'financials' => 'nullable|array',
+            'financials.*.this_month_arrears' => 'nullable|numeric|min:0',
+            'financials.*.last_month_arrears' => 'nullable|numeric|min:0',
+            'financials.*.others_ar' => 'nullable|numeric|min:0',
+            'financials.*.total_outstanding' => 'nullable|numeric|min:0',
+        ]);
+
         $consumerIds = $request->input('consumer_ids', []);
         $disconnectionDate = $request->filled('disconnection_date')
             ? Carbon::parse($request->input('disconnection_date'))
@@ -1156,63 +1750,325 @@ class DisconnectionController extends Controller
                 ->with('error', 'Please select at least one consumer.');
         }
 
-        $consumers = ConsumerZoneOne::whereIn('id', $consumerIds)
-            ->with(['ledgers' => function($query) {
-                $query->where('trans', 'BILLING')
-                    ->where(function($q) {
-                        $q->whereNull('credit')->orWhere('credit', 0);
-                    })
-                    ->where('due_date', '<', now())
-                    ->orderBy('due_date', 'desc');
-            }])
-            ->get();
+        $listBillingMonth = $request->input('list_billing_month') ?: null;
+        $listBillingDate = $request->input('list_billing_date') ?: null;
+        $financialsInput = $request->input('financials', []);
 
-        $penaltyLedgersByConsumer = ConsumerLedger::whereIn('consumer_zone_id', $consumers->pluck('id'))
-            ->where('trans', 'PENALTY')
-            ->get()
-            ->groupBy('consumer_zone_id');
+        $consumersWithOutstanding = $this->buildConsumersForDisconnectionNotice(
+            $consumerIds,
+            $listBillingMonth,
+            $listBillingDate,
+            is_array($financialsInput) ? $financialsInput : []
+        );
 
-        $consumersWithOutstanding = $consumers->map(function($consumer) use ($penaltyLedgersByConsumer) {
-            $ledgers = $consumer->ledgers;
-            // Use direct ledger table balance so total is correct (avoids getLedger context issues on print)
-            $totalAmountDue = $this->getCurrentBalanceFromLedgerTable($consumer);
-
-            $penalties = $penaltyLedgersByConsumer->get($consumer->id, collect());
-
-            $firstLedger = $ledgers->first();
-
-            $thisMonthBill = $firstLedger ? (float)($firstLedger->debit ?? 0) : 0;
-            $firstDueDate = $firstLedger && $firstLedger->due_date ? Carbon::parse($firstLedger->due_date)->format('Y-m-d') : null;
-            $thisMonthPenalty = $firstDueDate ? $penalties->sum(function($p) use ($firstDueDate) {
-                $pDue = $p->due_date ? Carbon::parse($p->due_date)->format('Y-m-d') : null;
-                return $pDue === $firstDueDate ? (float)($p->debit ?? $p->penalty ?? 0) : 0;
-            }) : 0;
-            $thisMonthArrears = $thisMonthBill + $thisMonthPenalty;
-
-            // Last Month/ Arrears CY = remaining amount (total minus This Month/ Arrears)
-            $lastMonthArrears = $totalAmountDue - $thisMonthArrears;
-            $lastMonthArrears = $lastMonthArrears > 0 ? round($lastMonthArrears, 2) : 0;
-
-            $consumer->setAttribute('this_month_arrears', round($thisMonthArrears, 2));
-            $consumer->setAttribute('last_month_arrears', (float) $lastMonthArrears);
-            $consumer->setAttribute('others_ar', 0);
-            $consumer->setAttribute('total_outstanding', $totalAmountDue);
-            $consumer->setAttribute('unpaid_months', $this->adjustUnpaidMonthsForPriorArrears((int) $ledgers->count(), (float) $lastMonthArrears));
-            $consumer->setAttribute('card_number', $consumer->sequence ?? '1');
-
-            return $consumer;
-        })
-        ->filter(function($consumer) {
-            // Exclude consumers with no Last Month/Arrears CY (i.e., only current month due)
-            return $consumer->total_outstanding > 0
-                && ($consumer->last_month_arrears ?? 0) > 0.01;
-        });
+        if ($consumersWithOutstanding->isEmpty()) {
+            return redirect()->route('disconnection.index')
+                ->with('error', 'No consumers with outstanding balance for printing.');
+        }
 
         return view('disconnection.print', compact('consumersWithOutstanding', 'disconnectionDate'));
     }
 
     /**
-     * Save disconnection orders and optionally assign to disconnectors
+     * Ledger / AR aging as-of date for Save & Send — must match the candidate list
+     * (billing month → end of that month; billing date → that calendar day).
+     */
+    private function resolveListLedgerCutoffForAging(?string $listBillingMonth, ?string $listBillingDateYmd): ?string
+    {
+        if ($listBillingMonth !== null && $listBillingMonth !== '') {
+            try {
+                return Carbon::createFromFormat('Y-m', $listBillingMonth)->endOfMonth()->format('Y-m-d');
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+        if ($listBillingDateYmd !== null && $listBillingDateYmd !== '') {
+            try {
+                return Carbon::parse($listBillingDateYmd)->format('Y-m-d');
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Duplicate save = same consumer, same disconnection date, and same list filter context (billing month/date/mode).
+     * Different billing months (or other list context) allow a new row even if the calendar disconnection date repeats.
+     */
+    private function findExistingDisconnectionOrderForListContext(
+        int $consumerId,
+        Carbon $disconnectionDate,
+        ?string $listBillingMonth,
+        ?string $listBillingDateYmd,
+        ?string $listFilterType
+    ): ?DisconnectionOrder {
+        $q = DisconnectionOrder::where('consumer_id', $consumerId)
+            ->whereDate('disconnection_date', $disconnectionDate->format('Y-m-d'))
+            ->where('status', '!=', 'cancelled')
+            ->lockForUpdate();
+
+        if ($listBillingMonth !== null && $listBillingMonth !== '') {
+            $q->where('list_billing_month', $listBillingMonth);
+        } else {
+            $q->whereNull('list_billing_month');
+        }
+
+        if ($listBillingDateYmd !== null && $listBillingDateYmd !== '') {
+            $q->whereDate('list_billing_date', $listBillingDateYmd);
+        } else {
+            $q->whereNull('list_billing_date');
+        }
+
+        if ($listFilterType !== null && $listFilterType !== '') {
+            $q->where(function ($sub) use ($listFilterType) {
+                $sub->where('list_filter_type', $listFilterType);
+                // Legacy rows: migration backfilled null → disconnection_date; older saves may still have NULL.
+                if ($listFilterType === 'disconnection_date') {
+                    $sub->orWhereNull('list_filter_type');
+                }
+            });
+        } else {
+            $q->where(function ($sub) {
+                $sub->whereNull('list_filter_type')
+                    ->orWhere('list_filter_type', 'disconnection_date');
+            });
+        }
+
+        return $q->first();
+    }
+
+    /**
+     * Create disconnection orders for the given consumers (same persistence rules as Save & Send).
+     *
+     * @return array{created: int, updated: int, skipped: int, created_orders: DisconnectionOrder[], updated_orders: DisconnectionOrder[], skipped_orders: array}
+     */
+    public function syncDisconnectionOrders(
+        array $consumerIds,
+        Carbon $disconnectionDate,
+        int $disconnectorId,
+        ?string $listBillingMonth,
+        ?string $listBillingDateYmd,
+        ?string $listFilterType,
+        array $financialsInput = []
+    ): array {
+        $consumerIds = array_values(array_unique(array_map('intval', $consumerIds)));
+        sort($consumerIds);
+
+        DB::beginTransaction();
+
+        try {
+            $consumers = ConsumerZoneOne::whereIn('id', $consumerIds)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $latestScheduleReadingsByAccount = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
+                ->whereNotNull('current_reading')
+                ->orderBy('account_number')
+                ->orderByDesc('due_date')
+                ->orderByDesc('bill_date')
+                ->orderByDesc('id')
+                ->get()
+                ->groupBy('account_number')
+                ->map(function ($items) {
+                    $first = $items->first();
+
+                    return $first ? (float) ($first->current_reading ?? 0) : 0.0;
+                });
+            $latestCurrentBillsByAccount = DB::table('downloaded_readings')
+                ->whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
+                ->whereNotNull('current_bill')
+                ->orderBy('account_number')
+                ->orderByDesc('reading_date')
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->get()
+                ->groupBy('account_number')
+                ->map(function ($items) {
+                    $first = $items->first();
+
+                    return $first ? (float) ($first->current_bill ?? 0) : 0.0;
+                });
+
+            $idsForLedger = $consumers->pluck('id')->values();
+            $allBillingsForSplit = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
+                ->whereIn('trans', ['BILL', 'BILLING'])
+                ->whereNotNull('due_date')
+                ->where('due_date', '<', now())
+                ->get()
+                ->groupBy('consumer_zone_id');
+            $penaltyLedgersForOrders = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
+                ->where('trans', 'PENALTY')
+                ->get()
+                ->groupBy('consumer_zone_id');
+            $paidScheduleIdsByConsumer = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
+                ->where('trans', 'PAYMENT')
+                ->whereNotNull('schedule_id')
+                ->get()
+                ->groupBy('consumer_zone_id')
+                ->map(function ($rows) {
+                    return $rows->pluck('schedule_id')->unique()->values()->all();
+                });
+            $allBillingsForUnpaidCalc = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
+                ->whereIn('trans', ['BILL', 'BILLING'])
+                ->whereNotNull('due_date')
+                ->whereDate('due_date', '<=', Carbon::today())
+                ->get()
+                ->groupBy('consumer_zone_id');
+
+            $agingLedgerCutoff = $this->resolveListLedgerCutoffForAging($listBillingMonth, $listBillingDateYmd);
+            $arBucketsForSync = $this->computeAraAgingBucketsBulk($consumerIds, $agingLedgerCutoff);
+
+            $createdOrders = [];
+            $updatedOrders = [];
+            $skippedOrders = [];
+
+            foreach ($consumers as $consumer) {
+                $posted = $financialsInput[$consumer->id] ?? null;
+                $usePostedFinancials = is_array($posted)
+                    && isset($posted['this_month_arrears'], $posted['last_month_arrears']);
+
+                if ($usePostedFinancials) {
+                    $thisMonthArrears = round(max(0.0, (float) $posted['this_month_arrears']), 2);
+                    $lastMonthArrearsCY = round(max(0.0, (float) $posted['last_month_arrears']), 2);
+                    $othersArPosted = round(max(0.0, (float) ($posted['others_ar'] ?? 0)), 2);
+                    $totalAmountDue = round($thisMonthArrears + $lastMonthArrearsCY + $othersArPosted, 2);
+                } else {
+                    $b = $arBucketsForSync->get($consumer->id, [
+                        'current' => 0.0,
+                        'days_30' => 0.0,
+                        'days_60' => 0.0,
+                        'days_90' => 0.0,
+                        'over_90' => 0.0,
+                    ]);
+                    $mapped = $this->mapAgingBucketsToNoticeFinancialLines($b);
+                    $thisMonthArrears = $mapped['this_month_arrears'];
+                    $lastMonthArrearsCY = $mapped['last_month_arrears'];
+                    $othersArPosted = $mapped['others_ar'];
+                    $totalAmountDue = $this->sumIndexAgingOutstanding($b);
+                }
+
+                if ($totalAmountDue <= 0) {
+                    $skippedOrders[] = [
+                        'account_no' => $consumer->account_no,
+                        'reason' => 'No outstanding balance',
+                    ];
+
+                    continue;
+                }
+
+                $unpaidDatesData = $this->calculateUnpaidDates(
+                    $consumer->id,
+                    $allBillingsForUnpaidCalc->get($consumer->id, collect()),
+                    $paidScheduleIdsByConsumer->get($consumer->id, [])
+                );
+                $unpaidMonthsAdjusted = $this->adjustUnpaidMonthsForPriorArrears(
+                    (int) $unpaidDatesData['unpaid_count'],
+                    (float) $lastMonthArrearsCY + (float) $othersArPosted
+                );
+
+                $oldestUnpaid = $unpaidDatesData['oldest_unpaid_date'] ?? $disconnectionDate;
+                $latestUnpaid = $unpaidDatesData['latest_unpaid_date'] ?? $disconnectionDate;
+                $rawCurrentBill = (float) ($latestCurrentBillsByAccount->get($consumer->account_no, 0) ?? 0);
+                $currentBillWithMaintenance = round($rawCurrentBill + 20, 2);
+
+                $existingOrder = $this->findExistingDisconnectionOrderForListContext(
+                    $consumer->id,
+                    $disconnectionDate,
+                    $listBillingMonth,
+                    $listBillingDateYmd,
+                    $listFilterType
+                );
+
+                if (! $existingOrder) {
+                    $cardNo = $consumer->sequence ?? null;
+                    $cardNumber = is_numeric($cardNo) ? (int) $cardNo : 1;
+
+                    $order = DisconnectionOrder::create([
+                        'consumer_id' => $consumer->id,
+                        'disconnector_id' => $disconnectorId,
+                        'account_no' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'address' => $consumer->address1,
+                        'zone_code' => $consumer->zone_code,
+                        'meter_number' => $consumer->meter_number,
+                        'last_reading' => (float) ($latestScheduleReadingsByAccount->get($consumer->account_no, 0) ?? 0),
+                        'card_number' => $cardNumber,
+                        'this_month_arrears' => $thisMonthArrears,
+                        'last_month_arrears' => (float) $lastMonthArrearsCY,
+                        'others_ar' => $othersArPosted,
+                        'total_outstanding' => $totalAmountDue,
+                        'current_bill_with_maintenance' => $currentBillWithMaintenance,
+                        'unpaid_months' => $unpaidMonthsAdjusted,
+                        'oldest_unpaid_date' => $oldestUnpaid,
+                        'latest_unpaid_date' => $latestUnpaid,
+                        'disconnection_date' => $disconnectionDate,
+                        'list_billing_month' => $listBillingMonth,
+                        'list_billing_date' => $listBillingDateYmd,
+                        'list_filter_type' => $listFilterType,
+                        'status' => 'assigned',
+                        'assigned_at' => now(),
+                    ]);
+
+                    $createdOrders[] = $order;
+
+                    \Log::info('Disconnection order created', [
+                        'order_id' => $order->id,
+                        'account_no' => $consumer->account_no,
+                        'total_outstanding' => $totalAmountDue,
+                        'disconnector_id' => $disconnectorId,
+                        'status' => 'assigned',
+                    ]);
+                } elseif (in_array($existingOrder->status, ['assigned', 'pending', 'in-progress'], true)) {
+                    // Same list context + date already exists: refresh assignment and snapshot for the mobile app.
+                    $existingOrder->update([
+                        'disconnector_id' => $disconnectorId,
+                        'this_month_arrears' => $thisMonthArrears,
+                        'last_month_arrears' => (float) $lastMonthArrearsCY,
+                        'others_ar' => $othersArPosted,
+                        'total_outstanding' => $totalAmountDue,
+                        'current_bill_with_maintenance' => $currentBillWithMaintenance,
+                        'unpaid_months' => $unpaidMonthsAdjusted,
+                        'oldest_unpaid_date' => $oldestUnpaid,
+                        'latest_unpaid_date' => $latestUnpaid,
+                        'last_reading' => (float) ($latestScheduleReadingsByAccount->get($consumer->account_no, 0) ?? 0),
+                        'assigned_at' => now(),
+                    ]);
+                    $updatedOrders[] = $existingOrder;
+
+                    \Log::info('Disconnection order reassigned', [
+                        'order_id' => $existingOrder->id,
+                        'account_no' => $consumer->account_no,
+                        'disconnector_id' => $disconnectorId,
+                        'status' => $existingOrder->status,
+                    ]);
+                } else {
+                    $skippedOrders[] = [
+                        'account_no' => $consumer->account_no,
+                        'reason' => 'Order already exists for this list context (e.g. disconnected); remove or cancel the old order to create a new one.',
+                    ];
+                }
+            }
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        return [
+            'created' => count($createdOrders),
+            'updated' => count($updatedOrders),
+            'skipped' => count($skippedOrders),
+            'created_orders' => $createdOrders,
+            'updated_orders' => $updatedOrders,
+            'skipped_orders' => $skippedOrders,
+        ];
+    }
+
+    /**
+     * Save disconnection orders and assign to disconnector (defaults from config/disconnection.php).
      */
     public function saveAndAssign(Request $request)
     {
@@ -1220,175 +2076,223 @@ class DisconnectionController extends Controller
             'consumer_ids' => 'required|array',
             'consumer_ids.*' => 'exists:consumer_zone,id',
             'disconnection_date' => 'required|date',
-            'assign_to' => ['nullable', Rule::when($request->filled('assign_to'), ['exists:users,id'])],
+            'assign_to' => 'nullable|exists:users,id',
+            'list_billing_month' => 'nullable|date_format:Y-m',
+            'list_billing_date' => 'nullable|date',
+            'list_filter_type' => 'nullable|string|in:disconnection_date,2_consecutive,3_consecutive',
+            'financials' => 'nullable|array',
+            'financials.*' => 'array',
+            'financials.*.this_month_arrears' => 'nullable|numeric|min:0',
+            'financials.*.last_month_arrears' => 'nullable|numeric|min:0',
+            'financials.*.others_ar' => 'nullable|numeric|min:0',
+            'financials.*.total_outstanding' => 'nullable|numeric|min:0',
         ]);
 
-        $consumerIds = $request->input('consumer_ids');
+        $consumerIds = array_values(array_unique(array_map('intval', (array) $request->input('consumer_ids'))));
+        sort($consumerIds);
         $disconnectionDate = Carbon::parse($request->input('disconnection_date'));
-        $assignToId = $request->filled('assign_to') ? (int) $request->input('assign_to') : null;
+        $defaultDisconnectorId = (int) config('disconnection.default_disconnector_id', 47);
+        $assignToId = $request->filled('assign_to')
+            ? (int) $request->input('assign_to')
+            : $defaultDisconnectorId;
+        $financialsInput = $request->input('financials', []);
+
+        $listBillingMonth = $request->filled('list_billing_month') ? $request->input('list_billing_month') : null;
+        $listBillingDate = $request->filled('list_billing_date')
+            ? Carbon::parse($request->input('list_billing_date'))->format('Y-m-d')
+            : null;
+        $listFilterType = $request->filled('list_filter_type') ? $request->input('list_filter_type') : null;
 
         try {
-            DB::beginTransaction();
+            $result = $this->syncDisconnectionOrders(
+                $consumerIds,
+                $disconnectionDate,
+                $assignToId,
+                $listBillingMonth,
+                $listBillingDate,
+                $listFilterType,
+                $financialsInput
+            );
 
-            $consumers = ConsumerZoneOne::whereIn('id', $consumerIds)->get();
-
-            $idsForLedger = $consumers->pluck('id');
-            $allBillingsForSplit = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
-                ->whereIn('trans', ['BILL', 'BILLING'])
-                ->whereNotNull('due_date')
-                ->get()
-                ->groupBy('consumer_zone_id');
-            $penaltyLedgersForOrders = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
-                ->where('trans', 'PENALTY')
-                ->get()
-                ->groupBy('consumer_zone_id');
-
-            $createdOrders = [];
-            $skippedOrders = [];
-
-            foreach ($consumers as $consumer) {
-                // Get the current balance from ledger (same as ledger view shows)
-                $totalAmountDue = $this->getCurrentBalance($consumer);
-                
-                // Skip if balance is 0 or negative (already paid)
-                if ($totalAmountDue <= 0) {
-                    $skippedOrders[] = [
-                        'account_no' => $consumer->account_no,
-                        'reason' => 'No outstanding balance'
-                    ];
-                    continue;
+            $savedTotal = $result['created'] + ($result['updated'] ?? 0);
+            if ($savedTotal === 0) {
+                $message = $result['skipped'] > 0
+                    ? 'No new orders created. '.$result['skipped'].' account(s) were skipped (duplicate or not applicable).'
+                    : 'No orders were created.';
+                $firstSkip = $result['skipped_orders'][0] ?? null;
+                if (is_array($firstSkip) && ! empty($firstSkip['reason'])) {
+                    $message .= ' '.$firstSkip['account_no'].': '.$firstSkip['reason'];
                 }
 
-                // Get ledgers for arrears breakdown
-                $ledgers = $consumer->ledgers()
-                    ->where('trans', 'BILLING')
-                    ->where('due_date', '<', now())
-                    ->orderBy('due_date', 'desc')
-                    ->get();
-                
-                // For display purposes, calculate arrears breakdown
-                $thisMonthArrears = $ledgers->first() ? (float)($ledgers->first()->debit ?? 0) : 0;
-                $lastMonthArrears = $ledgers->count() > 1 ? (float)($ledgers->skip(1)->first()->debit ?? 0) : 0;
-                $othersAR = $ledgers->skip(2)->sum(function($ledger) {
-                    return (float)($ledger->debit ?? 0);
-                });
-
-                $lastMonthArrearsCY = $this->computeLastMonthArrearsAmount(
-                    $totalAmountDue,
-                    $allBillingsForSplit->get($consumer->id, collect()),
-                    $penaltyLedgersForOrders->get($consumer->id, collect())
-                );
-                $unpaidMonthsAdjusted = $this->adjustUnpaidMonthsForPriorArrears((int) $ledgers->count(), $lastMonthArrearsCY);
-
-                // Check if order already exists for this date
-                $existingOrder = DisconnectionOrder::where('consumer_id', $consumer->id)
-                    ->where('disconnection_date', $disconnectionDate)
-                    ->where('status', '!=', 'cancelled')
-                    ->first();
-
-                if (!$existingOrder) {
-                    $oldestUnpaid = $ledgers->isNotEmpty() ? ($ledgers->last()->due_date ?? $disconnectionDate) : $disconnectionDate;
-                    $latestUnpaid = $ledgers->isNotEmpty() ? ($ledgers->first()->due_date ?? $disconnectionDate) : $disconnectionDate;
-                    $order = DisconnectionOrder::create([
-                        'consumer_id' => $consumer->id,
-                        'disconnector_id' => $assignToId,
-                        'account_no' => $consumer->account_no,
-                        'account_name' => $consumer->account_name,
-                        'address' => $consumer->address1,
-                        'zone_code' => $consumer->zone_code,
-                        'meter_number' => $consumer->meter_number,
-                        'card_number' => $consumer->sequence ?? 1,
-                        'this_month_arrears' => $thisMonthArrears,
-                        'last_month_arrears' => $lastMonthArrears,
-                        'others_ar' => $othersAR,
-                        'total_outstanding' => $totalAmountDue,
-                        'unpaid_months' => $unpaidMonthsAdjusted,
-                        'oldest_unpaid_date' => $oldestUnpaid,
-                        'latest_unpaid_date' => $latestUnpaid,
-                        'disconnection_date' => $disconnectionDate,
-                        'status' => $assignToId ? 'assigned' : 'pending',
-                        'assigned_at' => $assignToId ? now() : null,
-                    ]);
-
-                    $createdOrders[] = $order;
-                    
-                    \Log::info('Disconnection order created', [
-                        'order_id' => $order->id,
-                        'account_no' => $consumer->account_no,
-                        'total_outstanding' => $totalAmountDue,
-                        'disconnector_id' => $assignToId,
-                        'status' => $assignToId ? 'assigned' : 'pending'
-                    ]);
-                } else {
-                    $skippedOrders[] = [
-                        'account_no' => $consumer->account_no,
-                        'reason' => 'Order already exists for this date'
-                    ];
-                }
+                return redirect()->route('disconnection.index')
+                    ->with('disconnection_save_warning', $message);
             }
 
-            DB::commit();
-
-            $message = count($createdOrders) . ' disconnection order(s) created.';
-            if ($assignToId) {
-                $message .= ' Assigned to disconnector.';
-            } else {
-                $message .= ' Saved as pending (assign from Disconnection Orders Management).';
+            $message = '';
+            if ($result['created'] > 0) {
+                $message .= $result['created'].' disconnection order(s) created and assigned to disconnector.';
             }
-            if (count($skippedOrders) > 0) {
-                $message .= ' ' . count($skippedOrders) . ' order(s) skipped.';
+            if (($result['updated'] ?? 0) > 0) {
+                $message .= ($message !== '' ? ' ' : '')
+                    .$result['updated'].' existing order(s) updated (reassigned / refreshed for mobile).';
+            }
+            if ($result['skipped'] > 0) {
+                $message .= ' '.$result['skipped'].' order(s) skipped (not applicable).';
             }
 
             return redirect()->route('disconnection.index')
-                ->with('success', $message);
-
+                ->with('success', trim($message));
         } catch (\Exception $e) {
-            DB::rollBack();
-            \Log::error('Error saving disconnection orders: ' . $e->getMessage());
+            \Log::error('Error saving disconnection orders: '.$e->getMessage());
+
             return redirect()->route('disconnection.index')
-                ->with('error', 'Error saving disconnection orders: ' . $e->getMessage());
+                ->with('error', 'Error saving disconnection orders: '.$e->getMessage());
         }
     }
 
     /**
-     * Show disconnection assignments page (for assigning orders to disconnectors)
+     * Resolve the disconnection history date range (disconnected_at) for assignments list / export.
+     * Supports legacy ?date_saved=YYYY-MM-DD (single day, same as from and to).
+     *
+     * @return array{from: \Carbon\Carbon, to: \Carbon\Carbon, from_date: string, to_date: string}
+     */
+    private function resolveAssignmentsDisconnectionDateRange(Request $request): array
+    {
+        $fromStr = trim((string) $request->input('disconnected_from', ''));
+        $toStr = trim((string) $request->input('disconnected_to', ''));
+
+        if ($request->filled('date_saved')) {
+            $fromStr = $toStr = (string) $request->input('date_saved');
+        }
+
+        if ($fromStr === '' && $toStr === '') {
+            $fromStr = Carbon::now()->startOfMonth()->toDateString();
+            $toStr = Carbon::now()->toDateString();
+        } elseif ($fromStr !== '' && $toStr === '') {
+            $toStr = Carbon::now()->toDateString();
+        } elseif ($fromStr === '' && $toStr !== '') {
+            $fromStr = Carbon::parse($toStr)->startOfMonth()->toDateString();
+        }
+
+        try {
+            $from = Carbon::parse($fromStr)->startOfDay();
+            $to = Carbon::parse($toStr)->endOfDay();
+        } catch (\Throwable) {
+            $from = Carbon::now()->startOfMonth()->startOfDay();
+            $to = Carbon::now()->endOfDay();
+            $fromStr = $from->toDateString();
+            $toStr = $to->toDateString();
+        }
+
+        if ($from->greaterThan($to)) {
+            [$from, $to] = [$to->copy()->startOfDay(), $from->copy()->endOfDay()];
+            $fromStr = $from->toDateString();
+            $toStr = $to->toDateString();
+        }
+
+        return [
+            'from' => $from,
+            'to' => $to,
+            'from_date' => $fromStr,
+            'to_date' => $toStr,
+        ];
+    }
+
+    /**
+     * Orders with a recorded disconnect time within the selected range (disconnected_at).
+     */
+    private function assignmentsFilteredQuery(Request $request): Builder
+    {
+        $range = $this->resolveAssignmentsDisconnectionDateRange($request);
+
+        return DisconnectionOrder::query()
+            ->with(['consumer', 'disconnector'])
+            ->whereNotNull('disconnected_at')
+            ->whereBetween('disconnected_at', [$range['from'], $range['to']])
+            ->orderByDesc('disconnected_at');
+    }
+
+    /**
+     * Past disconnection activity by disconnected_at date range.
      */
     public function assignments(Request $request)
     {
-        $orders = DisconnectionOrder::query()
-            ->with(['consumer', 'disconnector'])
-            ->orderBy('created_at', 'desc');
+        $range = $this->resolveAssignmentsDisconnectionDateRange($request);
+        $orders = $this->assignmentsFilteredQuery($request)->paginate(20)->withQueryString();
 
-        // Filter by status
-        if ($request->has('status')) {
-            $orders->where('status', $request->input('status'));
-        }
+        return view('disconnection.assignments', compact('orders', 'range'));
+    }
 
-        // Filter by zone
-        if ($request->has('zone')) {
-            $orders->where('zone_code', $request->input('zone'));
-        }
+    /**
+     * Export filtered disconnection assignments to Excel (all rows, not only current page).
+     */
+    public function exportAssignments(Request $request)
+    {
+        $statusLabels = [
+            'pending' => 'Pending',
+            'assigned' => 'Assigned',
+            'in-progress' => 'In Progress',
+            'disconnected' => 'Disconnected',
+            'reconnected' => 'Reconnected',
+        ];
 
-        // Filter by disconnector
-        if ($request->has('disconnector_id')) {
-            $orders->where('disconnector_id', $request->input('disconnector_id'));
-        }
+        $records = $this->assignmentsFilteredQuery($request)
+            ->get()
+            ->map(function (DisconnectionOrder $order) use ($statusLabels) {
+                if ($order->disconnected_at) {
+                    $disconnectionDate = $order->disconnected_at->format('M d, Y h:i A');
+                } elseif ($order->disconnection_date) {
+                    $disconnectionDate = $order->disconnection_date->format('M d, Y');
+                } else {
+                    $disconnectionDate = 'N/A';
+                }
 
-        $orders = $orders->paginate(20);
+                return [
+                    $order->account_no ?? '',
+                    $order->account_name ?? '',
+                    $order->zone_code ?? '',
+                    round((float) $order->total_outstanding, 2),
+                    $disconnectionDate,
+                    $statusLabels[$order->status] ?? ucfirst((string) $order->status),
+                    optional($order->disconnector)->name ?? '',
+                ];
+            });
 
-        // Get all zones
-        $zones = DisconnectionOrder::select('zone_code')
-            ->distinct()
-            ->whereNotNull('zone_code')
-            ->orderBy('zone_code')
-            ->pluck('zone_code');
+        $range = $this->resolveAssignmentsDisconnectionDateRange($request);
+        $filename = 'Disconnection-History-'.$range['from_date'].'_to_'.$range['to_date'].'-'.Carbon::now()->format('His').'.xlsx';
 
-        // Get all disconnectors (users with disconnector role)
-        $disconnectors = User::where('role', 'disconnector')
-            ->orderBy('name')
-            ->get();
+        return Excel::download(
+            new class($records) implements FromCollection, WithHeadings, WithTitle
+            {
+                public function __construct(
+                    private \Illuminate\Support\Collection $rows
+                ) {}
 
-        return view('disconnection.assignments', compact('orders', 'zones', 'disconnectors'));
+                public function collection()
+                {
+                    return $this->rows;
+                }
+
+                public function headings(): array
+                {
+                    return [
+                        'Account No.',
+                        'Account Name',
+                        'Zone',
+                        'Total Outstanding',
+                        'Disconnection Date',
+                        'Status',
+                        'Assigned To',
+                    ];
+                }
+
+                public function title(): string
+                {
+                    return 'Disconnection History';
+                }
+            },
+            $filename
+        );
     }
 
     /**
@@ -1413,11 +2317,32 @@ class DisconnectionController extends Controller
             ]);
 
             return redirect()->route('disconnection.assignments')
-                ->with('success', count($orderIds) . ' order(s) assigned to disconnector.');
+                ->with('success', count($orderIds).' order(s) assigned to disconnector.');
 
         } catch (\Exception $e) {
             return redirect()->route('disconnection.assignments')
-                ->with('error', 'Error assigning orders: ' . $e->getMessage());
+                ->with('error', 'Error assigning orders: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Update editable fields of a disconnection order from the Orders tab.
+     */
+    public function updateOrder(Request $request, int $orderId)
+    {
+        $request->validate([
+            'current_bill_with_maintenance' => 'required|numeric|min:0',
+        ]);
+
+        try {
+            $order = DisconnectionOrder::findOrFail($orderId);
+            $order->update([
+                'current_bill_with_maintenance' => round((float) $request->input('current_bill_with_maintenance'), 2),
+            ]);
+
+            return redirect()->back()->with('success', 'Order updated successfully.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Error updating order: '.$e->getMessage());
         }
     }
 }

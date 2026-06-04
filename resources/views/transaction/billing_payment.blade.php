@@ -402,6 +402,7 @@
                                                     <option value="check">Check</option>
                                                     <option value="gcash">GCash</option>
                                                     <option value="bank">Bank Transfer</option>
+                                                    <option value="palawan">Palawan Pay-OTC</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -749,7 +750,7 @@
             let isLoadingFromMonthSelector = false; // Flag to prevent populateFromLookup from overwriting penalty
             let arrearsPreviousManuallyEdited = false; // Flag to track if user manually edited Arrears — Previous Month
             const SENIOR_DISCOUNT_LIMIT_CONSUMPTION = 30;
-
+            
             const disableWheelStepChange = (input) => {
                 if (!input || input.type !== 'number') return;
                 input.addEventListener('wheel', (event) => {
@@ -843,7 +844,7 @@
                 if (Number.isNaN(d.getTime())) return '';
                 return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
             };
-
+            
             const getConsumptionFromPayload = (...sources) => {
                 const candidateKeys = [
                     'consumption',
@@ -905,7 +906,7 @@
                 scDiscountLedgerText.textContent = dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
                 scDiscountLedgerText.classList.remove('d-none');
             };
-
+            
             // Track Senior eligibility for the currently loaded account.
             let currentAccountIsSenior = false;
             const isSeniorConsumerAccount = (account) => {
@@ -1243,8 +1244,8 @@
                 });
                 const seniorDiscountEnabled = !!document.getElementById('enableSeniorDiscount')?.checked;
                 if (seniorDiscountEnabled) {
-                    const seniorDiscount = Math.max(parseNumeric(document.getElementById('fieldSeniorDiscount')?.value), 0);
-                    subtotal = Math.max(subtotal - seniorDiscount, 0);
+                const seniorDiscount = Math.max(parseNumeric(document.getElementById('fieldSeniorDiscount')?.value), 0);
+                subtotal = Math.max(subtotal - seniorDiscount, 0);
                 }
 
                 subtotalField.value = formatCurrency(subtotal);
@@ -1504,12 +1505,7 @@
                                 if (typeof updateTotals === 'function') updateTotals();
                             }
                         }
-                        if (
-                            (parseFloat(currentBalanceValue) || 0) <= 0.009
-                            && !lockPaidOrBreakdown
-                            && !isLoadingFromMonthSelector
-                            && !currentLookupController
-                        ) {
+                        if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown) {
                             clearPaymentBreakdown();
                         }
                         updateTotals();
@@ -1691,8 +1687,7 @@
                 const penaltyField = document.getElementById('fieldPenalty');
                 const unpaidBillMonth = document.getElementById('unpaidBillMonth');
                 const hasBillMonthSelected = unpaidBillMonth && unpaidBillMonth.value && unpaidBillMonth.value !== '';
-                // Do not use paid_at for penalty breakdown gating; rely on breakdown payload itself.
-                const isPaidForPenalty = false;
+                const isPaidForPenalty = payment.paid_at != null && String(payment.paid_at).trim() !== '';
                 
                 // Only set penalty from billing.penalty if:
                 // 1. No bill month is currently selected (user hasn't used the month selector)
@@ -1815,10 +1810,9 @@
                 const isPaid = isExplicitOrLookup ? hasExactOrMatch : hasMonthPaidRecord;
                 const hasPaymentBreakdown = payment && (payment.current_bill !== undefined || payment.penalty !== undefined || payment.meter_maintenance !== undefined);
                 const hasCurrentBalance = (parseFloat(currentBalanceValue) || 0) > 0.009;
-                // Keep saved paid breakdown only when there is no remaining balance.
-                // If balance remains, always recompute via bill-month-details so current unpaid month
-                // is shown in Current Bill instead of stale paid-month breakdown.
-                const keepPaidMonthOrBreakdown = isPaid && hasPaymentBreakdown && !hasCurrentBalance;
+                // Keep saved paid breakdown for paid-month account lookup (including zero balance).
+                // For remaining-balance + explicit OR flow, `isPaid` is false until OR matches, so API recompute still runs.
+                const keepPaidMonthOrBreakdown = isPaid && hasPaymentBreakdown;
                 if (keepPaidMonthOrBreakdown) {
                     // Paid in selected month + still has balance: keep the saved OR/payment breakdown.
                     lockPaidOrBreakdown = true;
@@ -1896,12 +1890,7 @@
                                         if (typeof updateTotals === 'function') updateTotals();
                                     }
                                 }
-                                if (
-                                    (parseFloat(currentBalanceValue) || 0) <= 0.009
-                                    && !lockPaidOrBreakdown
-                                    && !isLoadingFromMonthSelector
-                                    && !currentLookupController
-                                ) {
+                                if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown) {
                                     clearPaymentBreakdown();
                                 }
                                 if (typeof updateTotals === 'function') updateTotals();
@@ -1914,8 +1903,9 @@
                     setPaymentStatusForMonth(isPaid ? 'paid' : 'unpaid');
                 }
 
-                if (isPaid && (keepPaidMonthOrBreakdown || isExplicitOrLookup)) {
+                if (isPaid) {
                     // When paid: show breakdown from payment record (consumer_payments) when available
+                    const hasPaymentBreakdown = payment && (payment.current_bill !== undefined || payment.penalty !== undefined || payment.meter_maintenance !== undefined);
                     if (hasPaymentBreakdown) {
                         setNumberFieldValue(document.getElementById('fieldCurrentBill'), payment.current_bill ?? 0);
                         const penaltyField = document.getElementById('fieldPenalty');
@@ -1937,7 +1927,7 @@
                         setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                         setNumberFieldValue(document.getElementById('fieldFees'), 0);
                         setNumberFieldValue(document.getElementById('fieldInspection'), 0);
-
+                        
                         // Paid month with remaining balance:
                         // - if bill <= balance: keep bill in Current Bill, put remainder in Arrears CY
                         // - if bill > balance: put full balance in Arrears CY and set Current Bill to 0
@@ -1953,6 +1943,8 @@
                             }
                         }
                     }
+                    
+                    
                     // When paid but no breakdown in payload: leave billing-populated values (don't force 0)
                     updateTotals();
 
@@ -1997,14 +1989,16 @@
                 } else {
                     // No payment exists: Populate payment fields normally
                 const method = (payment.method || '').toLowerCase();
-                if (['cash', 'check', 'gcash', 'bank'].includes(method)) {
+                if (['cash', 'check', 'gcash', 'bank','palawan'].includes(method)) {
                     paymentTypeField.value = method;
                 } else {
                     paymentTypeField.value = 'cash';
                 }
 
-                // Keep remarks empty by default; user can type manually if needed.
-                paymentRemarksField.value = '';
+                // Format remarks like "19901020 Advances for Payroll" (code + space + remark text)
+                const remarkCode = (downloaded_reading && downloaded_reading.id != null && downloaded_reading.id !== '') ? String(downloaded_reading.id) : (payment && payment.id != null && payment.id !== '' ? String(payment.id) : '');
+                const remarkText = payment.remarks || (downloaded_reading && downloaded_reading.reader_notes) || '';
+                paymentRemarksField.value = (remarkCode ? remarkCode + ' ' : '') + (remarkText || '');
 
                 // Populate payment amount from downloaded_readings
                 if (paymentAmountField && payment.amount !== undefined && payment.amount !== null) {
@@ -2053,12 +2047,7 @@
                 updateTotals();
 
                 // Final safety: if current balance is zero, force Payment Breakdown to 0.00
-                if (
-                    currentBalanceValue <= 0.009
-                    && !lockPaidOrBreakdown
-                    && !isLoadingFromMonthSelector
-                    && !currentLookupController
-                ) {
+                if (currentBalanceValue <= 0.009 && !lockPaidOrBreakdown) {
                     clearPaymentBreakdown();
                 }
             };
@@ -2068,9 +2057,9 @@
                 const accountName = getAccountName();
                 const billMonthRaw = billMonthField?.value?.trim() || '';
                 const currentOrValue = String((document.getElementById('officialReceipt') || {}).value || '').trim();
-                    if (paymentRemarksField) {
-                        paymentRemarksField.value = '';
-                    }
+                if (paymentRemarksField) {
+                    paymentRemarksField.value = '';
+                }
 
                 // If Account Number field has a value, use it to search both account_number and account_name
                 // If Account Name field has a value (and Account Number is empty), use it to search account_name
@@ -2161,7 +2150,7 @@
                         lastLookupKey = null;
                         return;
                     }
-
+                    
                     const paidWithBreakdownForMonth = payload.data?.payment?.status === 'paid'
                         && (payload.data?.payment?.current_bill !== undefined
                             || payload.data?.payment?.penalty !== undefined

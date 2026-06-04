@@ -35,10 +35,10 @@
             'icon' => 'exclamation-circle',
         ],
         [
-            'title' => 'Service Report',
-            'description' => 'Meter installations, transfers, and maintenance service requests in progress.',
+            'title' => 'Consumer Ledger Report',
+            'description' => 'Traditional ledger card per account with billings, payments, and running balances. Multi-sheet Excel export.',
             'route' => 'service-request-report',
-            'icon' => 'toolbox',
+            'icon' => 'book',
         ],
         [
             'title' => 'A/R Aging Summary',
@@ -46,11 +46,11 @@
             'route' => 'ar-aging-summary',
             'icon' => 'hourglass-half',
         ],
-        [
-            'title' => 'Consumers for Disconnection',
-            'description' => 'Accounts tagged for disconnection with outstanding balances and notice status.',
-            'route' => 'consumer-for-disconnection',
-            'icon' => 'plug',
+            [
+            'title' => 'Disconnected consumer',
+            'description' => 'Historical disconnections by actual disconnect date and time, with export to Excel.',
+            'route' => 'disconnection.assignments',
+            'icon' => 'unlink',
         ],
         [
             'title' => 'Visual Summary',

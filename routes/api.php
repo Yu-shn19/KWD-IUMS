@@ -7,6 +7,7 @@ use App\Http\Controllers\ReaderController;
 use App\Http\Controllers\Api\RoutesImportController;
 use App\Http\Controllers\Api\DisconnectorApiController;
 use App\Http\Controllers\Api\PricingTierApiController;
+use App\Http\Controllers\ConsumerController; // Mao ni akoang gi add
 
 /*
 |--------------------------------------------------------------------------
@@ -51,6 +52,13 @@ Route::prefix('reader')->middleware('api.reader')->group(function () {
     });
 });
 
+// Reader-authenticated consumer utilities (same token as /api/reader/*) mao ni akoang gi add
+Route::middleware('api.reader')->group(function () {
+    Route::get('/consumer/suggestions', [ConsumerController::class, 'getSuggestions']);
+    Route::get('/consumer/zone', [ReaderController::class, 'getConsumerZone']);
+    Route::post('/consumer/coordinates', [ReaderController::class, 'saveConsumerCoordinates']);
+});
+
 // Pricing Tiers API (public for mobile app)
 Route::prefix('pricing-tiers')->group(function () {
     Route::get('/', [PricingTierApiController::class, 'index']);
@@ -64,11 +72,13 @@ Route::post('/routes/import', [RoutesImportController::class, 'import']);
 Route::prefix('disconnector')->group(function () {
     // Public endpoints (can be protected with middleware if needed)
     Route::get('/assignments', [DisconnectorApiController::class, 'getAssignments']);
+    Route::get('/ar-aging-summary', [DisconnectorApiController::class, 'getArAgingSummary']);
     Route::get('/orders', [DisconnectorApiController::class, 'getOrders']);
     Route::get('/orders/{orderId}', [DisconnectorApiController::class, 'getOrder']);
     Route::get('/stats', [DisconnectorApiController::class, 'getStats']);
     Route::get('/cancelled-due-to-payment', [DisconnectorApiController::class, 'getCancelledDueToPayment']);
     Route::post('/assignments/status', [DisconnectorApiController::class, 'updateAssignmentStatus']);
+    Route::post('/assignments/clear-all', [DisconnectorApiController::class, 'clearAllAssignments']);
     
     // Debug endpoint to check saved orders
     Route::get('/debug/all-orders', function() {

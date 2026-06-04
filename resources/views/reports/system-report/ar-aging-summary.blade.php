@@ -47,7 +47,7 @@
                                                     <option value="X - DISCONNECTED" {{ $status == 'X - DISCONNECTED' ? 'selected' : '' }}>X - DISCONNECTED</option>
                                                 </select>
                                             </div>
-
+                                            
                                             <!-- Balance Filter -->
                                             <div class="col-md-2">
                                                 <label class="small font-weight-bold mb-1">Balance Filter</label>
@@ -170,12 +170,12 @@
                                                 <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 10px;" id="agingTable">
                                                     <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                                         <tr>
-                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">Zone_code</th>
-                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">Sequence</th>
+                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">ZONE_CODE</th>
+                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 70px;">SEQUENCE</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 100px;">ACCOUNT NO</th>
                                                             <th class="py-2 px-1" style="min-width: 180px;">ACCOUNT NAME</th>
                                                             <th class="text-center py-2 px-1 no-print-col" style="min-width: 60px;">STATUS</th>
-                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 90px;">Category_code</th>
+                                                            <th class="text-center py-2 px-1 no-print-col" style="min-width: 90px;">CATEGORY_CODE</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 90px;">CURRENT</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 70px;">_30</th>
                                                             <th class="text-center py-2 px-1" style="min-width: 70px;">_60</th>

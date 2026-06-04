@@ -3,6 +3,59 @@
 @include('partials.header')
 
 <body id="page-top">
+    <style>
+        #readingGuidePrintSheet { display: none; }
+        @media print {
+            body.print-reading-guide #wrapper,
+            body.print-reading-guide .scroll-to-top,
+            body.print-reading-guide .modal,
+            body.print-reading-guide script { display: none !important; }
+            body.print-reading-guide #readingGuidePrintSheet {
+                display: block !important;
+                padding: 8mm;
+                font-family: Arial, Helvetica, sans-serif;
+                color: #111;
+            }
+            body.print-reading-guide #readingGuidePrintSheet .rg-title {
+                font-size: 22px;
+                font-weight: 700;
+                margin: 0;
+                line-height: 1.2;
+            }
+            body.print-reading-guide #readingGuidePrintSheet .rg-subtitle {
+                font-size: 18px;
+                margin: 0 0 8px 0;
+            }
+            body.print-reading-guide #readingGuidePrintSheet .rg-meta {
+                font-size: 15px;
+                margin: 0 0 10px 0;
+            }
+            body.print-reading-guide #readingGuidePrintSheet table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+                border: none;
+            }
+            body.print-reading-guide #readingGuidePrintSheet thead th {
+                border-top: 1px solid #333;
+                border-bottom: 1px solid #333;
+                border-left: none;
+                border-right: none;
+                padding: 3px 4px;
+                vertical-align: top;
+            }
+            body.print-reading-guide #readingGuidePrintSheet tbody td {
+                border: none;
+                padding: 3px 4px;
+                vertical-align: top;
+            }
+            /* Handwriting lines: PresRdg + Remarks */
+            body.print-reading-guide #readingGuidePrintSheet tbody tr td:nth-child(7),
+            body.print-reading-guide #readingGuidePrintSheet tbody tr td:nth-child(9) {
+                border-bottom: 1px solid #333;
+            }
+        }
+    </style>
     <div id="wrapper">
         <!-- Sidebar -->
         @include('partials.sidebar')
@@ -120,8 +173,11 @@
                                                 <button type="submit" class="btn btn-primary btn-sm mr-2">
                                                     <i class="fas fa-sync-alt mr-1"></i>Generate
                                                 </button>
-                                                <button type="button" class="btn btn-danger btn-sm mr-2" onclick="window.print()">
+                                                <button type="button" class="btn btn-danger btn-sm mr-2" id="printReadingGuideBtn">
                                                     <i class="fas fa-file-pdf mr-1"></i>Print
+                                                </button>
+                                                <button type="button" class="btn btn-success btn-sm mr-2" id="exportReadingGuideExcelBtn">
+                                                    <i class="fas fa-file-excel mr-1"></i>Export Excel
                                                 </button>
                                                 <button type="button" class="btn btn-info btn-sm" data-toggle="modal" data-target="#importDmModal" title="Upload Excel to add DM for multiple consumers (date: 2026-02-27)">
                                                     <i class="fas fa-file-excel mr-1"></i>Upload DM (Excel)
@@ -143,40 +199,7 @@
                             <h6 class="font-weight-bold text-primary">Summary by Zone</h6>
                         </div>
                     </div>
-                    <!-- Import Ledger Card -->
-                    <div class="row mb-3">
-                        <div class="col-lg-12">
-                            <div class="card shadow-sm border-primary">
-                                <div class="card-header bg-primary text-white py-2">
-                                    <h6 class="mb-0"><i class="fas fa-file-upload mr-2"></i>Import Consumer Ledger</h6>
-                                </div>
-                                <div class="card-body py-3">
-                                    <form action="{{ route('ledger.import') }}" method="POST" enctype="multipart/form-data" id="ledgerImportForm">
-                                        @csrf
-                                        <div class="row align-items-end">
-                                            <div class="col-md-4">
-                                                <label class="small font-weight-bold mb-1">Consumer Account <span class="text-danger">*</span></label>
-                                                <select name="account_no" class="form-control form-control-sm" id="importAccountSelect" required>
-                                                    <option value="">-- Select Account --</option>
-                                                </select>
-                                                <small class="text-muted">Required: Select account if Excel file has no account_no column</small>
-                                            </div>
-                                            <div class="col-md-4">
-                                                <label class="small font-weight-bold mb-1">Select Excel File <span class="text-danger">*</span></label>
-                                                <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx,.xls,.xltx,.csv" required>
-                                                <small class="text-muted">.xlsx, .xls, .xltx or .csv</small>
-                                            </div>
-                                            <div class="col-md-4 text-right">
-                                                <button type="submit" class="btn btn-primary btn-sm">
-                                                    <i class="fas fa-upload mr-1"></i>Import Ledger
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                   
                     
                     <!-- Main Data Table -->
                     <div class="row">
@@ -192,7 +215,6 @@
                                         <table class="table table-sm table-bordered table-hover mb-0" style="font-size: 11px;" id="consumerMasterTable">
                                             <thead class="thead-light" style="position: sticky; top: 0; z-index: 10;">
                                                 <tr>
-                                                    <th class="text-center py-2 px-2" style="min-width: 120px;">Action</th>
                                                     <th class="text-center py-2 px-2" style="min-width: 30px;">#</th>
                                                     <th class="py-2 px-2" style="min-width: 120px;">Account No</th>
                                                     <th class="py-2 px-2" style="min-width: 200px;">Customer</th>
@@ -208,35 +230,16 @@
                                             </thead>
                                              <tbody id="consumerTableBody">
                                                 @forelse($consumers as $index => $consumer)
-                                                    <tr class="consumer-row" data-account-no="{{ $consumer->account_no ?? '' }}" data-account-name="{{ $consumer->account_name ?? '' }}">
-                                                        <td class="text-center py-1">
-                                                    @php
-                                                        $hasLedgers = ($consumer->ledgers_count ?? 0) > 0;
-                                                    @endphp
-                                                    <div class="btn-group btn-group-sm" role="group">
-                                                        <button type="button" 
-                                                                class="btn import-ledger-btn {{ $hasLedgers ? 'btn-secondary' : 'btn-outline-primary' }}" 
-                                                                data-toggle="modal" 
-                                                                data-target="#ledgerImportModal"
-                                                                data-consumer-account="{{ $consumer->account_no }}"
-                                                                data-consumer-name="{{ $consumer->account_name }}"
-                                                                data-account-no="{{ $consumer->account_no }}"
-                                                                @if($hasLedgers) disabled @endif>
-                                                            <i class="fas {{ $hasLedgers ? 'fa-check' : 'fa-file-upload' }} mr-1"></i>
-                                                            {{ $hasLedgers ? 'Imported' : 'Import' }}
-                                                        </button>
-                                                        <button type="button" 
-                                                                class="btn btn-outline-warning add-dm-btn" 
-                                                                data-toggle="modal" 
-                                                                data-target="#addDmModal"
-                                                                data-consumer-zone-id="{{ $consumer->id }}"
-                                                                data-account-no="{{ $consumer->account_no }}"
-                                                                data-account-name="{{ $consumer->account_name ?? '' }}"
-                                                                title="Add DM for this consumer">
-                                                            <i class="fas fa-plus-circle mr-1"></i>DM
-                                                        </button>
-                                                    </div>
-                                                        </td>
+                                                    <tr class="consumer-row"
+                                                        data-zone-code="{{ $consumer->zone_code ?? '' }}"
+                                                        data-account-no="{{ $consumer->account_no ?? '' }}"
+                                                        data-account-name="{{ $consumer->account_name ?? '' }}"
+                                                        data-card-no="{{ $consumer->sequence ?? '' }}"
+                                                        data-category="{{ $consumer->category_code ?? $consumer->category ?? '' }}"
+                                                        data-meter-number="{{ $consumer->meter_number ?? '' }}"
+                                                        data-prev-date="{{ $consumer->prev_bill_date ?? '' }}"
+                                                        data-pres-rdg="{{ $consumer->prev_pres_rdg ?? '' }}"
+                                                        data-prev-rdg="{{ $consumer->prev_prev_rdg ?? '' }}">
                                                         <td class="text-center py-1">{{ $index + 1 }}</td>
                                                         <td class="py-1 px-2">{{ $consumer->account_no }}</td>
                                                         <td class="py-1 px-2 text-uppercase">
@@ -271,7 +274,7 @@
                                                     </tr>
                                                 @empty
                                                     <tr id="consumerTableEmptyRow">
-                                                        <td colspan="12" class="text-center text-muted py-4">
+                                                        <td colspan="11" class="text-center text-muted py-4">
                                                             <i class="fas fa-inbox fa-2x mb-2 d-block"></i>
                                                             No consumers found for the selected filters.
                                                         </td>
@@ -342,6 +345,30 @@
             @include('partials.footer')
             <!-- Footer -->
         </div>
+    </div>
+
+    <div id="readingGuidePrintSheet" aria-hidden="true">
+        <h2 class="rg-title">HAGONOY WATER DISTRICT</h2>
+        <p class="rg-subtitle">Guihing, Hagonoy</p>
+        <h3 class="rg-subtitle">READING GUIDE</h3>
+        <p class="rg-meta">Zone No : <span id="rgZoneNo">{{ $filters['zone'] ?? 'ALL' }}</span></p>
+        <p class="rg-meta">Print Date : <span id="rgPrintDate"></span></p>
+        <table>
+            <thead>
+                <tr>
+                    <th>CardNo</th>
+                    <th>AccountNo</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Meter Number</th>
+                    <th>Prevdate</th>
+                    <th>PresRdg</th>
+                    <th>PrevRdg</th>
+                    <th>Remarks</th>
+                </tr>
+            </thead>
+            <tbody id="readingGuidePrintBody"></tbody>
+        </table>
     </div>
 
     <!-- Add DM Modal (single consumer) -->
@@ -426,44 +453,7 @@
         </div>
     </div>
 
-    <!-- Import Ledger Modal -->
-    <div class="modal fade" id="ledgerImportModal" tabindex="-1" role="dialog" aria-labelledby="ledgerImportModalLabel" aria-hidden="true">
-        <div class="modal-dialog" role="document">
-            <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title" id="ledgerImportModalLabel">
-                        <i class="fas fa-file-upload mr-2"></i>Import Consumer Ledger
-                    </h5>
-                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                </div>
-                <div class="modal-body">
-                    <div id="modalConsumerInfo" class="alert alert-info mb-3" style="display: none;">
-                        <strong>Consumer:</strong> <span id="modalConsumerName"></span><br>
-                        <strong>Account No:</strong> <span id="modalConsumerAccount"></span>
-                    </div>
-                    <form action="{{ route('ledger.import') }}" method="POST" enctype="multipart/form-data" id="ledgerImportModalForm">
-                        @csrf
-                        <input type="hidden" name="account_no" id="hiddenAccountNo" value="">
-                        <div class="form-group">
-                            <label class="font-weight-bold mb-1">Select Excel File (.xlsx, .xls, .xltx)</label>
-                            <input type="file" name="file" class="form-control form-control-sm" accept=".xlsx,.xls,.xltx" required>
-                            <small class="text-muted">Upload ledger data from Excel file or Excel Template</small>
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-sm btn-block">
-                            <i class="fas fa-upload mr-1"></i>Import Ledger
-                        </button>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">
-                        <i class="fas fa-times mr-1"></i>Cancel
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
+   
 
     <!-- Scroll to top -->
     <a class="scroll-to-top rounded" href="#page-top">
@@ -472,6 +462,7 @@
 
     <!-- SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     
     <script>
         // Debug: Log flash messages
@@ -481,6 +472,109 @@
             warning: @json(session('warning')),
             import_success: @json(session('import_success'))
         });
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function accountNoTailSortKey(accountNo) {
+            const s = String(accountNo ?? '').trim();
+            if (!s) {
+                return 0;
+            }
+            const idx = s.lastIndexOf('-');
+            const tail = idx === -1 ? s : s.slice(idx + 1);
+            const n = parseInt(String(tail).replace(/\D/g, ''), 10);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function getReadingGuideRowsData() {
+            const rows = Array.from(document.querySelectorAll('#consumerTableBody tr.consumer-row')).filter(
+                (row) => row.style.display !== 'none'
+            );
+            rows.sort((a, b) => {
+                const za = String(a.dataset.zoneCode ?? '').trim();
+                const zb = String(b.dataset.zoneCode ?? '').trim();
+                if (za !== zb) {
+                    return za.localeCompare(zb);
+                }
+                return accountNoTailSortKey(a.dataset.accountNo) - accountNoTailSortKey(b.dataset.accountNo);
+            });
+
+            return rows.map((row) => [
+                row.dataset.cardNo || '',
+                row.dataset.accountNo || '',
+                row.dataset.accountName || '',
+                row.dataset.category || '',
+                row.dataset.meterNumber || '',
+                row.dataset.prevDate || '',
+                row.dataset.presRdg || '',
+                row.dataset.prevRdg || '',
+                ''
+            ]);
+        }
+
+        function printReadingGuide() {
+            const bodyEl = document.getElementById('readingGuidePrintBody');
+            const printableRows = [];
+
+            getReadingGuideRowsData().forEach((rowData) => {
+                printableRows.push(`
+                    <tr>
+                        <td>${escapeHtml(rowData[0])}</td>
+                        <td>${escapeHtml(rowData[1])}</td>
+                        <td>${escapeHtml(rowData[2])}</td>
+                        <td>${escapeHtml(rowData[3])}</td>
+                        <td>${escapeHtml(rowData[4])}</td>
+                        <td>${escapeHtml(rowData[5])}</td>
+                        <td>${escapeHtml(rowData[6])}</td>
+                        <td>${escapeHtml(rowData[7])}</td>
+                        <td>${escapeHtml(rowData[8])}</td>
+                    </tr>
+                `);
+            });
+
+            bodyEl.innerHTML = printableRows.length
+                ? printableRows.join('')
+                : '<tr><td colspan="9" style="text-align:center;">No rows to print.</td></tr>';
+
+            const now = new Date();
+            document.getElementById('rgPrintDate').textContent =
+                now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+
+            document.body.classList.add('print-reading-guide');
+            window.print();
+            setTimeout(() => document.body.classList.remove('print-reading-guide'), 50);
+        }
+
+        function exportReadingGuideExcel() {
+            const headers = ['CardNo', 'AccountNo', 'Name', 'Category', 'Meter Number', 'Prevdate', 'PresRdg', 'PrevRdg', 'Remarks'];
+            const rows = getReadingGuideRowsData();
+            const worksheetData = [headers, ...rows];
+            const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'ConsumerMasterList');
+
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            XLSX.writeFile(workbook, `consumerMasterList-${yyyy}${mm}${dd}.xlsx`);
+        }
+
+        const printReadingGuideBtn = document.getElementById('printReadingGuideBtn');
+        if (printReadingGuideBtn) {
+            printReadingGuideBtn.addEventListener('click', printReadingGuide);
+        }
+        const exportReadingGuideExcelBtn = document.getElementById('exportReadingGuideExcelBtn');
+        if (exportReadingGuideExcelBtn) {
+            exportReadingGuideExcelBtn.addEventListener('click', exportReadingGuideExcel);
+        }
 
         // Populate account dropdown for import form
         $(document).ready(function() {

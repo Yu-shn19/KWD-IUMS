@@ -612,7 +612,7 @@
             $rowsPerPage = (int) request('rows_per_page', 14);
             $rowsPerPage = max(1, min($rowsPerPage, 60));
             // Let page 2+ fit a few more rows than page 1.
-            $rowsPerPageNext = min($rowsPerPage + 10, 60);
+            $rowsPerPageNext = min($rowsPerPage + 9, 60);
 
             $serviceRevByOr = $serviceRevByOr ?? [];
             $detailRecordsArray = $detailRecords instanceof \Illuminate\Support\Collection ? $detailRecords->toArray() : (array) $detailRecords;
@@ -874,3 +874,4 @@
 </body>
 </html>
 
+    
