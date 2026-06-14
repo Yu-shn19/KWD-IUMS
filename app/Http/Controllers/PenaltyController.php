@@ -136,20 +136,6 @@ class PenaltyController extends Controller
             // Recalculate balances for all subsequent ledger entries
             $this->recalculateSubsequentBalances($oldLedger->consumer_zone_id, $newDateTime, $newBalance);
 
-            // Update consumer zone balance
-            $latestBalance = ConsumerLedger::where('consumer_zone_id', $oldLedger->consumer_zone_id)
-                ->orderBy('txtime', 'desc')
-                ->orderBy('id', 'desc')
-                ->first();
-            
-            if ($latestBalance) {
-                $consumerZone = ConsumerZoneOne::find($oldLedger->consumer_zone_id);
-                if ($consumerZone) {
-                    $consumerZone->balance = (float)($latestBalance->balance ?? 0);
-                    $consumerZone->save();
-                }
-            }
-
             DB::commit();
 
             return response()->json([

@@ -643,7 +643,7 @@ class ReportController extends Controller
                 'cz.account_name',
                 'cz.zone_code',
                 'cz.category_code',
-                'cz.address1 as address',
+                'cz.address',
                 'cz.sequence',
                 'cz.status_code'
             )

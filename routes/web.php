@@ -169,9 +169,10 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
         ], 404);
     }
     
-    $consumer->latitude = $latitude;
-    $consumer->longitude = $longitude;
-    $consumer->save();
+    $consumer->update(\App\Models\ConsumerZoneOne::filterTableAttributes([
+        'latitude' => $latitude,
+        'longitude' => $longitude,
+    ]));
     
     return response()->json([
         'success' => true,

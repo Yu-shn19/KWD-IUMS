@@ -489,13 +489,7 @@ class CollectionController extends Controller
                             'txtime' => $paymentDateTime,
                         ]);
 
-                        // Update consumer zone balance to final balance after SC discount (if any) and payment
-                        $consumerZone->balance = $newBalance;
-                        $consumerZone->save();
                     } else {
-                        // If main payment already exists but SC discount was just added, update consumer balance
-                        $consumerZone->balance = $previousBalance;
-                        $consumerZone->save();
                         Log::info('Main payment already exists; only SC discount (if any) affected balance', [
                             'account_no' => $collection->account_no,
                             'collection_id' => $collection->id,
@@ -669,10 +663,6 @@ class CollectionController extends Controller
                         'username' => $collection->username ?? 'SYSTEM',
                         'txtime' => $paymentDateTime,
                     ]);
-
-                    // Update consumer balance
-                    $consumerZone->balance = $newBalance;
-                    $consumerZone->save();
 
                     $syncedCount++;
                 } catch (\Exception $e) {
@@ -1085,10 +1075,6 @@ class CollectionController extends Controller
                         'txtime' => $penaltyDateTime,
                     ]);
 
-                    // Update consumer zone balance
-                    $billEntry->consumerZone->balance = $newBalance;
-                    $billEntry->consumerZone->save();
-
                     $penaltiesGenerated++;
                     $processedBills[$billKey] = true;
 
@@ -1490,10 +1476,6 @@ class CollectionController extends Controller
                         'username' => 'SYSTEM',
                         'txtime' => $penaltyDateTime,
                     ]);
-
-                    // Update consumer balance
-                    $consumerZone->balance = $newBalance;
-                    $consumerZone->save();
 
                     $penaltiesGenerated++;
 

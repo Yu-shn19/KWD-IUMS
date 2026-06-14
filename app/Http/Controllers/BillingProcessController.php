@@ -285,7 +285,7 @@ class BillingProcessController extends Controller
                         ? (is_numeric($scheduleData['prev_read']) ? (float) $scheduleData['prev_read'] : 0)
                         : 0;
                     
-                    $schedule = MeterReadingSchedule::create([
+                    $schedule = MeterReadingSchedule::create(MeterReadingSchedule::filterTableAttributes([
                         'consumer_zone_id' => $consumerZoneId,
                         'bill_month' => Carbon::parse($scheduleData['bill_month']),
                         'bill_date' => Carbon::parse($scheduleData['bill_date']),
@@ -297,7 +297,7 @@ class BillingProcessController extends Controller
                         'status' => 'Prepared',
                         'sedr_number' => $scheduleData['sedr'],
                         'prepared_by' => $preparedBy,
-                    ]);
+                    ]));
 
                     $savedSchedules[] = $schedule->id;
 
@@ -400,14 +400,11 @@ class BillingProcessController extends Controller
     }
 
    /**
-     * Get previous reading and volume for a consumer by account number
+     * Get previous reading and volume for a consumer by account number.
      * Checks (in priority order):
-     *   0. meter_reading_schedules.previous_reading_override  (manual override saved
-     *      from the consumer profile page → wins over everything else for the next prep)
-     *   1. downloaded_readings.current_reading                (most recent actual reading)
-     *   2. meter_reading_schedules.current_reading            (latest completed/verified)
-     *   3. consumer_ledgers.reading                           (legacy data)
-     * Ensures continuity with previous data.
+     *   1. downloaded_readings.current_reading (most recent actual reading)
+     *   2. meter_reading_schedules.current_reading (latest completed/verified)
+     *   3. consumer_ledgers.reading (legacy data)
      */
     private function getPreviousReading($accountNo)
     {
@@ -425,53 +422,6 @@ class BillingProcessController extends Controller
         }
 
         $normalizedAccount = str_replace('-', '', $accountNo);
-
-        // Priority 0: Manual override saved from main-consumer page
-        // (Meter Reading card → Save Previous Reading). When present on the
-        // LATEST schedule for this account, it wins over all natural sources.
-        if (Schema::hasColumn('meter_reading_schedules', 'previous_reading_override')) {
-            $override = DB::table('meter_reading_schedules as mrs')
-                ->where('mrs.consumer_zone_id', $consumer->id)
-                ->whereNotNull('mrs.previous_reading_override')
-                ->orderBy('mrs.bill_month', 'desc')
-                ->orderBy('mrs.id', 'desc')
-                ->select(
-                    'mrs.previous_reading_override as reading',
-                    'mrs.previous_reading_override_at',
-                    'mrs.previous_reading_date',
-                    'mrs.arrears',
-                    'mrs.total_amount'
-                )
-                ->first();
-
-            if ($override) {
-                $arrears = (float) ($override->arrears ?? 0);
-                $latestBalance = (float) ($override->total_amount ?? 0);
-
-                $overrideDate = null;
-                if (!empty($override->previous_reading_override_at)) {
-                    $overrideDate = Carbon::parse($override->previous_reading_override_at);
-                } elseif (!empty($override->previous_reading_date)) {
-                    $overrideDate = Carbon::parse($override->previous_reading_date);
-                }
-
-                $result = [
-                    'date' => $overrideDate ? $overrideDate->format('m/d/Y') : Carbon::now()->subMonth()->format('m/d/Y'),
-                    'reading' => (int) $override->reading,
-                    'volume' => 0,
-                    'arrears' => $arrears,
-                    'balance' => $latestBalance,
-                ];
-
-                Log::info('Previous reading from manual override (consumer profile)', [
-                    'account_no' => $accountNo,
-                    'source'     => 'meter_reading_schedules.previous_reading_override',
-                    'result'     => $result,
-                ]);
-
-                return $result;
-            }
-        }
 
         // Priority 1: Check downloaded_readings (most recent actual reading)
         $latestDownloadedReading = DB::table('downloaded_readings as dr')
@@ -540,11 +490,9 @@ class BillingProcessController extends Controller
                 'mrs.arrears',
                 'mrs.total_amount'
             )
-            ->orderBy('mrs.reading_date', 'desc');
-        if (Schema::hasColumn('meter_reading_schedules', 'completed_at')) {
-            $latestSchedule = $latestSchedule->orderBy('mrs.completed_at', 'desc');
-        }
-        $latestSchedule = $latestSchedule->first();
+            ->orderBy('mrs.reading_date', 'desc')
+            ->orderBy('mrs.id', 'desc')
+            ->first();
 
         if ($latestSchedule) {
             // Get arrears from schedule (stored arrears value)
@@ -1754,16 +1702,11 @@ class BillingProcessController extends Controller
         ]);
 
         try {
-            $updatePayload = [
-                'assigned_reader_id' => $request->reader_id,
-                'status' => 'Assigned',
-            ];
-            if (Schema::hasColumn('meter_reading_schedules', 'assigned_at')) {
-                $updatePayload['assigned_at'] = Carbon::now();
-            }
-
             $updated = MeterReadingSchedule::whereIn('id', $request->schedule_ids)
-                ->update($updatePayload);
+                ->update(MeterReadingSchedule::filterTableAttributes([
+                    'assigned_reader_id' => $request->reader_id,
+                    'status' => 'Assigned',
+                ]));
 
             return response()->json([
                 'success' => true,
@@ -3703,11 +3646,9 @@ class BillingProcessController extends Controller
 
                 if ($downloaded->schedule) {
                     $schedule = $downloaded->schedule;
-                    $schedule->status = 'Completed';
-                    if (Schema::hasColumn('meter_reading_schedules', 'completed_at')) {
-                        $schedule->completed_at = $schedule->completed_at ?? $now;
-                    }
-                    $schedule->save();
+                    $schedule->update(MeterReadingSchedule::filterTableAttributes([
+                        'status' => 'Completed',
+                    ]));
 
                     $dueDate = $schedule->due_date ? Carbon::parse($schedule->due_date) : null;
                     if ($dueDate && $paidAt->lte($dueDate->endOfDay())) {

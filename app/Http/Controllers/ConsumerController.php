@@ -233,7 +233,7 @@ class ConsumerController extends Controller
             $data = $validator->validated();
             ConsumerZoneOne::syncInstallActivationFields($data);
 
-            $consumer = ConsumerZoneOne::create($data);
+            $consumer = ConsumerZoneOne::create(ConsumerZoneOne::filterTableAttributes($data));
 
             return response()->json([
                 'success' => true,
@@ -645,7 +645,7 @@ class ConsumerController extends Controller
             }
 
             DB::transaction(function () use ($consumer, $data, $oldAccountNo, $newAccountNo, $oldAccountName, $newAccountName) {
-                $consumer->update($data);
+                $consumer->update(ConsumerZoneOne::filterTableAttributes($data));
                 $this->syncConsumerIdentityChanges(
                     (int) $consumer->id,
                     $oldAccountNo,

@@ -230,7 +230,7 @@ class MeterReadingApiController extends Controller
                     'bill_date' => $schedule->bill_date->format('Y-m-d'),
                     'due_date' => $schedule->due_date->format('Y-m-d'),
                     'arrears' => (float)($schedule->arrears ?? 0),
-                    'reader_notes' => $downloaded ? $downloaded->reader_notes : $schedule->reader_notes
+                    'reader_notes' => $downloaded ? $downloaded->reader_notes : null
                 ];
             })
         ]);
@@ -299,15 +299,13 @@ class MeterReadingApiController extends Controller
 
             // STEP 1: Update main system first (meter_reading_schedules)
             // This is the source of truth for the web interface and billing system
-            $schedule->update([
+            $schedule->update(MeterReadingSchedule::filterTableAttributes([
                 'current_reading' => $currentReading,
                 'reading_date' => $request->reading_date ?? now(),
                 'consumption' => $consumption,
-                'current_bill' => $currentBill, // Save calculated bill
-                'reader_notes' => $request->reader_notes,
+                'current_bill' => $currentBill,
                 'status' => 'Completed',
-                'completed_at' => now()
-            ]);
+            ]));
 
             // STEP 2: After main system update succeeds, save to downloaded_readings
             // This table is for mobile app tracking and offline persistence
@@ -448,9 +446,9 @@ class MeterReadingApiController extends Controller
                 ], 403);
             }
 
-            $schedule->update([
-                'status' => $request->status
-            ]);
+            $schedule->update(MeterReadingSchedule::filterTableAttributes([
+                'status' => $request->status,
+            ]));
 
             return response()->json([
                 'success' => true,

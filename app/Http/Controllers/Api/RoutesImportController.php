@@ -69,7 +69,7 @@ class RoutesImportController extends Controller
             $payload = [
                 'account_name' => $fullName,
                 'category_code' => $category,
-                'address1' => $address,
+                'address' => $address ?: '-',
                 'meter_number' => $meterNumber,
                 'account_no' => $accountNo,
                 'status_code' => 'A',
@@ -79,17 +79,17 @@ class RoutesImportController extends Controller
             $existing = ConsumerZoneOne::where($lookup)->first();
 
             if ($existing) {
-                $existing->update(array_filter([
+                $existing->update(ConsumerZoneOne::filterTableAttributes(array_filter([
                     'account_name' => $fullName,
                     'category_code' => $category,
-                    'address1' => $address,
+                    'address' => $address,
                     'meter_number' => $meterNumber,
                     'account_no' => $accountNumber ?: $existing->account_no,
                     'status_code' => 'A',
-                ], fn ($v) => $v !== null && $v !== ''));
+                ], fn ($v) => $v !== null && $v !== '')));
                 $updated++;
             } else {
-                ConsumerZoneOne::create($payload);
+                ConsumerZoneOne::create(ConsumerZoneOne::filterTableAttributes($payload));
                 $inserted++;
             }
         }
@@ -102,6 +102,4 @@ class RoutesImportController extends Controller
         ]);
     }
 }
-}
-
 

@@ -260,9 +260,10 @@ class ReaderController extends Controller
             ], 404);
         }
 
-        $consumer->latitude = $lat;
-        $consumer->longitude = $lng;
-        $consumer->save();
+        $consumer->update(ConsumerZoneOne::filterTableAttributes([
+            'latitude' => $lat,
+            'longitude' => $lng,
+        ]));
 
         return response()->json([
             'success' => true,

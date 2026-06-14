@@ -11,18 +11,19 @@ use Illuminate\Support\Facades\Schema;
 class ConsumerZoneOne extends Model
 {
     use HasFactory;
-      /**
-     * Include human-readable status in JSON (e.g. search + sessionStorage) so the UI is not stuck on raw codes like "X".
-     *
+
+    /**
      * @var array<int, string>
      */
     protected $appends = [
         'status_label',
     ];
 
-
     protected $table = 'consumer_zone';
 
+    /**
+     * Columns that exist on consumer_zone (see 2026_06_13_184411_create_consumer_zone_table).
+     */
     protected $fillable = [
         'account_no',
         'account_name',
@@ -35,54 +36,40 @@ class ConsumerZoneOne extends Model
         'category_code',
         'meter_number',
         'meter_brand',
+        'base_reading',
+        'base_reading_date',
         'rate_code',
         'install_date',
         'transaction_date',
         'status_code',
-         'pending_install_activation',
+        'pending_install_activation',
         'auto_activate_on',
-        'consumer_deposit',
-        'installation_fee',
-        'installation_balance',
-        'balance',
-        'cons_ctrl',
-         'bill_disc_percent',
-        'bill_disc_amount',
-        'bill_disc_updated_at',
+        'bill_disc_percent',
         'osca_id_no',
-        'remark',
-         'base_reading',
-        'base_reading_date',
-        'base_reading_at',
-        'base_reading_by',
+        'bill_disc_updated_at',
+        'cons_ctrl',
     ];
 
     protected $casts = [
         'install_date' => 'date',
-          'transaction_date' => 'date',
-           'pending_install_activation' => 'boolean',
+        'transaction_date' => 'date',
+        'pending_install_activation' => 'boolean',
         'auto_activate_on' => 'date',
-        'consumer_deposit' => 'decimal:2',
-        'installation_fee' => 'decimal:2',
-        'installation_balance' => 'decimal:2',
-        'balance' => 'decimal:2',
-           'bill_disc_percent' => 'string',
-        'bill_disc_amount' => 'decimal:2',
+        'bill_disc_percent' => 'string',
         'bill_disc_updated_at' => 'date',
         'latitude' => 'decimal:8',
         'longitude' => 'decimal:8',
-         'base_reading_date' => 'date',
-        'base_reading_at' => 'datetime',
+        'base_reading_date' => 'date',
     ];
 
-      public function getStatusLabelAttribute(): string
+    public function getStatusLabelAttribute(): string
     {
         $code = strtoupper(trim((string) ($this->status_code ?? '')));
 
         return match ($code) {
             'A', 'ACTIVE' => 'Active',
             'P', 'PENDING' => 'Pending',
-            'X', 'DISCONNECTED', 'D' => 'Disconnected', // D: legacy stored code for disconnected
+            'X', 'DISCONNECTED', 'D' => 'Disconnected',
             default => $code !== '' ? (string) $this->status_code : 'N/A',
         };
     }
@@ -94,7 +81,7 @@ class ConsumerZoneOne extends Model
     }
 
     /**
-     * Latest running balance from consumer_ledgers (consumer_zone has no balance column in new schema).
+     * Running balance from consumer_ledgers (not stored on consumer_zone).
      */
     public function getLedgerBalance(): float
     {
@@ -107,13 +94,40 @@ class ConsumerZoneOne extends Model
         return $latest ? (float) ($latest->balance ?? 0) : 0.0;
     }
 
-    public function getBalanceAttribute($value): float
+    /**
+     * Virtual balance — always resolved from consumer_ledgers.
+     */
+    public function getBalanceAttribute(): float
     {
-        if ($value !== null && Schema::hasColumn($this->getTable(), 'balance')) {
-            return (float) $value;
+        return $this->getLedgerBalance();
+    }
+
+    /**
+     * Keep only attributes that exist on consumer_zone.
+     * Maps legacy address1 → address when present.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function filterTableAttributes(array $data): array
+    {
+        if (!Schema::hasTable('consumer_zone')) {
+            return $data;
         }
 
-        return $this->getLedgerBalance();
+        if (isset($data['address1']) && !isset($data['address']) && Schema::hasColumn('consumer_zone', 'address')) {
+            $data['address'] = $data['address1'];
+        }
+        unset($data['address1']);
+
+        $payload = [];
+        foreach ($data as $key => $value) {
+            if (Schema::hasColumn('consumer_zone', $key)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
     }
 
     /**
@@ -139,26 +153,16 @@ class ConsumerZoneOne extends Model
         })->first();
     }
 
-    /**
-     * Get the ledger entries for this consumer zone.
-     */
     public function ledgers()
     {
         return $this->hasMany(ConsumerLedger::class, 'consumer_zone_id');
     }
-    
-    
-    /**
-     * Disconnection workflow orders tied to this consumer.
-     */
+
     public function disconnectionOrders(): HasMany
     {
         return $this->hasMany(DisconnectionOrder::class, DisconnectionOrder::consumerZoneIdColumn());
     }
 
-    /**
-     * Raw status codes that mean disconnected service (matches status_label / header UI).
-     */
     public function isDisconnectedStatus(): bool
     {
         $code = strtoupper(trim((string) ($this->status_code ?? '')));
@@ -166,7 +170,6 @@ class ConsumerZoneOne extends Model
         return in_array($code, ['X', 'D', 'DISCONNECTED'], true);
     }
 
-  
     public static function isPendingStatus(?string $statusCode): bool
     {
         $code = strtoupper(trim((string) $statusCode));
@@ -175,8 +178,6 @@ class ConsumerZoneOne extends Model
     }
 
     /**
-     * Enroll or clear auto-activation for new-install Pending consumers (Add/Edit consumer only).
-     *
      * @param  array<string, mixed>  $data
      */
     public static function syncInstallActivationFields(array &$data, ?self $existing = null): void
@@ -201,30 +202,20 @@ class ConsumerZoneOne extends Model
         $data['auto_activate_on'] = null;
     }
 
-
     /**
-     * Latest actual disconnect time from disconnection orders (by consumer_zone_id, then by matching account_no).
+     * Latest disconnect time from disconnection_orders for this consumer_zone_id.
      */
     public function latestDisconnectedAtForDisplay(): ?Carbon
     {
-        if (! $this->isDisconnectedStatus()) {
+        if (!$this->isDisconnectedStatus()) {
             return null;
         }
 
-        $byConsumer = $this->disconnectionOrders()
+        $disconnectedAt = $this->disconnectionOrders()
             ->whereNotNull('disconnected_at')
             ->orderByDesc('disconnected_at')
-            ->first();
+            ->value('disconnected_at');
 
-        if ($byConsumer?->disconnected_at) {
-            return $byConsumer->disconnected_at;
-        }
-
-        return DisconnectionOrder::query()
-            ->where('account_no', $this->account_no)
-            ->whereNotNull('disconnected_at')
-            ->orderByDesc('disconnected_at')
-            ->first()?->disconnected_at;
+        return $disconnectedAt ? Carbon::parse($disconnectedAt) : null;
     }
 }
-

@@ -5,11 +5,15 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Schema;
 
 class MeterReadingSchedule extends Model
 {
     use HasFactory;
 
+    /**
+     * Columns on meter_reading_schedules (see 2026_06_13_184922_create_meter_reading_schedules_table).
+     */
     protected $fillable = [
         'consumer_zone_id',
         'assigned_reader_id',
@@ -19,9 +23,6 @@ class MeterReadingSchedule extends Model
         'disconnection_date',
         'previous_reading_date',
         'previous_reading',
-        'previous_reading_override',
-        'previous_reading_override_at',
-        'previous_reading_override_by',
         'current_reading',
         'reading_date',
         'consumption',
@@ -29,12 +30,8 @@ class MeterReadingSchedule extends Model
         'arrears',
         'total_amount',
         'status',
-        'reader_notes',
-        'remarks',
         'sedr_number',
         'prepared_by',
-        'assigned_at',
-        'completed_at',
     ];
 
     protected $casts = [
@@ -43,10 +40,7 @@ class MeterReadingSchedule extends Model
         'due_date' => 'date',
         'disconnection_date' => 'date',
         'previous_reading_date' => 'date',
-        'previous_reading_override_at' => 'datetime',
         'reading_date' => 'date',
-        'assigned_at' => 'datetime',
-        'completed_at' => 'datetime',
         'current_bill' => 'decimal:2',
         'arrears' => 'decimal:2',
         'total_amount' => 'decimal:2',
@@ -85,6 +79,28 @@ class MeterReadingSchedule extends Model
     public function ledgerEntries()
     {
         return $this->hasMany(ConsumerLedger::class, 'schedule_id');
+    }
+
+    /**
+     * Keep only attributes that exist on meter_reading_schedules.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function filterTableAttributes(array $data): array
+    {
+        if (!Schema::hasTable('meter_reading_schedules')) {
+            return $data;
+        }
+
+        $payload = [];
+        foreach ($data as $key => $value) {
+            if (Schema::hasColumn('meter_reading_schedules', $key)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
     }
 
     public function getAccountNumberAttribute(): ?string

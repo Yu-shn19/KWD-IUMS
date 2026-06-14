@@ -336,9 +336,6 @@ class CreatePenalties extends Command
                     'txtime' => $penaltyDate->format('Y-m-d H:i:s'),
                 ]));
 
-                $consumer->balance = $newBalance;
-                $consumer->save();
-
                 $created++;
                 if ($debug) {
                     $this->info("  Created penalty for {$accountNo} schedule {$schedule->schedule_id}: {$penaltyAmount} (due: {$dueDate->format('Y-m-d')})");

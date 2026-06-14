@@ -54,30 +54,18 @@ class MeterReadingController extends Controller
 
     private function scheduleAssignmentUpdatePayload(int $readerId): array
     {
-        $payload = [
+        return MeterReadingSchedule::filterTableAttributes([
             'assigned_reader_id' => $readerId,
             'status' => 'Assigned',
-        ];
-
-        if (Schema::hasColumn('meter_reading_schedules', 'assigned_at')) {
-            $payload['assigned_at'] = now();
-        }
-
-        return $payload;
+        ]);
     }
 
     private function scheduleUnassignmentUpdatePayload(): array
     {
-        $payload = [
+        return MeterReadingSchedule::filterTableAttributes([
             'assigned_reader_id' => null,
             'status' => 'Prepared',
-        ];
-
-        if (Schema::hasColumn('meter_reading_schedules', 'assigned_at')) {
-            $payload['assigned_at'] = null;
-        }
-
-        return $payload;
+        ]);
     }
 
     private function findScheduleByAccountNo(string $accountNo): ?MeterReadingSchedule
@@ -463,8 +451,9 @@ class MeterReadingController extends Controller
                     continue;
                 }
 
-                $schedule->previous_reading = $previousReadingInt;
-                $schedule->save();
+                $schedule->update(MeterReadingSchedule::filterTableAttributes([
+                    'previous_reading' => $previousReadingInt,
+                ]));
                 $processedInThisFile[$accountNo] = $rowNum;
                 $imported++;
             }
@@ -510,20 +499,8 @@ class MeterReadingController extends Controller
     
     
     /**
-     * Update the previous_reading for a consumer's latest meter reading schedule
-     * from the main-consumer page (Meter Reading card → Save Previous Reading).
-     *
-     * The new value is stored as a MANUAL OVERRIDE on the schedule:
-     *   - meter_reading_schedules.previous_reading           (kept in sync)
-     *   - meter_reading_schedules.previous_reading_override  (signals override)
-     *   - meter_reading_schedules.previous_reading_override_at / _by
-     *
-     * BillingProcessController::getPreviousReading() inspects this override
-     * before any other source so the next Meter Reading Preparation will use
-     * the corrected value as Prev. Read.
-     *
-     * The existing BILLING entry in consumer_ledgers and any downloaded_readings
-     * rows are intentionally NOT touched — they remain historical records.
+     * Update previous_reading on a meter reading schedule from the main-consumer page.
+     * Does not modify consumer_ledgers or downloaded_readings (historical records stay as-is).
      */
     public function updateConsumerMeterReading(Request $request)
     {
@@ -563,22 +540,15 @@ class MeterReadingController extends Controller
 
             $oldPrev = $schedule->previous_reading !== null ? (int) $schedule->previous_reading : null;
 
-            $hasOverrideColumn = Schema::hasColumn('meter_reading_schedules', 'previous_reading_override');
+            $schedule->update(MeterReadingSchedule::filterTableAttributes([
+                'previous_reading' => $newPrev,
+            ]));
 
-            $schedule->previous_reading = $newPrev;
-            if ($hasOverrideColumn) {
-                $schedule->previous_reading_override = $newPrev;
-                $schedule->previous_reading_override_at = Carbon::now();
-                $schedule->previous_reading_override_by = optional(auth()->user())->name;
-            }
-            $schedule->save();
-
-            Log::info('Consumer previous_reading override saved (next-billing only)', [
+            Log::info('Consumer previous_reading saved on schedule', [
                 'schedule_id'  => $scheduleId,
                 'account_no'   => $accountNo,
                 'old_previous' => $oldPrev,
                 'new_previous' => $newPrev,
-                'has_override_column' => $hasOverrideColumn,
                 'user'         => optional(auth()->user())->name,
             ]);
 
@@ -685,13 +655,12 @@ class MeterReadingController extends Controller
 
             $oldBase = $consumer->base_reading !== null ? (int) $consumer->base_reading : null;
 
-            $consumer->base_reading = $newBase;
-            $consumer->base_reading_date = $baseDate
-                ? Carbon::parse($baseDate)->format('Y-m-d')
-                : Carbon::now()->format('Y-m-d');
-            $consumer->base_reading_at = Carbon::now();
-            $consumer->base_reading_by = optional(auth()->user())->name;
-            $consumer->save();
+            $consumer->update(ConsumerZoneOne::filterTableAttributes([
+                'base_reading' => $newBase,
+                'base_reading_date' => $baseDate
+                    ? Carbon::parse($baseDate)->format('Y-m-d')
+                    : Carbon::now()->format('Y-m-d'),
+            ]));
 
             Log::info('Consumer base_reading saved from main-consumer page', [
                 'account_no' => $accountNo,

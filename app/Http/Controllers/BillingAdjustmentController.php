@@ -91,10 +91,11 @@ class BillingAdjustmentController extends Controller
         try {
             DB::beginTransaction();
 
-            // Find consumer zone by account number
-            $consumerZone = ConsumerZoneOne::where('account_no', $request->account_no)->first();
-            
+            $consumerZone = $this->findConsumerForLroAccount($request->account_no);
+
             if (!$consumerZone) {
+                DB::rollBack();
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Account not found: ' . $request->account_no
@@ -111,6 +112,8 @@ class BillingAdjustmentController extends Controller
                 try {
                     $dateCarbon = Carbon::parse($request->date);
                 } catch (\Exception $e2) {
+                    DB::rollBack();
+
                     return response()->json([
                         'success' => false,
                         'message' => 'Invalid date format. Please use MM/DD/YYYY format.'
@@ -153,9 +156,9 @@ class BillingAdjustmentController extends Controller
                 'loans' => (float)($request->loans ?? 0),
                 'others' => (float)($request->others ?? 0),
                 'remarks' => $request->remarks,
-                'status' => $request->status,
+                'status' => $this->normalizeArStatus($request->status),
                 'connect_reading' => (int)($request->connect_reading ?? 0),
-                'username' => auth()->user()->name ?? 'SYSTEM',
+                'username' => $this->authUsername(),
             ]));
 
             // Create consumer ledger entry
@@ -173,7 +176,7 @@ class BillingAdjustmentController extends Controller
                 'debit' => $debit,
                 'credit' => $credit,
                 'balance' => $newBalance,
-                'username' => auth()->user()->name ?? 'SYSTEM',
+                'username' => $this->authUsername(),
                 'txtime' => $dateTime,
             ]);
 
@@ -293,6 +296,7 @@ class BillingAdjustmentController extends Controller
         $mapped['loans']           = $mapped['loans']           ?? 0;
         $mapped['others']          = $mapped['others']          ?? 0;
         $mapped['connect_reading'] = $mapped['correct_reading'] ?? 0;
+        $mapped['status'] = $this->normalizeArStatus($request->input('status', 'Pending'));
 
         $newRequest = new Request($mapped);
         return $this->update($newRequest, $id);
@@ -334,7 +338,7 @@ class BillingAdjustmentController extends Controller
                 DB::beginTransaction();
 
                 $accountNo = $request->input('account');
-                $consumerZone = ConsumerZoneOne::where('account_no', $accountNo)->first();
+                $consumerZone = $this->findConsumerForLroAccount($accountNo);
 
                 if (!$consumerZone) {
                     DB::rollBack();
@@ -389,9 +393,9 @@ class BillingAdjustmentController extends Controller
                     'loans'           => 0,
                     'others'          => 0,
                     'remarks'         => $request->input('remarks'),
-                    'status'          => $request->input('status', 'Pending'),
+                    'status'          => $this->normalizeArStatus($request->input('status', 'Pending')),
                     'connect_reading' => (int)($request->input('correct_reading', 0)),
-                    'username'        => auth()->user()->name ?? 'SYSTEM',
+                    'username'        => $this->authUsername(),
                 ]));
 
                 // Create consumer_ledgers row
@@ -409,7 +413,7 @@ class BillingAdjustmentController extends Controller
                     'debit'                 => $debit,
                     'credit'                => $credit,
                     'balance'               => $newBalance,
-                    'username'              => auth()->user()->name ?? 'SYSTEM',
+                    'username'              => $this->authUsername(),
                     'txtime'                => $dateTime,
                 ]);
 
@@ -530,11 +534,20 @@ class BillingAdjustmentController extends Controller
         }
 
         // AR path: adapt new UI payload to the existing store() implementation
+        $status = strtoupper((string) $request->input('status', 'Pending'));
+        if ($status === 'POSTED') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Paid status is only allowed in LRO ledger. Set Ledger to LRO to continue.',
+            ], 422);
+        }
+
         $mapped = $request->all();
 
         // Map fields to match the original implementation
         $mapped['ledger'] = 'AR';
         $mapped['account_no'] = $request->input('account');
+        $mapped['status'] = $this->normalizeArStatus($request->input('status', 'Pending'));
 
         // Ensure type is CM or DM
         $type = $request->input('type', 'CM');
@@ -608,18 +621,21 @@ class BillingAdjustmentController extends Controller
 
             $billingAdjustment = BillingAdjustment::findOrFail($id);
             $oldLedger = ConsumerLedger::where('billing_adjustment_id', $id)->first();
-            
+
             if (!$oldLedger) {
+                DB::rollBack();
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Related consumer ledger entry not found'
                 ], 404);
             }
 
-            // Find consumer zone by account number
-            $consumerZone = ConsumerZoneOne::where('account_no', $request->account_no)->first();
-            
+            $consumerZone = $this->findConsumerForLroAccount($request->account_no);
+
             if (!$consumerZone) {
+                DB::rollBack();
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Account not found: ' . $request->account_no
@@ -633,6 +649,8 @@ class BillingAdjustmentController extends Controller
                 try {
                     $dateCarbon = Carbon::parse($request->date);
                 } catch (\Exception $e2) {
+                    DB::rollBack();
+
                     return response()->json([
                         'success' => false,
                         'message' => 'Invalid date format. Please use MM/DD/YYYY format.'
@@ -696,9 +714,9 @@ class BillingAdjustmentController extends Controller
                 'loans' => (float)($request->loans ?? 0),
                 'others' => (float)($request->others ?? 0),
                 'remarks' => $request->remarks,
-                'status' => $request->status,
+                'status' => $this->normalizeArStatus($request->status),
                 'connect_reading' => (int)($request->connect_reading ?? 0),
-                'username' => auth()->user()->name ?? 'SYSTEM',
+                'username' => $this->authUsername(),
             ]));
 
             // Update consumer ledger entry
@@ -709,7 +727,7 @@ class BillingAdjustmentController extends Controller
                 'debit' => $debit,
                 'credit' => $credit,
                 'balance' => $newBalance,
-                'username' => auth()->user()->name ?? 'SYSTEM',
+                'username' => $this->authUsername(),
                 'txtime' => $dateTime,
             ]);
 
@@ -779,6 +797,31 @@ class BillingAdjustmentController extends Controller
     }
 
     /**
+     * Map UI status values to billing_adjustments.status (Pending, Approved, Cancelled).
+     */
+    private function normalizeArStatus(?string $status): string
+    {
+        $normalized = ucfirst(strtolower(trim((string) ($status ?? 'Pending'))));
+
+        if (in_array($normalized, ['Pending', 'Approved', 'Cancelled'], true)) {
+            return $normalized;
+        }
+
+        if (strcasecmp((string) $status, 'Posted') === 0) {
+            return 'Approved';
+        }
+
+        return 'Pending';
+    }
+
+    private function authUsername(): string
+    {
+        $user = auth()->user();
+
+        return $user?->name ?? 'SYSTEM';
+    }
+
+    /**
      * Resolve consumer by account using exact and normalized matching.
      */
     private function findConsumerForLroAccount(?string $accountNo): ?ConsumerZoneOne
@@ -794,7 +837,13 @@ class BillingAdjustmentController extends Controller
         }
 
         $normalized = str_replace('-', '', $accountNo);
-        return ConsumerZoneOne::whereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalized])->first();
+        $upper = strtoupper(trim($accountNo));
+
+        return ConsumerZoneOne::where(function ($q) use ($accountNo, $normalized, $upper) {
+            $q->where('account_no', $accountNo)
+                ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalized])
+                ->orWhereRaw('UPPER(TRIM(account_no)) = ?', [$upper]);
+        })->first();
     }
 
     /**
