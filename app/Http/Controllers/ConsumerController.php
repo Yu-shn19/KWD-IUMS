@@ -205,10 +205,11 @@ class ConsumerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'install_date' => 'nullable|date',
-             'transaction_date' => 'nullable|date',
+            'transaction_date' => 'nullable|date',
             'account_no' => 'required|string|unique:consumer_zone,account_no',
             'account_name' => 'required|string',
-            'address1' => 'nullable|string',
+            'gender' => 'required|string|in:Male,Female,Others',
+            'address' => 'nullable|string',
             'latitude' => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'zone_code' => 'required|string',
@@ -218,10 +219,6 @@ class ConsumerController extends Controller
             'rate_code' => 'nullable|string',
             'status_code' => 'nullable|string',
             'sequence' => 'nullable|integer',
-            'consumer_deposit' => 'nullable|numeric',
-            'installation_fee' => 'nullable|numeric',
-            'installation_balance' => 'nullable|numeric',
-            'balance' => 'nullable|numeric',
             'cons_ctrl' => 'nullable|string',
         ]);
 
@@ -286,15 +283,19 @@ class ConsumerController extends Controller
 
         // Current Reading: from downloaded_readings.current_reading (latest by account)
         $dr = DB::table('downloaded_readings as dr')
+            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
             ->where(function ($query) use ($accountNumber, $normalizedAccount, $upperAccount) {
-                $query->where('dr.account_number', $accountNumber)
-                    ->orWhere('dr.account_number', $normalizedAccount)
-                    ->orWhereRaw("REPLACE(TRIM(dr.account_number), '-', '') = ?", [$normalizedAccount])
-                    ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [$upperAccount])
-                    ->orWhereRaw("REPLACE(REPLACE(TRIM(dr.account_number), '-', ''), ' ', '') = ?", [$normalizedAccount]);
+                $query->where('cz.account_no', $accountNumber)
+                    ->orWhere('cz.account_no', $normalizedAccount)
+                    ->orWhereRaw("REPLACE(TRIM(cz.account_no), '-', '') = ?", [$normalizedAccount])
+                    ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [$upperAccount])
+                    ->orWhereRaw("REPLACE(REPLACE(TRIM(cz.account_no), '-', ''), ' ', '') = ?", [$normalizedAccount]);
             })
             ->orderByDesc('dr.reading_date')
-            ->orderByDesc('dr.completed_at')
             ->orderByDesc('dr.id')
             ->first(['dr.schedule_id', 'dr.current_reading', 'dr.reading_date']);
 
@@ -383,11 +384,15 @@ class ConsumerController extends Controller
         // Same logic as lookupBillingRecord in MeterReadingController
         $reading = DB::table('downloaded_readings as dr')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
             ->select(
                 'dr.id as downloaded_id',
                 'dr.schedule_id',
-                'dr.account_number',
-                'dr.account_name',
+                'cz.account_no as account_number',
+                'cz.account_name',
                 'dr.consumption',
                 'dr.current_bill as downloaded_current_bill',
                 'dr.reading_date',
@@ -398,43 +403,43 @@ class ConsumerController extends Controller
                 'mrs.current_bill as schedule_current_bill',
                 'mrs.arrears',
                 'mrs.total_amount',
-                'mrs.category'
+                'cz.category_code as category'
             )
             ->where(function ($query) use ($accountNumber, $normalizedAccount) {
-                $query->where('dr.account_number', $accountNumber)
-                      ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNumber))])
-                      ->orWhere('mrs.account_number', $accountNumber)
-                      ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNumber))]);
+                $query->where('cz.account_no', $accountNumber)
+                      ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                      ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
             })
             ->orderByDesc('dr.reading_date')
-            ->orderByDesc('dr.completed_at')
             ->orderByDesc('dr.created_at')
             ->first();
 
-        // If no result with schedule join, try querying downloaded_readings directly
+        // If no result with schedule join, try by consumer_zone_id on downloaded_readings
         if (!$reading) {
-            $directReading = DB::table('downloaded_readings as dr')
-                ->select(
-                    'dr.id as downloaded_id',
-                    'dr.schedule_id',
-                    'dr.account_number',
-                    'dr.account_name',
-                    'dr.consumption',
-                    'dr.current_bill as downloaded_current_bill',
-                    'dr.reading_date',
-                    'dr.status'
-                )
-                ->where(function ($query) use ($accountNumber, $normalizedAccount) {
-                    $query->where('dr.account_number', $accountNumber)
-                          ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                          ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNumber))]);
-                })
-                ->orderByDesc('dr.reading_date')
-                ->orderByDesc('dr.completed_at')
-                ->orderByDesc('dr.created_at')
+            $consumer = ConsumerZoneOne::where('account_no', $accountNumber)
+                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
                 ->first();
+
+            if ($consumer) {
+                $directReading = DB::table('downloaded_readings as dr')
+                    ->leftJoin('consumer_zone as cz', 'dr.consumer_zone_id', '=', 'cz.id')
+                    ->select(
+                        'dr.id as downloaded_id',
+                        'dr.schedule_id',
+                        'cz.account_no as account_number',
+                        'cz.account_name',
+                        'dr.consumption',
+                        'dr.current_bill as downloaded_current_bill',
+                        'dr.reading_date',
+                        'dr.status'
+                    )
+                    ->where('dr.consumer_zone_id', $consumer->id)
+                    ->orderByDesc('dr.reading_date')
+                    ->orderByDesc('dr.created_at')
+                    ->first();
+            } else {
+                $directReading = null;
+            }
 
             if ($directReading && $directReading->schedule_id) {
                 // Get schedule data separately
@@ -443,10 +448,13 @@ class ConsumerController extends Controller
                     ->first();
                 
                 if ($schedule) {
+                    $categoryCode = null;
+                    if (!empty($schedule->consumer_zone_id)) {
+                        $categoryCode = DB::table('consumer_zone')
+                            ->where('id', $schedule->consumer_zone_id)
+                            ->value('category_code');
+                    }
                     // Merge schedule data into reading object
-                    // Note: meter_rental, materials, septage_fee, others don't exist in meter_reading_schedules table
-                    // They are stored elsewhere or use default values
-                    // Keep downloaded_current_bill if exists, otherwise use schedule's current_bill
                     $reading = (object) array_merge((array) $directReading, [
                         'bill_month' => $schedule->bill_month ?? null,
                         'bill_date' => $schedule->bill_date ?? null,
@@ -454,7 +462,7 @@ class ConsumerController extends Controller
                         'schedule_current_bill' => $schedule->current_bill ?? null,
                         'arrears' => $schedule->arrears ?? null,
                         'total_amount' => $schedule->total_amount ?? null,
-                        'category' => $schedule->category ?? null,
+                        'category' => $categoryCode,
                     ]);
                 } else {
                     $reading = $directReading;
@@ -588,7 +596,8 @@ class ConsumerController extends Controller
             'transaction_date' => 'nullable|date',
             'account_no' => 'required|string|unique:consumer_zone,account_no,' . $consumer->id,
             'account_name' => 'required|string',
-            'address1' => 'nullable|string',
+            'gender' => 'required|string|in:Male,Female,Others',
+            'address' => 'nullable|string',
             'latitude' => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'zone_code' => 'required|string',
@@ -598,10 +607,6 @@ class ConsumerController extends Controller
             'rate_code' => 'nullable|string',
             'status_code' => 'nullable|string',
             'sequence' => 'nullable|integer',
-            'consumer_deposit' => 'nullable|numeric',
-            'installation_fee' => 'nullable|numeric',
-            'installation_balance' => 'nullable|numeric',
-            'balance' => 'nullable|numeric',
             'cons_ctrl' => 'nullable|string',
             'bill_disc_percent' => 'nullable|string|in:SC DISCOUNT',
             'bill_disc_amount' => 'nullable|numeric|min:0',
@@ -679,7 +684,8 @@ class ConsumerController extends Controller
         $normalizedOld = str_replace('-', '', $oldAccountNo);
         $normalizedNew = str_replace('-', '', $newAccountNo);
 
-        if ($newAccountNo !== '' && Schema::hasTable('billing_adjustments')) {
+        // billing_adjustments links via consumer_zone_id; account_no lives on consumer_zone.
+        if ($newAccountNo !== '' && Schema::hasTable('billing_adjustments') && Schema::hasColumn('billing_adjustments', 'account_no')) {
             DB::table('billing_adjustments')
                 ->where('consumer_zone_id', $consumerId)
                 ->update(['account_no' => $newAccountNo]);
@@ -691,47 +697,7 @@ class ConsumerController extends Controller
                 ->update(['account_no' => $newAccountNo]);
         }
 
-        if (Schema::hasTable('downloaded_readings')) {
-            if ($accountNoChanged && Schema::hasColumn('downloaded_readings', 'account_number')) {
-                DB::table('downloaded_readings')
-                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
-                        $q->where('account_number', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld]);
-                    })
-                    ->update(['account_number' => $newAccountNo]);
-            }
-            if ($accountNameChanged && Schema::hasColumn('downloaded_readings', 'account_name')) {
-                DB::table('downloaded_readings')
-                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
-                        $q->where('account_number', $newAccountNo)
-                          ->orWhere('account_number', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld])
-                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedNew]);
-                    })
-                    ->update(['account_name' => $newAccountName]);
-            }
-        }
-
-        if (Schema::hasTable('meter_reading_schedules')) {
-            if ($accountNoChanged && Schema::hasColumn('meter_reading_schedules', 'account_number')) {
-                DB::table('meter_reading_schedules')
-                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
-                        $q->where('account_number', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld]);
-                    })
-                    ->update(['account_number' => $newAccountNo]);
-            }
-            if ($accountNameChanged && Schema::hasColumn('meter_reading_schedules', 'account_name')) {
-                DB::table('meter_reading_schedules')
-                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
-                        $q->where('account_number', $newAccountNo)
-                          ->orWhere('account_number', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedOld])
-                          ->orWhereRaw("REPLACE(TRIM(account_number), '-', '') = ?", [$normalizedNew]);
-                    })
-                    ->update(['account_name' => $newAccountName]);
-            }
-        }
+        // downloaded_readings and meter_reading_schedules store consumer_zone_id only; account fields live on consumer_zone.
 
         if (Schema::hasTable('collection')) {
             if ($accountNoChanged && Schema::hasColumn('collection', 'account_no')) {
@@ -755,53 +721,22 @@ class ConsumerController extends Controller
         }
 
         if (Schema::hasTable('disconnection_orders')) {
+            $applyDisconnectionConsumerScope = function ($query) use ($consumerId) {
+                if (Schema::hasColumn('disconnection_orders', 'consumer_zone_id')) {
+                    $query->where('consumer_zone_id', $consumerId);
+                } elseif (Schema::hasColumn('disconnection_orders', 'consumer_id')) {
+                    $query->where('consumer_id', $consumerId);
+                }
+            };
             if ($accountNoChanged && Schema::hasColumn('disconnection_orders', 'account_no')) {
                 DB::table('disconnection_orders')
-                    ->where(function ($q) use ($oldAccountNo, $normalizedOld) {
-                        $q->where('account_no', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedOld]);
-                    })
+                    ->where($applyDisconnectionConsumerScope)
                     ->update(['account_no' => $newAccountNo]);
             }
             if ($accountNameChanged && Schema::hasColumn('disconnection_orders', 'account_name')) {
                 DB::table('disconnection_orders')
-                    ->where(function ($q) use ($newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
-                        $q->where('account_no', $newAccountNo)
-                          ->orWhere('account_no', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedOld])
-                          ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalizedNew]);
-                    })
+                    ->where($applyDisconnectionConsumerScope)
                     ->update(['account_name' => $newAccountName]);
-            }
-        }
-
-        if (Schema::hasTable('lro_ledger')) {
-            $hasLroConsumerId = Schema::hasColumn('lro_ledger', 'consumer_zone_id');
-            if ($newAccountNo !== '' && Schema::hasColumn('lro_ledger', 'account') && ($hasLroConsumerId || $oldAccountNo !== '')) {
-                DB::table('lro_ledger')
-                    ->where(function ($q) use ($hasLroConsumerId, $consumerId, $oldAccountNo, $normalizedOld) {
-                        if ($hasLroConsumerId) {
-                            $q->where('consumer_zone_id', $consumerId);
-                        }
-                        if ($oldAccountNo !== '') {
-                            $q->orWhere('account', $oldAccountNo)
-                              ->orWhereRaw("REPLACE(TRIM(account), '-', '') = ?", [$normalizedOld]);
-                        }
-                    })
-                    ->update(['account' => $newAccountNo]);
-            }
-            if ($accountNameChanged && Schema::hasColumn('lro_ledger', 'name') && ($hasLroConsumerId || $newAccountNo !== '' || $oldAccountNo !== '')) {
-                DB::table('lro_ledger')
-                    ->where(function ($q) use ($hasLroConsumerId, $consumerId, $newAccountNo, $oldAccountNo, $normalizedOld, $normalizedNew) {
-                        if ($hasLroConsumerId) {
-                            $q->where('consumer_zone_id', $consumerId);
-                        }
-                        $q->orWhere('account', $newAccountNo)
-                          ->orWhere('account', $oldAccountNo)
-                          ->orWhereRaw("REPLACE(TRIM(account), '-', '') = ?", [$normalizedOld])
-                          ->orWhereRaw("REPLACE(TRIM(account), '-', '') = ?", [$normalizedNew]);
-                    })
-                    ->update(['name' => $newAccountName]);
             }
         }
     }

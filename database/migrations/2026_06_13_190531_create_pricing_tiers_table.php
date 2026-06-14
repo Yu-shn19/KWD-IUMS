@@ -10,7 +10,7 @@ return new class extends Migration
      * Run the migrations.
      */
     public function up(): void
-    {  if (!Schema::hasTable('disconnection_orders')){
+    {  
         Schema::create('pricing_tiers', function (Blueprint $table) {
             $table->id();
             $table->string('name'); // e.g., "Residential", "Commercial A", "Rate Code C", etc.
@@ -43,7 +43,7 @@ return new class extends Migration
             $table->index('is_active');
         });
     }
-    }
+    
     /**
      * Reverse the migrations.
      */

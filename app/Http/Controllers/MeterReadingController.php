@@ -52,6 +52,135 @@ class MeterReadingController extends Controller
         return $query;
     }
 
+    private function scheduleAssignmentUpdatePayload(int $readerId): array
+    {
+        $payload = [
+            'assigned_reader_id' => $readerId,
+            'status' => 'Assigned',
+        ];
+
+        if (Schema::hasColumn('meter_reading_schedules', 'assigned_at')) {
+            $payload['assigned_at'] = now();
+        }
+
+        return $payload;
+    }
+
+    private function scheduleUnassignmentUpdatePayload(): array
+    {
+        $payload = [
+            'assigned_reader_id' => null,
+            'status' => 'Prepared',
+        ];
+
+        if (Schema::hasColumn('meter_reading_schedules', 'assigned_at')) {
+            $payload['assigned_at'] = null;
+        }
+
+        return $payload;
+    }
+
+    private function findScheduleByAccountNo(string $accountNo): ?MeterReadingSchedule
+    {
+        $normalized = str_replace('-', '', $accountNo);
+        $consumer = ConsumerZoneOne::where(function ($q) use ($accountNo, $normalized) {
+            $q->where('account_no', $accountNo)
+                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalized]);
+        })->first();
+
+        if (!$consumer) {
+            return null;
+        }
+
+        return MeterReadingSchedule::where('consumer_zone_id', $consumer->id)
+            ->orderByDesc('bill_month')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function downloadedReadingsHasCompletedAt(): bool
+    {
+        return Schema::hasColumn('downloaded_readings', 'completed_at');
+    }
+
+    private function applyDownloadedReadingConsumerJoin($query, string $drAlias = 'dr', string $mrsAlias = 'mrs', string $czAlias = 'cz')
+    {
+        $joins = $query->getQuery()->joins ?? [];
+        $joined = collect($joins)->map(fn ($j) => (string) ($j->table ?? ''))->implode(' ');
+
+        if (!str_contains($joined, "{$mrsAlias}")) {
+            $query->leftJoin("meter_reading_schedules as {$mrsAlias}", "{$drAlias}.schedule_id", '=', "{$mrsAlias}.id");
+        }
+
+        if (!str_contains($joined, "{$czAlias}")) {
+            $query->leftJoin("consumer_zone as {$czAlias}", function ($join) use ($drAlias, $mrsAlias, $czAlias) {
+                $join->on("{$czAlias}.id", '=', "{$drAlias}.consumer_zone_id")
+                    ->orOn("{$czAlias}.id", '=', "{$mrsAlias}.consumer_zone_id");
+            });
+        }
+
+        return $query;
+    }
+
+    private function downloadedReadingBaseSelectColumns(): array
+    {
+        $cols = [
+            'dr.id as downloaded_id',
+            'dr.schedule_id',
+            'dr.reader_id',
+            'dr.consumer_zone_id',
+            'cz.account_no as account_number',
+            'cz.account_name',
+            'cz.zone_code as zone',
+            'dr.previous_reading',
+            'dr.current_reading',
+            'dr.consumption',
+            'dr.current_bill as downloaded_current_bill',
+            'dr.reading_date',
+            'dr.status',
+            'dr.reader_notes',
+        ];
+
+        if ($this->downloadedReadingsHasCompletedAt()) {
+            $cols[] = 'dr.completed_at';
+        }
+
+        return array_merge($cols, [
+            'cp.payment_method',
+            'cp.payment_amount',
+            'cp.amount_tendered',
+            'cp.change_amount',
+            'cp.or_number as official_receipt_number',
+            'cp.remarks as payment_remarks',
+            'cp.paid_at',
+            'dr.created_at as downloaded_created_at',
+            'dr.updated_at as downloaded_updated_at',
+        ]);
+    }
+
+    private function applyDownloadedReadingRecencyOrder($query)
+    {
+        $query->orderByDesc('dr.reading_date');
+        if ($this->downloadedReadingsHasCompletedAt()) {
+            $query->orderByDesc('dr.completed_at');
+        }
+        return $query->orderByDesc('dr.created_at');
+    }
+
+    private function resolvePaymentConsumer(?ConsumerPayment $payment): ?ConsumerZoneOne
+    {
+        if (!$payment) {
+            return null;
+        }
+
+        $consumerZoneId = $payment->consumer_zone_id ?? $payment->consumer_id;
+        if ($consumerZoneId) {
+            return ConsumerZoneOne::find($consumerZoneId);
+        }
+
+        return null;
+    }
+
     /**
      * Display meter reading page with readers and their assignments
      */
@@ -67,9 +196,14 @@ class MeterReadingController extends Controller
         
         foreach ($readers as $reader) {
             // Get unique zones assigned to this reader
-            $assignments = MeterReadingSchedule::where('assigned_reader_id', $reader->id)
-                ->select('zone', DB::raw('count(*) as total_schedules'), DB::raw('MAX(status) as status'))
-                ->groupBy('zone')
+            $assignments = MeterReadingSchedule::where('meter_reading_schedules.assigned_reader_id', $reader->id)
+                ->joinConsumerZone()
+                ->select(
+                    'cz.zone_code as zone',
+                    DB::raw('count(*) as total_schedules'),
+                    DB::raw('MAX(meter_reading_schedules.status) as status')
+                )
+                ->groupBy('cz.zone_code')
                 ->get();
 
             foreach ($assignments as $assignment) {
@@ -173,7 +307,7 @@ class MeterReadingController extends Controller
             ], 422);
         }
 
-        $query = MeterReadingSchedule::with(['consumer', 'assignedReader']);
+        $query = MeterReadingSchedule::with(['consumerZone', 'assignedReader']);
         $latestBillMonth = null;
         $billMonthNormalized = null;
 
@@ -206,7 +340,7 @@ class MeterReadingController extends Controller
         }
 
         if ($zone) {
-            $query->where('zone', $zone);
+            $query->forZoneCode($zone);
         }
 
         $schedules = $query->orderBy('sedr_number')->get();
@@ -321,10 +455,7 @@ class MeterReadingController extends Controller
                 }
 
                 // Match by account_number (normalize for comparison)
-                $schedule = MeterReadingSchedule::where('account_number', $accountNo)
-                    ->orWhereRaw('TRIM(account_number) = ?', [trim($accountNo)])
-                    ->orderByDesc('bill_month')
-                    ->first();
+                $schedule = $this->findScheduleByAccountNo($accountNo);
 
                 if (!$schedule) {
                     $errors[] = "Row {$rowNum}: No schedule found for account [{$accountNo}].";
@@ -407,7 +538,7 @@ class MeterReadingController extends Controller
         $newPrev    = (int) $validated['previous_reading'];
 
         try {
-            $schedule = MeterReadingSchedule::find($scheduleId);
+            $schedule = MeterReadingSchedule::with('consumerZone')->find($scheduleId);
             if (!$schedule) {
                 return response()->json([
                     'success' => false,
@@ -416,13 +547,14 @@ class MeterReadingController extends Controller
             }
 
             $normalizedAccount = str_replace('-', '', $accountNo);
-            $scheduleAccount = trim((string) $schedule->account_number);
-            $normalizedScheduleAccount = str_replace('-', '', $scheduleAccount);
-            if (
-                $scheduleAccount !== $accountNo
-                && $normalizedScheduleAccount !== $normalizedAccount
-                && strtoupper($scheduleAccount) !== strtoupper($accountNo)
-            ) {
+            $consumerMatches = $schedule->consumer_zone_id
+                && ConsumerZoneOne::where('id', $schedule->consumer_zone_id)
+                    ->where(function ($q) use ($accountNo, $normalizedAccount) {
+                        $q->where('account_no', $accountNo)
+                            ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount]);
+                    })
+                    ->exists();
+            if (!$consumerMatches) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Account number does not match the schedule.',
@@ -519,18 +651,10 @@ class MeterReadingController extends Controller
             // schedules, or BILLING ledger rows). The base value would
             // conflict with established billing data.
             $hasDownloadedReading = DB::table('downloaded_readings')
-                ->where(function ($query) use ($accountNo, $normalizedAccount, $upperAccount) {
-                    $query->where('account_number', $accountNo)
-                        ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount])
-                        ->orWhereRaw("UPPER(TRIM(account_number)) = ?", [$upperAccount]);
-                })
+                ->where('consumer_zone_id', $consumer->id)
                 ->exists();
 
-            $hasScheduleHistory = MeterReadingSchedule::where(function ($query) use ($accountNo, $normalizedAccount, $upperAccount) {
-                    $query->where('account_number', $accountNo)
-                        ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount])
-                        ->orWhereRaw("UPPER(TRIM(account_number)) = ?", [$upperAccount]);
-                })
+            $hasScheduleHistory = MeterReadingSchedule::where('consumer_zone_id', $consumer->id)
                 ->where(function ($query) {
                     $query->whereNotNull('current_reading')
                         ->orWhereNotNull('reading_date')
@@ -625,27 +749,31 @@ class MeterReadingController extends Controller
             }
 
             // Get all unassigned or prepared schedules for this zone and bill month
-            $schedules = MeterReadingSchedule::where('zone', $zone)
+            $schedules = MeterReadingSchedule::forZoneCode($zone)
                 ->where('bill_month', $billMonth)
                 ->whereIn('status', ['Prepared'])
+                ->whereNull('assigned_reader_id')
                 ->get();
 
             if ($schedules->isEmpty()) {
+                $alreadyAssigned = MeterReadingSchedule::forZoneCode($zone)
+                    ->where('bill_month', $billMonth)
+                    ->whereNotNull('assigned_reader_id')
+                    ->count();
+
+                $message = $alreadyAssigned > 0
+                    ? 'All schedules for Zone ' . $zone . ' for this bill month are already assigned to a reader.'
+                    : 'No prepared schedules found for Zone ' . $zone . ' for this bill month. Please prepare and save schedules in Billing Processes first.';
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'No available schedules found for Zone ' . $zone . '. Schedules may already be assigned.'
+                    'message' => $message,
                 ], 404);
             }
 
-            // Assign all schedules to the reader
-            $updated = MeterReadingSchedule::where('zone', $zone)
-                ->where('bill_month', $billMonth)
-                ->whereIn('status', ['Prepared'])
-                ->update([
-                    'assigned_reader_id' => $readerId,
-                    'status' => 'Assigned',
-                    'assigned_at' => now()
-                ]);
+            $scheduleIds = $schedules->pluck('id')->all();
+            $updated = MeterReadingSchedule::whereIn('id', $scheduleIds)
+                ->update($this->scheduleAssignmentUpdatePayload($readerId));
 
             return response()->json([
                 'success' => true,
@@ -721,12 +849,15 @@ class MeterReadingController extends Controller
     {
         $billMonth = $request->get('bill_month');
 
-        $query = MeterReadingSchedule::select('zone', DB::raw('count(*) as total_schedules'))
-            ->whereIn('status', ['Prepared'])
-            ->groupBy('zone');
+        $query = MeterReadingSchedule::query()
+            ->joinConsumerZone()
+            ->select('cz.zone_code as zone', DB::raw('count(*) as total_schedules'))
+            ->whereIn('meter_reading_schedules.status', ['Prepared'])
+            ->whereNull('meter_reading_schedules.assigned_reader_id')
+            ->groupBy('cz.zone_code');
 
         if ($billMonth) {
-            $query->where('bill_month', Carbon::parse($billMonth)->format('Y-m-d'));
+            $query->where('meter_reading_schedules.bill_month', Carbon::parse($billMonth)->format('Y-m-d'));
         }
 
         $zones = $query->get();
@@ -752,14 +883,10 @@ class MeterReadingController extends Controller
             $zone = $request->zone;
             $billMonth = Carbon::parse($request->bill_month)->format('Y-m-d');
 
-            $updated = MeterReadingSchedule::where('zone', $zone)
+            $updated = MeterReadingSchedule::forZoneCode($zone)
                 ->where('bill_month', $billMonth)
                 ->where('status', 'Assigned')
-                ->update([
-                    'assigned_reader_id' => null,
-                    'status' => 'Prepared',
-                    'assigned_at' => null
-                ]);
+                ->update($this->scheduleUnassignmentUpdatePayload());
 
             return response()->json([
                 'success' => true,
@@ -795,7 +922,7 @@ class MeterReadingController extends Controller
             }
 
             if ($request->zone) {
-                $query->where('zone', $request->zone);
+                $query->forZoneCode($request->zone);
             }
 
             if ($request->bill_month) {
@@ -928,14 +1055,20 @@ class MeterReadingController extends Controller
      */
     public function billingPayment()
     {
-        $zoneStats = DownloadedReading::select(
-                'zone',
-                DB::raw('MAX(reading_date) as latest_reading_date'),
+        $zoneStats = DB::table('downloaded_readings as dr')
+            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
+            ->select(
+                'cz.zone_code as zone',
+                DB::raw('MAX(dr.reading_date) as latest_reading_date'),
                 DB::raw('COUNT(*) as total_downloaded')
             )
-            ->whereNotNull('zone')
-            ->groupBy('zone')
-            ->orderBy('zone')
+            ->whereNotNull('cz.zone_code')
+            ->groupBy('cz.zone_code')
+            ->orderBy('cz.zone_code')
             ->get();
 
         $zones = $zoneStats->pluck('zone');
@@ -1043,7 +1176,7 @@ class MeterReadingController extends Controller
                 $dr = DB::table('downloaded_readings')->where('id', $payment->reading_id)->first();
                 if (!$dr) {
                     // Linked reading missing: fall back to consumer_payment + consumer so the form can still load and be updated
-                    $consumer = $payment->consumer_id ? \App\Models\ConsumerZoneOne::find($payment->consumer_id) : null;
+                    $consumer = $this->resolvePaymentConsumer($payment);
                     if (!$consumer) {
                     return response()->json([
                         'success' => false,
@@ -1094,59 +1227,96 @@ class MeterReadingController extends Controller
                         'payment_reference' => null,
                     ];
                 } else {
-                $schedule = null;
-                if ($dr->schedule_id) {
-                    $schedule = DB::table('meter_reading_schedules')->where('id', $dr->schedule_id)->first();
-                }
-                $sch = $schedule !== null ? $schedule : (object)[];
-                $reading = (object) [
-                    'downloaded_id' => $dr->id,
-                    'schedule_id' => $dr->schedule_id,
-                    'reader_id' => $dr->reader_id ?? null,
-                    'account_number' => $dr->account_number ?? ($sch->account_number ?? null),
-                    'account_name' => $dr->account_name ?? ($sch->account_name ?? null),
-                    'zone' => $dr->zone ?? ($sch->zone ?? null),
-                    'previous_reading' => $dr->previous_reading ?? 0,
-                    'current_reading' => $dr->current_reading ?? null,
-                    'consumption' => $dr->consumption ?? 0,
-                    'downloaded_current_bill' => $dr->current_bill ?? ($sch->current_bill ?? 0),
-                    'reading_date' => $dr->reading_date ?? null,
-                    'status' => $dr->status ?? 'Prepared',
-                    'reader_notes' => $dr->reader_notes ?? null,
-                    'completed_at' => $dr->completed_at ?? null,
-                    'payment_method' => $payment->payment_method ?? null,
-                    'payment_amount' => $payment->payment_amount ?? null,
-                    'amount_tendered' => $payment->amount_tendered ?? null,
-                    'change_amount' => $payment->change_amount ?? null,
-                    'official_receipt_number' => $payment->or_number,
-                    'payment_remarks' => $payment->remarks ?? null,
-                    'paid_at' => $payment->paid_at ?? null,
-                    'downloaded_created_at' => $dr->created_at ?? null,
-                    'downloaded_updated_at' => $dr->updated_at ?? null,
-                    'sedr_number' => $sch->sedr_number ?? null,
-                    'schedule_account_name' => $sch->account_name ?? null,
-                    'address' => $sch->address ?? null,
-                    'category' => $sch->category ?? null,
-                    'meter_number' => $sch->meter_number ?? null,
-                    'bill_month' => $sch->bill_month ?? null,
-                    'bill_date' => $sch->bill_date ?? null,
-                    'due_date' => $sch->due_date ?? null,
-                    'disconnection_date' => $sch->disconnection_date ?? null,
-                    'previous_reading_date' => $sch->previous_reading_date ?? null,
-                    'schedule_current_bill' => $sch->current_bill ?? null,
-                    'arrears' => $sch->arrears ?? null,
-                    'total_amount' => $sch->total_amount ?? null,
-                    'schedule_status' => $sch->status ?? null,
-                ];
-                $accountNumber = $reading->account_number ?? ($sch->account_number ?? null);
-                if (!$accountNumber) {
-                    $accountNumber = $dr->account_number ?? null;
-                }
-                $accountNumber = $accountNumber ? strtoupper(trim($accountNumber)) : null;
-                $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                    $drQuery = DB::table('downloaded_readings as dr');
+                    $this->applyDownloadedReadingConsumerJoin($drQuery);
+                    $drRow = $drQuery
+                        ->where('dr.id', $payment->reading_id)
+                        ->select(
+                            'dr.id as downloaded_id',
+                            'dr.schedule_id',
+                            'dr.reader_id',
+                            'cz.account_no as account_number',
+                            'cz.account_name',
+                            'cz.zone_code as zone',
+                            'cz.address',
+                            'cz.category_code as category',
+                            'cz.meter_number',
+                            'dr.previous_reading',
+                            'dr.current_reading',
+                            'dr.consumption',
+                            'dr.current_bill as downloaded_current_bill',
+                            'dr.reading_date',
+                            'dr.status',
+                            'dr.reader_notes',
+                            'dr.created_at as downloaded_created_at',
+                            'dr.updated_at as downloaded_updated_at',
+                            'mrs.sedr_number',
+                            'mrs.bill_month',
+                            'mrs.bill_date',
+                            'mrs.due_date',
+                            'mrs.disconnection_date',
+                            'mrs.previous_reading_date',
+                            'mrs.current_bill as schedule_current_bill',
+                            'mrs.arrears',
+                            'mrs.total_amount',
+                            'mrs.status as schedule_status'
+                        )
+                        ->first();
+
+                    $consumerForDr = null;
+                    if ($drRow && !empty($dr->consumer_zone_id)) {
+                        $consumerForDr = ConsumerZoneOne::find($dr->consumer_zone_id);
+                    } elseif ($drRow && $drRow->schedule_id) {
+                        $czId = DB::table('meter_reading_schedules')->where('id', $drRow->schedule_id)->value('consumer_zone_id');
+                        if ($czId) {
+                            $consumerForDr = ConsumerZoneOne::find($czId);
+                        }
+                    }
+
+                    $reading = (object) [
+                        'downloaded_id' => $drRow->downloaded_id ?? $dr->id,
+                        'schedule_id' => $drRow->schedule_id ?? $dr->schedule_id,
+                        'reader_id' => $drRow->reader_id ?? $dr->reader_id ?? null,
+                        'account_number' => $drRow->account_number ?? $consumerForDr?->account_no,
+                        'account_name' => $drRow->account_name ?? $consumerForDr?->account_name,
+                        'zone' => $drRow->zone ?? $consumerForDr?->zone_code,
+                        'previous_reading' => $drRow->previous_reading ?? $dr->previous_reading ?? 0,
+                        'current_reading' => $drRow->current_reading ?? $dr->current_reading ?? null,
+                        'consumption' => $drRow->consumption ?? $dr->consumption ?? 0,
+                        'downloaded_current_bill' => $drRow->downloaded_current_bill ?? $dr->current_bill ?? ($drRow->schedule_current_bill ?? 0),
+                        'reading_date' => $drRow->reading_date ?? $dr->reading_date ?? null,
+                        'status' => $drRow->status ?? $dr->status ?? 'Prepared',
+                        'reader_notes' => $drRow->reader_notes ?? $dr->reader_notes ?? null,
+                        'completed_at' => $this->downloadedReadingsHasCompletedAt() ? ($dr->completed_at ?? null) : null,
+                        'payment_method' => $payment->payment_method ?? null,
+                        'payment_amount' => $payment->payment_amount ?? null,
+                        'amount_tendered' => $payment->amount_tendered ?? null,
+                        'change_amount' => $payment->change_amount ?? null,
+                        'official_receipt_number' => $payment->or_number,
+                        'payment_remarks' => $payment->remarks ?? null,
+                        'paid_at' => $payment->paid_at ?? null,
+                        'downloaded_created_at' => $drRow->downloaded_created_at ?? $dr->created_at ?? null,
+                        'downloaded_updated_at' => $drRow->downloaded_updated_at ?? $dr->updated_at ?? null,
+                        'sedr_number' => $drRow->sedr_number ?? null,
+                        'schedule_account_name' => $drRow->account_name ?? $consumerForDr?->account_name,
+                        'address' => $drRow->address ?? $consumerForDr?->address,
+                        'category' => $drRow->category ?? $consumerForDr?->category_code,
+                        'meter_number' => $drRow->meter_number ?? $consumerForDr?->meter_number,
+                        'bill_month' => $drRow->bill_month ?? null,
+                        'bill_date' => $drRow->bill_date ?? null,
+                        'due_date' => $drRow->due_date ?? null,
+                        'disconnection_date' => $drRow->disconnection_date ?? null,
+                        'previous_reading_date' => $drRow->previous_reading_date ?? null,
+                        'schedule_current_bill' => $drRow->schedule_current_bill ?? null,
+                        'arrears' => $drRow->arrears ?? null,
+                        'total_amount' => $drRow->total_amount ?? null,
+                        'schedule_status' => $drRow->schedule_status ?? null,
+                    ];
+                    $accountNumber = $reading->account_number ? strtoupper(trim($reading->account_number)) : null;
+                    $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
                 }
             } else {
-                $consumer = \App\Models\ConsumerZoneOne::find($payment->consumer_id);
+                $consumer = $this->resolvePaymentConsumer($payment);
                 if (!$consumer) {
                     // Support "Others" payments where consumer_id is null and only account_name is stored.
                     $paidAt = $payment->paid_at ? Carbon::parse($payment->paid_at) : null;
@@ -1251,35 +1421,16 @@ class MeterReadingController extends Controller
         $readingQuery = DB::table('downloaded_readings as dr')
             ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->select(
-                'dr.id as downloaded_id',
-                'dr.schedule_id',
-                'dr.reader_id',
-                'dr.account_number',
-                'dr.account_name',
-                'dr.zone',
-                'dr.previous_reading',
-                'dr.current_reading',
-                'dr.consumption',
-                'dr.current_bill as downloaded_current_bill',
-                'dr.reading_date',
-                'dr.status',
-                'dr.reader_notes',
-                'dr.completed_at',
-                'cp.payment_method',
-                'cp.payment_amount',
-                'cp.amount_tendered',
-                'cp.change_amount',
-                'cp.or_number as official_receipt_number',
-                'cp.remarks as payment_remarks',
-                'cp.paid_at',
-                'dr.created_at as downloaded_created_at',
-                'dr.updated_at as downloaded_updated_at',
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
+            ->select(array_merge($this->downloadedReadingBaseSelectColumns(), [
                 'mrs.sedr_number',
-                'mrs.account_name as schedule_account_name',
-                'mrs.address',
-                'mrs.category',
-                'mrs.meter_number',
+                'cz.account_name as schedule_account_name',
+                'cz.address',
+                'cz.category_code as category',
+                'cz.meter_number',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
@@ -1288,20 +1439,16 @@ class MeterReadingController extends Controller
                 'mrs.current_bill as schedule_current_bill',
                 'mrs.arrears',
                 'mrs.total_amount',
-                'mrs.status as schedule_status'
-            )
+                'mrs.status as schedule_status',
+            ]))
             ->where(function ($query) use ($accountNumber, $accountName, $normalizedAccount) {
                 if ($accountNumber) {
-                    $query->where('dr.account_number', $accountNumber)
-                          ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                          ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNumber))])
-                          ->orWhere('mrs.account_number', $accountNumber)
-                          ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                          ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNumber))]);
+                    $query->where('cz.account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
                 }
                 if ($accountName) {
-                    $query->orWhereRaw("UPPER(TRIM(dr.account_name)) LIKE ?", ['%' . $accountName . '%'])
-                          ->orWhereRaw("UPPER(TRIM(mrs.account_name)) LIKE ?", ['%' . $accountName . '%']);
+                    $query->orWhereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%']);
                 }
             });
 
@@ -1319,49 +1466,26 @@ class MeterReadingController extends Controller
         }
 
         // Order by most recent reading first
-        $reading = $readingQuery
-            ->orderByDesc('dr.reading_date')
-            ->orderByDesc('dr.completed_at')
-            ->orderByDesc('dr.created_at')
-            ->first();
+        $reading = $this->applyDownloadedReadingRecencyOrder($readingQuery)->first();
 
         // If no result with schedule join, try querying downloaded_readings directly
         if (!$reading) {
             $directQuery = DB::table('downloaded_readings as dr')
                 ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
-                ->select(
-                    'dr.id as downloaded_id',
-                    'dr.schedule_id',
-                    'dr.reader_id',
-                    'dr.account_number',
-                    'dr.account_name',
-                    'dr.zone',
-                    'dr.previous_reading',
-                    'dr.current_reading',
-                    'dr.consumption',
-                    'dr.current_bill as downloaded_current_bill',
-                    'dr.reading_date',
-                    'dr.status',
-                    'dr.reader_notes',
-                    'dr.completed_at',
-                    'cp.payment_method',
-                    'cp.payment_amount',
-                    'cp.amount_tendered',
-                    'cp.change_amount',
-                    'cp.or_number as official_receipt_number',
-                    'cp.remarks as payment_remarks',
-                    'cp.paid_at',
-                    'dr.created_at as downloaded_created_at',
-                    'dr.updated_at as downloaded_updated_at'
-                )
+                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+                ->leftJoin('consumer_zone as cz', function ($join) {
+                    $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                        ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+                })
+                ->select($this->downloadedReadingBaseSelectColumns())
                 ->where(function ($query) use ($accountNumber, $accountName, $normalizedAccount) {
                     if ($accountNumber) {
-                        $query->where('dr.account_number', $accountNumber)
-                              ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                              ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNumber))]);
+                        $query->where('cz.account_no', $accountNumber)
+                              ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                              ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
                     }
                     if ($accountName) {
-                        $query->orWhereRaw("UPPER(TRIM(dr.account_name)) LIKE ?", ['%' . $accountName . '%']);
+                        $query->orWhereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%']);
                     }
                 });
 
@@ -1373,11 +1497,7 @@ class MeterReadingController extends Controller
                 });
             }
 
-            $reading = $directQuery
-                ->orderByDesc('dr.reading_date')
-                ->orderByDesc('dr.completed_at')
-                ->orderByDesc('dr.created_at')
-                ->first();
+            $reading = $this->applyDownloadedReadingRecencyOrder($directQuery)->first();
 
             // If still no result, try to get schedule data separately
             if ($reading && $reading->schedule_id) {
@@ -1386,13 +1506,16 @@ class MeterReadingController extends Controller
                     ->first();
                 
                 if ($schedule) {
-                    // Merge schedule data into reading object
+                    $consumer = null;
+                    if (!empty($schedule->consumer_zone_id)) {
+                        $consumer = ConsumerZoneOne::find($schedule->consumer_zone_id);
+                    }
                     $readingArray = (array) $reading;
                     $readingArray['sedr_number'] = $schedule->sedr_number ?? null;
-                    $readingArray['schedule_account_name'] = $schedule->account_name ?? null;
-                    $readingArray['address'] = $schedule->address ?? null;
-                    $readingArray['category'] = $schedule->category ?? null;
-                    $readingArray['meter_number'] = $schedule->meter_number ?? null;
+                    $readingArray['schedule_account_name'] = $consumer?->account_name;
+                    $readingArray['address'] = $consumer?->address;
+                    $readingArray['category'] = $consumer?->category_code;
+                    $readingArray['meter_number'] = $consumer?->meter_number;
                     $readingArray['bill_month'] = $schedule->bill_month ?? null;
                     $readingArray['bill_date'] = $schedule->bill_date ?? null;
                     $readingArray['due_date'] = $schedule->due_date ?? null;
@@ -1429,16 +1552,18 @@ class MeterReadingController extends Controller
             $scheduleExists = false;
             if ($accountNumber) {
                 $normalizedAccount = str_replace('-', '', $accountNumber);
-                $scheduleExists = DB::table('meter_reading_schedules')
-                    ->where(function($query) use ($accountNumber, $normalizedAccount) {
-                        $query->where('account_number', $accountNumber)
-                              ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount])
-                              ->orWhereRaw("UPPER(TRIM(account_number)) = ?", [strtoupper(trim($accountNumber))]);
+                $scheduleExists = DB::table('meter_reading_schedules as mrs')
+                    ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                    ->where(function ($query) use ($accountNumber, $normalizedAccount) {
+                        $query->where('cz.account_no', $accountNumber)
+                              ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                              ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
                     })
                     ->exists();
             } elseif ($accountName) {
-                $scheduleExists = DB::table('meter_reading_schedules')
-                    ->whereRaw("UPPER(TRIM(account_name)) LIKE ?", ['%' . $accountName . '%'])
+                $scheduleExists = DB::table('meter_reading_schedules as mrs')
+                    ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                    ->whereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%'])
                     ->exists();
             }
 
@@ -1508,27 +1633,26 @@ class MeterReadingController extends Controller
             // No completed meter reading yet – use schedule for this bill month so payment form can open (breakdown from ledger)
             if ($billMonthDate && ($accountNumber || $accountName)) {
                 $scheduleQuery = DB::table('meter_reading_schedules as mrs')
+                    ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
                     ->whereDate('mrs.bill_month', $billMonthDate->format('Y-m-d'));
                 if ($accountNumber) {
                     $normalizedAccount = str_replace('-', '', $accountNumber);
-                    $scheduleQuery->where(function($q) use ($accountNumber, $normalizedAccount) {
-                        $q->where('mrs.account_number', $accountNumber)
-                          ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                          ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNumber))]);
+                    $scheduleQuery->where(function ($q) use ($accountNumber, $normalizedAccount) {
+                        $q->where('cz.account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
                     });
                 } else {
-                    $scheduleQuery->whereRaw("UPPER(TRIM(mrs.account_name)) LIKE ?", ['%' . $accountName . '%']);
+                    $scheduleQuery->whereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%']);
                 }
-                $scheduleRow = $scheduleQuery->first();
+                $scheduleRow = $scheduleQuery->select('mrs.*', 'cz.account_no', 'cz.account_name', 'cz.zone_code', 'cz.address', 'cz.category_code', 'cz.meter_number')->first();
                 if ($scheduleRow) {
                     $scheduleId = $scheduleRow->id;
                     $dr = \App\Models\DownloadedReading::where('schedule_id', $scheduleId)->first();
                     if (!$dr) {
                         $dr = \App\Models\DownloadedReading::create([
+                            'consumer_zone_id' => $scheduleRow->consumer_zone_id,
                             'schedule_id' => $scheduleId,
-                            'account_number' => $scheduleRow->account_number ?? $accountNumber,
-                            'account_name' => $scheduleRow->account_name ?? '',
-                            'zone' => $scheduleRow->zone ?? '',
                             'previous_reading' => $scheduleRow->previous_reading ?? 0,
                             'current_reading' => $scheduleRow->current_reading ?? null,
                             'consumption' => $scheduleRow->consumption ?? 0,
@@ -1542,9 +1666,9 @@ class MeterReadingController extends Controller
                         'downloaded_id' => $dr->id,
                         'downloaded_current_bill' => $dr->current_bill ?? $scheduleRow->current_bill ?? null,
                         'schedule_id' => $dr->schedule_id,
-                        'account_number' => $dr->account_number ?? $scheduleRow->account_number,
-                        'account_name' => $dr->account_name ?? $scheduleRow->account_name,
-                        'zone' => $dr->zone ?? $scheduleRow->zone,
+                        'account_number' => $scheduleRow->account_no ?? $accountNumber,
+                        'account_name' => $scheduleRow->account_name ?? '',
+                        'zone' => $scheduleRow->zone_code ?? '',
                         'bill_month' => $scheduleRow->bill_month ?? null,
                         'bill_date' => $scheduleRow->bill_date ?? null,
                         'due_date' => $scheduleRow->due_date ?? null,
@@ -1557,7 +1681,7 @@ class MeterReadingController extends Controller
                         'sedr_number' => $scheduleRow->sedr_number ?? null,
                         'schedule_account_name' => $scheduleRow->account_name ?? null,
                         'address' => $scheduleRow->address ?? null,
-                        'category' => $scheduleRow->category ?? null,
+                        'category' => $scheduleRow->category_code ?? null,
                         'meter_number' => $scheduleRow->meter_number ?? null,
                     ]);
                     $paymentRow = DB::table('consumer_payments')->where('reading_id', $dr->id)->first();
@@ -1649,7 +1773,7 @@ class MeterReadingController extends Controller
             $reader = User::find($reading->reader_id);
         }
         
-        // Always source address from consumer_zone.address1 when possible (single source of truth).
+        // Always source address from consumer_zone.address when possible (single source of truth).
         // meter_reading_schedules.address may be stale or missing.
         $consumerForAddress = null;
         $accForAddress = strtoupper(trim((string) ($reading->account_number ?? $accountNumber ?? '')));
@@ -1669,7 +1793,7 @@ class MeterReadingController extends Controller
             'zone' => $reading->zone ?? '',
             'category' => $reading->category ?? '',
             'consumer_category' => $consumerForAddress?->category_code,
-            'address' => $consumerForAddress?->address1 ?? ($reading->address ?? ''),
+            'address' => $consumerForAddress?->address ?? ($reading->address ?? ''),
             'bill_disc_percent' => $consumerForAddress?->bill_disc_percent,
             'osca_id_no' => $consumerForAddress?->osca_id_no,
             'bill_disc_updated_at' => !empty($consumerForAddress?->bill_disc_updated_at)
@@ -1722,14 +1846,9 @@ class MeterReadingController extends Controller
         })->first();
         // Fallback: resolve consumer from schedule's account_number if reading account didn't match
         if (!$consumerByAccount && !empty($reading->schedule_id)) {
-            $sched = DB::table('meter_reading_schedules')->where('id', $reading->schedule_id)->first();
-            if ($sched && !empty($sched->account_number)) {
-                $acc = trim($sched->account_number);
-                $norm = str_replace('-', '', $acc);
-                $consumerByAccount = \App\Models\ConsumerZoneOne::where('account_no', $acc)
-                    ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$norm])
-                    ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper($acc)])
-                    ->first();
+            $czId = DB::table('meter_reading_schedules')->where('id', $reading->schedule_id)->value('consumer_zone_id');
+            if ($czId) {
+                $consumerByAccount = ConsumerZoneOne::find($czId);
             }
         }
         if ($consumerByAccount && (!empty($reading->schedule_id) || !empty($reading->downloaded_id))) {
@@ -1957,7 +2076,9 @@ class MeterReadingController extends Controller
             'schedule_id' => $reading->schedule_id,
             'reader_id' => $reading->reader_id,
             'reader_notes' => $reading->reader_notes ?? null,
-            'completed_at' => $reading->completed_at ? Carbon::parse($reading->completed_at)->format('Y-m-d H:i:s') : null,
+            'completed_at' => (is_object($reading) && property_exists($reading, 'completed_at') && $reading->completed_at)
+                ? Carbon::parse($reading->completed_at)->format('Y-m-d H:i:s')
+                : null,
             'created_at' => $reading->downloaded_created_at ? Carbon::parse($reading->downloaded_created_at)->format('Y-m-d H:i:s') : null,
             'updated_at' => $reading->downloaded_updated_at ? Carbon::parse($reading->downloaded_updated_at)->format('Y-m-d H:i:s') : null,
         ];
@@ -2002,34 +2123,24 @@ class MeterReadingController extends Controller
         $lroEntriesByOr = [];
         if ($orNumberInput !== '') {
             $orRemarks = 'Payment OR#' . trim($orNumberInput);
-            $accountForLro = $accountData['number'] ?? $accountNumber ?? null;
+            $consumerZoneId = $consumerForBalance?->id;
 
-            $baseLroQuery = LROLedger::where('remarks', $orRemarks)
+            $baseLroQuery = LROLedger::with('consumerZone')
+                ->where('remarks', $orRemarks)
                 ->orderBy('date', 'asc')
                 ->orderBy('id', 'asc');
 
-            // Prefer account-matched rows, but allow blank/null account rows (legacy Others saves).
-            $candidateRows = $accountForLro
-                ? (clone $baseLroQuery)->where(function ($q) use ($accountForLro) {
-                    $q->where('account', $accountForLro)
-                      ->orWhereNull('account')
-                      ->orWhere('account', '');
-                })->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'amount', 'ar_type', 'acct_code', 'reference', 'remarks', 'status'])
-                : (clone $baseLroQuery)->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'amount', 'ar_type', 'acct_code', 'reference', 'remarks', 'status']);
-
-            // Fallback: if account-filtered query produced nothing, return all rows for this OR.
-            if ($candidateRows->isEmpty()) {
-                $candidateRows = (clone $baseLroQuery)
-                    ->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'amount', 'ar_type', 'acct_code', 'reference', 'remarks', 'status']);
-            }
+            $candidateRows = $consumerZoneId
+                ? (clone $baseLroQuery)->forConsumerZone($consumerZoneId)->get()
+                : (clone $baseLroQuery)->get();
 
             $lroEntriesByOr = $candidateRows->map(function ($row) {
                 return [
                     'id' => $row->id,
                     'type' => $row->type,
                     'date' => $row->date,
-                    'account' => $row->account,
-                    'name' => $row->name,
+                    'account' => $row->account_no,
+                    'name' => $row->account_name,
                     'bam_no' => $row->bam_no,
                     'amount' => (float) ($row->amount ?? 0),
                     'ar_type' => $row->ar_type,
@@ -2045,30 +2156,25 @@ class MeterReadingController extends Controller
         // Only DM (charge) rows are shown. For each DM row, sum all matching CM (credit) rows
         // to determine the remaining unpaid balance. Skip fully-paid entries.
         $sundries = [];
-        $accountNumberForSundries = $accountData['number'] ?? $accountNumber ?? null;
-        if ($accountNumberForSundries) {
+        $consumerZoneIdForSundries = $consumerForBalance?->id;
+        if ($consumerZoneIdForSundries) {
             try {
-                $dmRows = LROLedger::where('account', $accountNumberForSundries)
+                $dmRows = LROLedger::forConsumerZone($consumerZoneIdForSundries)
                     ->where('type', 'DM')
                     ->where('status', 'Approved')
                     ->orderBy('date', 'asc')
                     ->orderBy('id', 'asc')
-                    ->get(['id', 'acct_code', 'bam_no', 'reference', 'amount', 'name', 'status']);
+                    ->get(['id', 'acct_code', 'bam_no', 'amount', 'status']);
 
                 foreach ($dmRows as $row) {
                     $dmAmount   = (float)($row->amount ?? 0);
-                    $bamRef     = $row->bam_no ?? $row->reference;
+                    $bamRef     = $row->bam_no;
 
                     // Sum all CM credits that offset this specific DM entry
-                    $paidAmount = (float) LROLedger::where('account', $accountNumberForSundries)
+                    $paidAmount = (float) LROLedger::forConsumerZone($consumerZoneIdForSundries)
                         ->where('type', 'CM')
                         ->where('acct_code', $row->acct_code)
-                        ->where(function ($q) use ($bamRef, $row) {
-                            $q->where('bam_no', $bamRef)
-                              ->orWhere('reference', $bamRef)
-                              ->orWhere('bam_no', $row->bam_no)
-                              ->orWhere('reference', $row->reference);
-                        })
+                        ->where('bam_no', $bamRef)
                         ->sum('amount');
 
                     $remaining = round($dmAmount - $paidAmount, 2);
@@ -2081,9 +2187,9 @@ class MeterReadingController extends Controller
                         'id'        => $row->id,
                         'acct_code' => $row->acct_code,
                         'bam_no'    => $bamRef,
-                        'reference' => $row->reference,
+                        'reference' => $bamRef,
                         'amount'    => $remaining,   // remaining unpaid balance
-                        'name'      => $row->name,
+                        'name'      => $consumerForBalance->account_name ?? '',
                     ];
 
                     if (count($sundries) >= 4) {
@@ -2148,16 +2254,14 @@ class MeterReadingController extends Controller
 
         // Fetch LRO ledger entries by BAM No (or legacy "reference") from lro_ledger.
         // This BAM search is ONLY for "Others" entries.
-        $rows = LROLedger::where(function ($q) use ($bamNo) {
-                $q->where('bam_no', $bamNo)
-                  ->orWhere('reference', $bamNo);
-            })
+        $rows = LROLedger::with('consumerZone')
+            ->where('bam_no', $bamNo)
             ->where('type', 'Others')
             ->where('status', 'Approved')
             ->orderBy('date', 'asc')
             ->orderBy('id', 'asc')
             ->limit(4) // matches the 4 sundry slots on the payment form
-            ->get(['id', 'type', 'date', 'account', 'name', 'bam_no', 'reference', 'acct_code', 'amount', 'status']);
+            ->get();
 
         if ($rows->isEmpty()) {
             return response()->json([
@@ -2168,10 +2272,7 @@ class MeterReadingController extends Controller
 
         $first = $rows->first();
         // Check if this BAM already has a posted payment CM row and capture its OR number from remarks.
-        $paidRow = LROLedger::where(function ($q) use ($bamNo) {
-                $q->where('bam_no', $bamNo)
-                  ->orWhere('reference', $bamNo);
-            })
+        $paidRow = LROLedger::where('bam_no', $bamNo)
             ->where('type', 'CM')
             ->where('status', 'Posted')
             ->whereNotNull('remarks')
@@ -2193,8 +2294,8 @@ class MeterReadingController extends Controller
             'message' => 'BAM No. loaded from LRO Ledger.',
             'data' => [
                 'account' => [
-                    'number' => $first->account,
-                    'name' => $first->name,
+                    'number' => $first->account_no,
+                    'name' => $first->account_name,
                     'date' => $first->date,
                 ],
                 'payment' => [
@@ -2203,16 +2304,16 @@ class MeterReadingController extends Controller
                     'paid_at' => $paidRow?->date,
                 ],
                 'sundries' => $rows->map(function ($row) {
-                    $bamRef = $row->bam_no ?? $row->reference;
+                    $bamRef = $row->bam_no;
                     return [
                         'id'        => $row->id,
                         'type'      => $row->type,
                         'acct_code' => $row->acct_code,
                         'bam_no'    => $bamRef,
-                        'reference' => $row->reference,
+                        'reference' => $bamRef,
                         'amount'    => (float) ($row->amount ?? 0),
-                        'name'      => $row->name,
-                        'account'   => $row->account,
+                        'name'      => $row->account_name,
+                        'account'   => $row->account_no,
                     ];
                 })->values(),
             ],
@@ -2309,11 +2410,7 @@ class MeterReadingController extends Controller
                 'dr.id as downloaded_id',
                 'dr.current_bill as downloaded_current_bill'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('mrs.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNo))]);
-            })
+            ->where('mrs.consumer_zone_id', $consumerZoneId)
             ->whereNotNull('mrs.bill_date');
 
         $schedules = $schedulesQuery->orderBy('mrs.bill_date', 'desc')
@@ -2361,6 +2458,10 @@ class MeterReadingController extends Controller
         $paymentsQuery = DB::table('downloaded_readings as dr')
             ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
             ->select(
                 'dr.id as downloaded_id',
                 'dr.schedule_id',
@@ -2369,10 +2470,15 @@ class MeterReadingController extends Controller
                 'cp.created_at',
                 'mrs.bill_date as related_bill_date'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('dr.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNo))]);
+            ->where(function ($query) use ($accountNo, $normalizedAccount, $consumerZoneId) {
+                if ($consumerZoneId) {
+                    $query->where('dr.consumer_zone_id', $consumerZoneId)
+                        ->orWhere('mrs.consumer_zone_id', $consumerZoneId);
+                } else {
+                    $query->where('cz.account_no', $accountNo)
+                        ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                        ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNo))]);
+                }
             })
             ->where(function($query) {
                 $query->where('dr.status', 'paid')
@@ -2466,11 +2572,7 @@ class MeterReadingController extends Controller
                 'dr.status',
                 'dr.paid_at'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('mrs.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNo))]);
-            })
+            ->where('mrs.consumer_zone_id', $consumerZoneId)
             ->whereNotNull('mrs.due_date')
             ->whereNotNull('mrs.bill_date')
             ->where('mrs.due_date', '<=', $today);
@@ -3007,7 +3109,7 @@ class MeterReadingController extends Controller
             if ($latestBalanceEntry) {
                 $currentBalance = (float)($latestBalanceEntry->balance ?? 0);
             } else {
-                $currentBalance = (float)($consumer->balance ?? 0);
+                $currentBalance = $consumer->getLedgerBalance();
             }
         }
         
@@ -3478,7 +3580,7 @@ class MeterReadingController extends Controller
             $consumerPaidWmcPool = 0.0;
             if (!empty($consumer->id)) {
                 $consumerPaidWmcPool = (float) DB::table('consumer_payments as cp')
-                    ->where('cp.consumer_id', $consumer->id)
+                    ->where('cp.' . ConsumerPayment::consumerZoneIdColumn(), $consumer->id)
                     ->whereNotNull('cp.paid_at')
                     ->whereRaw('COALESCE(cp.paid_at, cp.created_at) <= ?', [$toMonthDate->format('Y-m-d H:i:s')])
                     ->selectRaw('COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
@@ -3777,12 +3879,8 @@ class MeterReadingController extends Controller
 
         // Check if previous month is paid (using paid_at): if paid, Arrears — Previous Month = 0 so it won't appear in breakdown
         $prevMonthPaid = false;
-        $prevSchedulesInRange = MeterReadingSchedule::where(function ($q) use ($consumer) {
-            $acc = $consumer->account_no ?? '';
-            $norm = str_replace('-', '', $acc);
-            $q->where('account_number', $acc)
-                ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$norm]);
-        })->whereBetween('bill_month', [$prevFromStr, $prevToStr])
+        $prevSchedulesInRange = MeterReadingSchedule::where('consumer_zone_id', $consumer->id)
+            ->whereBetween('bill_month', [$prevFromStr, $prevToStr])
             ->pluck('id');
         if ($prevSchedulesInRange->isNotEmpty()) {
             $prevReadingsInRange = DB::table('downloaded_readings')->whereIn('schedule_id', $prevSchedulesInRange->toArray())->pluck('id');
@@ -3841,12 +3939,8 @@ class MeterReadingController extends Controller
         $fromStr = $paymentMonthStart->format('Y-m-d');
         $toStr = $paymentMonthEnd->format('Y-m-d');
 
-        $schedulesInRange = MeterReadingSchedule::where(function ($q) use ($consumer) {
-            $acc = $consumer->account_no ?? '';
-            $norm = str_replace('-', '', $acc);
-            $q->where('account_number', $acc)
-                ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$norm]);
-        })->whereBetween('bill_month', [$fromStr, $toStr])
+        $schedulesInRange = MeterReadingSchedule::where('consumer_zone_id', $consumer->id)
+            ->whereBetween('bill_month', [$fromStr, $toStr])
             ->pluck('id');
 
         if ($schedulesInRange->isNotEmpty()) {
@@ -3994,12 +4088,8 @@ class MeterReadingController extends Controller
         $displayedPrevFromStr = $displayedPrevMonthStart->format('Y-m-d');
         $displayedPrevToStr = $displayedPrevMonthEnd->format('Y-m-d');
         $displayedPrevMonthPaid = false;
-        $displayedPrevSchedules = MeterReadingSchedule::where(function ($q) use ($consumer) {
-            $acc = $consumer->account_no ?? '';
-            $norm = str_replace('-', '', $acc);
-            $q->where('account_number', $acc)
-                ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$norm]);
-        })->whereBetween('bill_month', [$displayedPrevFromStr, $displayedPrevToStr])
+        $displayedPrevSchedules = MeterReadingSchedule::where('consumer_zone_id', $consumer->id)
+            ->whereBetween('bill_month', [$displayedPrevFromStr, $displayedPrevToStr])
             ->pluck('id');
         if ($displayedPrevSchedules->isNotEmpty()) {
             $displayedPrevReadings = DB::table('downloaded_readings')->whereIn('schedule_id', $displayedPrevSchedules->toArray())->pluck('id');
@@ -4266,10 +4356,10 @@ class MeterReadingController extends Controller
         $orNumberInput = trim((string) $request->input('or_number', ''));
         $orPayment = null;
         if ($orNumberInput !== '') {
-            $orPayment = ConsumerPayment::where('or_number', $orNumberInput)
-                ->where('consumer_id', $consumer->id)
+            $orPayment = ConsumerPayment::forConsumerZone($consumer->id)
+                ->where('or_number', $orNumberInput)
                 ->first();
-            // Fallback for legacy/misaligned records where consumer_id is null/wrong but OR is valid.
+            // Fallback for legacy/misaligned records where consumer_zone_id is null/wrong but OR is valid.
             if (!$orPayment) {
                 $orPayment = ConsumerPayment::where('or_number', $orNumberInput)
                     ->orderBy('paid_at', 'desc')

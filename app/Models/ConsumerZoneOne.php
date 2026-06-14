@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 class ConsumerZoneOne extends Model
 {
@@ -25,7 +26,8 @@ class ConsumerZoneOne extends Model
     protected $fillable = [
         'account_no',
         'account_name',
-        'address1',
+        'gender',
+        'address',
         'latitude',
         'longitude',
         'zone_code',
@@ -85,6 +87,58 @@ class ConsumerZoneOne extends Model
         };
     }
 
+    /** @deprecated Use address column on consumer_zone */
+    public function getAddress1Attribute(): ?string
+    {
+        return $this->attributes['address'] ?? null;
+    }
+
+    /**
+     * Latest running balance from consumer_ledgers (consumer_zone has no balance column in new schema).
+     */
+    public function getLedgerBalance(): float
+    {
+        $latest = ConsumerLedger::where('consumer_zone_id', $this->id)
+            ->whereNotNull('balance')
+            ->orderBy('date', 'desc')
+            ->orderBy('id', 'desc')
+            ->first();
+
+        return $latest ? (float) ($latest->balance ?? 0) : 0.0;
+    }
+
+    public function getBalanceAttribute($value): float
+    {
+        if ($value !== null && Schema::hasColumn($this->getTable(), 'balance')) {
+            return (float) $value;
+        }
+
+        return $this->getLedgerBalance();
+    }
+
+    /**
+     * Resolve consumer by account number (exact + normalized).
+     */
+    public static function findByAccountNo(?string $accountNo): ?self
+    {
+        $accountNo = trim((string) ($accountNo ?? ''));
+        if ($accountNo === '') {
+            return null;
+        }
+
+        $consumer = static::where('account_no', $accountNo)->first();
+        if ($consumer) {
+            return $consumer;
+        }
+
+        $normalized = str_replace('-', '', $accountNo);
+
+        return static::where(function ($q) use ($accountNo, $normalized) {
+            $q->whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
+              ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper($accountNo)]);
+        })->first();
+    }
+
     /**
      * Get the ledger entries for this consumer zone.
      */
@@ -95,11 +149,11 @@ class ConsumerZoneOne extends Model
     
     
     /**
-     * Disconnection workflow orders tied to this consumer (consumer_id = consumer_zone.id).
+     * Disconnection workflow orders tied to this consumer.
      */
     public function disconnectionOrders(): HasMany
     {
-        return $this->hasMany(DisconnectionOrder::class, 'consumer_id');
+        return $this->hasMany(DisconnectionOrder::class, DisconnectionOrder::consumerZoneIdColumn());
     }
 
     /**
@@ -149,7 +203,7 @@ class ConsumerZoneOne extends Model
 
 
     /**
-     * Latest actual disconnect time from disconnection orders (by consumer_id, then by matching account_no).
+     * Latest actual disconnect time from disconnection orders (by consumer_zone_id, then by matching account_no).
      */
     public function latestDisconnectedAtForDisplay(): ?Carbon
     {

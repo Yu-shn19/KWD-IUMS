@@ -217,8 +217,8 @@ class ConsumerLedgerController extends Controller
             ], 400);
         }
 
-        // Find consumer by account_no
-        $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+        // Find consumer by account_no (exact + normalized)
+        $consumer = ConsumerZoneOne::findByAccountNo($accountNo);
 
         \Log::info('Consumer lookup result', [
             'found' => $consumer ? true : false,
@@ -343,6 +343,11 @@ class ConsumerLedgerController extends Controller
                 'status_code' => $consumer->status_code,
                 'status_label' => $consumer->status_label,
                 'sequence' => $consumer->sequence,
+                'bill_disc_percent' => $consumer->bill_disc_percent,
+                'osca_id_no' => $consumer->osca_id_no,
+                'bill_disc_updated_at' => ! empty($consumer->bill_disc_updated_at)
+                    ? Carbon::parse($consumer->bill_disc_updated_at)->format('Y-m-d')
+                    : null,
             ],
             'ledgers' => $ledgersWithBalance->values(),
             'summary' => [
@@ -528,9 +533,10 @@ class ConsumerLedgerController extends Controller
         // Query meter_reading_schedules for BILL entries
         $schedulesQuery = DB::table('meter_reading_schedules as mrs')
             ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
+            ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
             ->select(
                 'mrs.id as schedule_id',
-                'mrs.account_number',
+                'cz.account_no as account_number',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
@@ -548,11 +554,7 @@ class ConsumerLedgerController extends Controller
                 'dr.current_reading as downloaded_current_reading',
                 'dr.consumption as downloaded_consumption'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('mrs.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNo))]);
-            })
+            ->where('mrs.consumer_zone_id', $consumerZoneId)
             ->whereNotNull('mrs.bill_date');
 
         // Apply year filter if provided
@@ -651,6 +653,10 @@ class ConsumerLedgerController extends Controller
         $paymentsQuery = DB::table('downloaded_readings as dr')
             ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
             ->select(
                 'dr.id as downloaded_id',
                 'dr.schedule_id',
@@ -661,10 +667,15 @@ class ConsumerLedgerController extends Controller
                 'cp.created_by',
                 'mrs.bill_date as related_bill_date'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('dr.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNo))]);
+            ->where(function ($query) use ($accountNo, $normalizedAccount, $consumerZoneId) {
+                if ($consumerZoneId) {
+                    $query->where('dr.consumer_zone_id', $consumerZoneId)
+                        ->orWhere('mrs.consumer_zone_id', $consumerZoneId);
+                } else {
+                    $query->where('cz.account_no', $accountNo)
+                        ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                        ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNo))]);
+                }
             })
             ->where(function($query) {
                 $query->where('dr.status', 'paid')
@@ -980,11 +991,7 @@ class ConsumerLedgerController extends Controller
                 'dr.status',
                 'dr.paid_at'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('mrs.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(mrs.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(mrs.account_number)) = ?", [strtoupper(trim($accountNo))]);
-            })
+            ->where('mrs.consumer_zone_id', $consumerZoneId)
             ->whereNotNull('mrs.due_date')
             ->whereNotNull('mrs.bill_date')
             ->where('mrs.due_date', '<=', $today); // Due date has passed
@@ -1232,11 +1239,15 @@ class ConsumerLedgerController extends Controller
         // Use LEFT JOIN to include all downloaded_readings even without schedules
         $readingsQuery = DB::table('downloaded_readings as dr')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
             ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
             ->select(
                 'dr.id as downloaded_id',
                 'dr.schedule_id',
-                'dr.account_number',
+                'cz.account_no as account_number',
                 'dr.consumption',
                 'dr.current_reading',
                 'dr.current_bill as downloaded_current_bill',
@@ -1261,10 +1272,15 @@ class ConsumerLedgerController extends Controller
                 'mrs.previous_reading',
                 'mrs.prepared_by'
             )
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('dr.account_number', $accountNo)
-                      ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount])
-                      ->orWhereRaw("UPPER(TRIM(dr.account_number)) = ?", [strtoupper(trim($accountNo))]);
+            ->where(function ($query) use ($accountNo, $normalizedAccount, $consumerZoneId) {
+                if ($consumerZoneId) {
+                    $query->where('dr.consumer_zone_id', $consumerZoneId)
+                        ->orWhere('mrs.consumer_zone_id', $consumerZoneId);
+                } else {
+                    $query->where('cz.account_no', $accountNo)
+                        ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                        ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNo))]);
+                }
             });
 
         // Apply year filter if provided
@@ -1768,10 +1784,7 @@ class ConsumerLedgerController extends Controller
         // Get latest unpaid bill
         $normalizedAccount = str_replace('-', '', $consumer->account_no);
         $latestBillFromDownloaded = DB::table('downloaded_readings as dr')
-            ->where(function ($query) use ($consumer, $normalizedAccount) {
-                $query->where('dr.account_number', $consumer->account_no)
-                      ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount]);
-            })
+            ->where('dr.consumer_zone_id', $consumer->id)
             ->whereNotNull('dr.current_bill')
             ->orderBy('dr.reading_date', 'desc')
             ->orderBy('dr.created_at', 'desc')

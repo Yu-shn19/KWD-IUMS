@@ -32,8 +32,10 @@ class ConsumerLedger extends Model
     ];
 
     protected $casts = [
+        'date' => 'date',
         'due_date' => 'date',
         'txtime' => 'datetime',
+        'paid_at' => 'datetime',
     ];
 
     /**

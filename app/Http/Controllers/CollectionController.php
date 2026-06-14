@@ -1312,10 +1312,10 @@ class CollectionController extends Controller
 
             // Find all meter_reading_schedules for December 2025
             $decemberSchedules = DB::table('meter_reading_schedules as mrs')
-                ->leftJoin('consumer_zone as cz', 'mrs.account_number', '=', 'cz.account_no')
+                ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
                 ->select(
                     'mrs.id as schedule_id',
-                    'mrs.account_number',
+                    'cz.account_no as account_number',
                     'mrs.bill_month',
                     'mrs.bill_date',
                     'mrs.due_date',
@@ -1398,7 +1398,7 @@ class CollectionController extends Controller
 
                     // Check if there's a January 2026 bill (if exists, it means they paid December, so exclude)
                     $hasJanuary2026Bill = DB::table('meter_reading_schedules as mrs')
-                        ->where('mrs.account_number', $accountNo)
+                        ->where('mrs.consumer_zone_id', $schedule->consumer_zone_id)
                         ->whereBetween('mrs.bill_month', [$january2026Start->format('Y-m-d'), $january2026End->format('Y-m-d')])
                         ->whereNotNull('mrs.bill_date')
                         ->exists();

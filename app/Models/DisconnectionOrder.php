@@ -5,12 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Schema;
 
 class DisconnectionOrder extends Model
 {
     use HasFactory;
 
     protected $fillable = [
+        'consumer_zone_id',
         'consumer_id',
         'disconnector_id',
         'account_no',
@@ -29,7 +31,7 @@ class DisconnectionOrder extends Model
         'oldest_unpaid_date',
         'latest_unpaid_date',
         'disconnection_date',
-         'list_billing_month',
+        'list_billing_month',
         'list_billing_date',
         'list_filter_type',
         'status',
@@ -49,7 +51,7 @@ class DisconnectionOrder extends Model
         'oldest_unpaid_date' => 'date',
         'latest_unpaid_date' => 'date',
         'disconnection_date' => 'date',
-            'list_billing_date' => 'date',
+        'list_billing_date' => 'date',
         'assigned_at' => 'datetime',
         'disconnected_at' => 'datetime',
         'reconnected_at' => 'datetime',
@@ -63,58 +65,102 @@ class DisconnectionOrder extends Model
         'reconnected_at',
     ];
 
-    /**
-     * Get the consumer associated with this disconnection order
-     */
+    public static function consumerZoneIdColumn(): string
+    {
+        if (Schema::hasTable('disconnection_orders') && Schema::hasColumn('disconnection_orders', 'consumer_zone_id')) {
+            return 'consumer_zone_id';
+        }
+
+        return 'consumer_id';
+    }
+
+    public function getConsumerZoneIdAttribute(): ?int
+    {
+        $column = static::consumerZoneIdColumn();
+
+        return isset($this->attributes[$column]) && $this->attributes[$column] !== null
+            ? (int) $this->attributes[$column]
+            : null;
+    }
+
+    /** @deprecated Use consumer_zone_id */
+    public function getConsumerIdAttribute(): ?int
+    {
+        return $this->consumer_zone_id;
+    }
+
+    public function consumerZone(): BelongsTo
+    {
+        return $this->belongsTo(ConsumerZoneOne::class, static::consumerZoneIdColumn());
+    }
+
+    /** @deprecated Use consumerZone() */
     public function consumer(): BelongsTo
     {
-        return $this->belongsTo(ConsumerZoneOne::class, 'consumer_id');
+        return $this->consumerZone();
+    }
+
+    public function scopeForConsumerZone($query, ?int $consumerZoneId)
+    {
+        if (!$consumerZoneId) {
+            return $query->whereRaw('0 = 1');
+        }
+
+        return $query->where(static::consumerZoneIdColumn(), $consumerZoneId);
     }
 
     /**
-     * Get the disconnector assigned to this order
+     * Keep only attributes that exist on disconnection_orders; map legacy consumer_id → consumer_zone_id.
      */
+    public static function filterTableAttributes(array $data): array
+    {
+        if (!Schema::hasTable('disconnection_orders')) {
+            return $data;
+        }
+
+        if (isset($data['consumer_id']) && !isset($data['consumer_zone_id'])) {
+            $data['consumer_zone_id'] = $data['consumer_id'];
+        }
+
+        $payload = [];
+        foreach ($data as $key => $value) {
+            if ($key === 'consumer_id' && Schema::hasColumn('disconnection_orders', 'consumer_zone_id')) {
+                continue;
+            }
+            if (Schema::hasColumn('disconnection_orders', $key)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
+    }
+
     public function disconnector(): BelongsTo
     {
         return $this->belongsTo(User::class, 'disconnector_id');
     }
 
-    /**
-     * Scope to get pending orders
-     */
     public function scopePending($query)
     {
         return $query->where('status', 'pending');
     }
 
-    /**
-     * Scope to get assigned orders
-     */
     public function scopeAssigned($query)
     {
         return $query->where('status', '!=', 'pending')
-                     ->whereNotNull('disconnector_id');
+            ->whereNotNull('disconnector_id');
     }
 
-    /**
-     * Scope to get orders for a specific disconnector
-     */
     public function scopeForDisconnector($query, $disconnectorId)
     {
         return $query->where('disconnector_id', $disconnectorId);
     }
 
-    /**
-     * Scope to get active orders (pending, assigned, in-progress)
-     */
     public function scopeActive($query)
     {
         return $query->whereIn('status', ['pending', 'assigned', 'in-progress']);
     }
 
-    /**
-     * Assign order to a disconnector
-     */
     public function assignTo($disconnectorId)
     {
         $this->update([
@@ -124,9 +170,6 @@ class DisconnectionOrder extends Model
         ]);
     }
 
-    /**
-     * Mark as disconnected
-     */
     public function markAsDisconnected($notes = null)
     {
         $this->update([
@@ -135,20 +178,17 @@ class DisconnectionOrder extends Model
             'notes' => $notes ?? $this->notes,
         ]);
 
-        // Update consumer status_code to 'X' (Disconnected)
-        if ($this->consumer_id) {
-            $consumer = $this->consumer ?? $this->consumer()->first();
+        $consumerZoneId = $this->consumer_zone_id;
+        if ($consumerZoneId) {
+            $consumer = $this->consumerZone ?? $this->consumerZone()->first();
             if ($consumer) {
                 $consumer->update([
-                    'status_code' => 'X'
+                    'status_code' => 'X',
                 ]);
             }
         }
     }
 
-    /**
-     * Mark as reconnected
-     */
     public function markAsReconnected($notes = null)
     {
         $this->update([
@@ -157,37 +197,28 @@ class DisconnectionOrder extends Model
             'notes' => $notes ?? $this->notes,
         ]);
 
-        // Update consumer status_code to 'A' (Active)
-        if ($this->consumer_id) {
-            $consumer = $this->consumer ?? $this->consumer()->first();
+        $consumerZoneId = $this->consumer_zone_id;
+        if ($consumerZoneId) {
+            $consumer = $this->consumerZone ?? $this->consumerZone()->first();
             if ($consumer) {
                 $consumer->update([
-                    'status_code' => 'A'
+                    'status_code' => 'A',
                 ]);
             }
         }
     }
 
-    /** Note used when order is cancelled because consumer paid - balance fully cleared (for API filtering). */
     public const CANCELLED_DUE_TO_PAYMENT_NOTE = 'Cancelled - payment received. Do not disconnect.';
 
-    /** Note pattern: any note ending with this is treated as "cancelled due to payment" for API. */
     public const CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX = 'Do not disconnect.';
 
-    /**
-     * Cancel all active disconnection orders for a consumer when they have a payment in consumer_payments.
-     * Called from BillingProcessController after any payment is recorded (paid_at); balance does not need to be cleared.
-     *
-     * @param int $consumerId consumer_zone id
-     * @param \Carbon\Carbon|string|null $paidAt payment date (e.g. from consumer_payments.paid_at) for the note; if null, uses "payment received"
-     */
-    public static function cancelActiveOrdersForConsumerDueToPayment(int $consumerId, $paidAt = null): int
+    public static function cancelActiveOrdersForConsumerDueToPayment(int $consumerZoneId, $paidAt = null): int
     {
         $note = $paidAt
             ? 'Cancelled - consumer paid on ' . (\Carbon\Carbon::parse($paidAt)->format('Y-m-d')) . '. ' . self::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX
             : self::CANCELLED_DUE_TO_PAYMENT_NOTE;
 
-        return static::where('consumer_id', $consumerId)
+        return static::forConsumerZone($consumerZoneId)
             ->whereIn('status', ['pending', 'assigned', 'in-progress'])
             ->update([
                 'status' => 'cancelled',

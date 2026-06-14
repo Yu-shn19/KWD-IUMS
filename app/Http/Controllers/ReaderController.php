@@ -26,11 +26,10 @@ class ReaderController extends Controller
         }
 
         try {
-            $table = 'meter_reading_schedules';
-
-            $zonesQuery = DB::table($table)
-                ->where('assigned_reader_id', $readerId)
-                ->select('zone')
+            $zonesQuery = DB::table('meter_reading_schedules as mrs')
+                ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                ->where('mrs.assigned_reader_id', $readerId)
+                ->select('cz.zone_code as zone')
                 ->distinct();
 
             if ($readingDate !== null && $readingDate !== '') {
@@ -38,8 +37,8 @@ class ReaderController extends Controller
                     ? $readingDate->format('Y-m-d')
                     : date('Y-m-d', strtotime($readingDate));
                 $zonesQuery->where(function ($q) use ($dateNorm) {
-                    $q->whereDate('reading_date', $dateNorm)
-                      ->orWhereDate('bill_date', $dateNorm);
+                    $q->whereDate('mrs.reading_date', $dateNorm)
+                      ->orWhereDate('mrs.bill_date', $dateNorm);
                 });
             }
 
@@ -50,8 +49,8 @@ class ReaderController extends Controller
                 ->values()
                 ->toArray();
 
-            $readingDates = DB::table($table)
-                ->where('assigned_reader_id', $readerId)
+            $readingDates = DB::table('meter_reading_schedules as mrs')
+                ->where('mrs.assigned_reader_id', $readerId)
                 ->selectRaw('DISTINCT COALESCE(reading_date, bill_date) as dt')
                 ->whereNotNull(DB::raw('COALESCE(reading_date, bill_date)'))
                 ->orderBy('dt', 'desc')
@@ -91,24 +90,44 @@ class ReaderController extends Controller
         }
 
         try {
-            $query = DB::table('meter_reading_schedules')
-                ->where('assigned_reader_id', $readerId);
+            $query = DB::table('meter_reading_schedules as mrs')
+                ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                ->where('mrs.assigned_reader_id', $readerId)
+                ->select(
+                    'mrs.id',
+                    'mrs.sedr_number',
+                    'mrs.reading_date',
+                    'mrs.bill_date',
+                    'mrs.due_date',
+                    'mrs.previous_reading',
+                    'mrs.current_reading',
+                    'mrs.consumption',
+                    'mrs.current_bill',
+                    'mrs.arrears',
+                    'mrs.status',
+                    'cz.zone_code as zone',
+                    'cz.account_no as account_number',
+                    'cz.account_name',
+                    'cz.address',
+                    'cz.meter_number',
+                    'cz.category_code as category'
+                );
 
             if ($zone !== null && $zone !== '') {
-                $query->where('zone', $zone);
+                $query->where('cz.zone_code', $zone);
             }
             if ($readingDate !== null && $readingDate !== '') {
                 $dateNorm = $readingDate instanceof \DateTimeInterface
                     ? $readingDate->format('Y-m-d')
                     : date('Y-m-d', strtotime($readingDate));
                 $query->where(function ($q) use ($dateNorm) {
-                    $q->whereDate('reading_date', $dateNorm)
-                      ->orWhereDate('bill_date', $dateNorm);
+                    $q->whereDate('mrs.reading_date', $dateNorm)
+                      ->orWhereDate('mrs.bill_date', $dateNorm);
                 });
             }
 
-            $rows = $query->orderByRaw('COALESCE(reading_date, bill_date) DESC')
-                ->orderBy('sedr_number')
+            $rows = $query->orderByRaw('COALESCE(mrs.reading_date, mrs.bill_date) DESC')
+                ->orderBy('mrs.sedr_number')
                 ->get();
 
             $data = $rows->map(function ($row) {

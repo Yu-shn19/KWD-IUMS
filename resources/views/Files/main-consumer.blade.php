@@ -159,9 +159,14 @@
                                                     value="{{ $consumer->meter_number ?? '' }}" readonly>
                                             </div>
                                             <div class="mb-3">
+                                                <label class="form-label">Gender</label>
+                                                <input type="text" class="form-control form-control-sm" id="gender"
+                                                    value="{{ $consumer->gender ?? '' }}" readonly>
+                                            </div>
+                                            <div class="mb-3">
                                                 <label class="form-label">Address</label>
                                                 <input type="text" class="form-control form-control-sm" id="address"
-                                                    value="{{ $consumer->address1 ?? '' }}" readonly>
+                                                    value="{{ $consumer->address ?? '' }}" readonly>
                                             </div>
                                             <div class="mb-3">
                                                 <label class="form-label">Category</label>
@@ -568,6 +573,16 @@
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
+                                    <label for="edit_gender" class="form-label">Gender <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="edit_gender" name="gender" required>
+                                        <option value="">Select Gender</option>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Others">Others</option>
+                                    </select>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-3">
                                     <label for="edit_contact_number" class="form-label">Contact Number</label>
                                     <input type="text" class="form-control" id="edit_contact_number" name="contact_number" placeholder="Enter Contact Number">
                                     <div class="invalid-feedback"></div>
@@ -701,8 +716,8 @@
                                     <div class="invalid-feedback"></div>
                                 </div>
                                  <div class="mb-3">
-                                    <label for="address1" class="form-label">Address <span class="text-danger">*</span></label>
-                                    <textarea class="form-control" id="address1" name="address1" rows="3" required></textarea>
+                                    <label for="address" class="form-label">Address <span class="text-danger">*</span></label>
+                                    <textarea class="form-control" id="address" name="address" rows="3" required></textarea>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -747,6 +762,16 @@
                                 <div class="mb-3">
                                     <label for="account_name" class="form-label">Account name <span class="text-danger">*</span></label>
                                     <input type="text" class="form-control" id="account_name" name="account_name" placeholder="e.g. DELA CRUZ, JUAN M." required>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="new_gender" class="form-label">Gender <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="new_gender" name="gender" required>
+                                        <option value="">Select Gender</option>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Others">Others</option>
+                                    </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -1532,7 +1557,8 @@
                 install_date: $form.find('#installation_date').val(),
                 account_no: $form.find('#account_no').val(),
                 account_name: $form.find('#account_name').val(),
-                address1: $form.find('#address1').val(),
+                gender: $form.find('#new_gender').val(),
+                address: $form.find('#address').val(),
                 zone_code: $form.find('#zone').val(),
                 category_code: $form.find('#category option:selected').data('code'),
                 meter_number: $form.find('#meter_number').val(),
@@ -1839,9 +1865,14 @@
                                 value="${consumer.meter_number || ''}" readonly>
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">Gender</label>
+                            <input type="text" class="form-control form-control-sm" id="gender"
+                                value="${consumer.gender || ''}" readonly>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Address</label>
                             <input type="text" class="form-control form-control-sm" id="address"
-                                value="${consumer.address1 || ''}" readonly>
+                                value="${consumer.address || ''}" readonly>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Category</label>
@@ -1941,7 +1972,7 @@
         //     // Update header address
         //     const headerAddress = document.getElementById('consumerHeaderAddress');
         //     if (headerAddress) {
-        //         const addr = [consumer.address1, consumer.address2 || consumer.address_2].filter(Boolean).join(' ').trim();
+        //         const addr = [consumer.address, consumer.address2 || consumer.address_2].filter(Boolean).join(' ').trim();
         //         headerAddress.textContent = addr || '—';
         //     }
 
@@ -2041,7 +2072,7 @@
 
             const headerAddress = document.getElementById('consumerHeaderAddress');
             if (headerAddress) {
-                const a1 = (consumer.address1 || '').trim();
+                const a1 = (consumer.address || '').trim();
                 const a2 = (consumer.address2 || consumer.address_2 || '').trim();
                 headerAddress.textContent = [a1, a2].filter(Boolean).join(' ') || '—';
             }
@@ -2128,7 +2159,7 @@
                 
                 $('#edit_account_no').val(currentConsumer.account_no || '');
                 $('#edit_meter_number').val(currentConsumer.meter_number || '');
-                $('#edit_address').val(currentConsumer.address1 || '');
+                $('#edit_address').val(currentConsumer.address || '');
                 
                 $('#edit_category').val('');
                 const categoryCode = currentConsumer.category_code;
@@ -2145,6 +2176,7 @@
                 $('#edit_rate_code').val(currentConsumer.rate_code || 'A');
                 applyRateCodeRestrictions('#edit_category', '#edit_rate_code');
                 $('#edit_account_name').val(currentConsumer.account_name || '');
+                $('#edit_gender').val(currentConsumer.gender || '');
                 
                 $('#edit_contact_number').val('');
                 $('#edit_meter_brand').val(currentConsumer.meter_brand || '');
@@ -2227,7 +2259,8 @@
                 install_date: $('#edit_installation_date').val(),
                 account_no: $('#edit_account_no').val(),
                 account_name: $('#edit_account_name').val(),
-                address1: $('#edit_address').val(),
+                gender: $('#edit_gender').val(),
+                address: $('#edit_address').val(),
                 zone_code: $('#edit_zone').val(),
                 category_code: $('#edit_category option:selected').data('code') || $('#edit_category').val(),
                 meter_number: $('#edit_meter_number').val(),

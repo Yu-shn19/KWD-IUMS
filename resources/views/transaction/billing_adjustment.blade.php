@@ -269,7 +269,7 @@
                         <div class="card-header py-3 bam-list-header">
                             <div class="bam-list-title-wrap">
                                 <h6 class="m-0 font-weight-bold text-primary">
-                                    <i class="fas fa-list mr-2"></i>All Billing Adjustment Transactions
+                                    <i class="fas fa-list mr-2"></i>Billing Adjustment Memo Entry
                                 </h6>
                             </div>
                             <div class="bam-list-search-wrap">
@@ -327,7 +327,7 @@
                                                 <td>{{ $item->acct_code ?? '-' }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
                                                 <td><span class="badge {{ $item->type === 'CM' ? 'badge-success' : 'badge-warning' }}">{{ $item->type }}</span></td>
-                                                <td>{{ $item->account_no }}</td>
+                                                <td>{{ $item->consumerZone->account_no ?? $item->account_no ?? '-' }}</td>
                                                 <td>{{ $item->consumerZone->account_name ?? '-' }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
@@ -343,8 +343,8 @@
                                                 <td>{{ $item->acct_code ?? '-' }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
                                                 <td><span class="badge badge-info">{{ $item->type ?? 'CM' }}</span></td>
-                                                <td>{{ ($item->type ?? '') === 'Others' ? '' : ($item->account ?? '') }}</td>
-                                                <td>{{ $item->name ?? '-' }}</td>
+                                                <td>{{ ($item->type ?? '') === 'Others' ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '') }}</td>
+                                                <td>{{ $item->consumerZone->account_name ?? $item->account_name ?? '-' }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount ?? 0, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
                                                 <td><span class="badge badge-{{ ($item->status ?? 'Pending') === 'Approved' ? 'success' : (($item->status ?? 'Pending') === 'Posted' ? 'primary' : (($item->status ?? 'Pending') === 'Cancelled' ? 'danger' : 'secondary')) }}">{{ ($item->status ?? 'Pending') === 'Posted' ? 'Paid' : ($item->status ?? 'Pending') }}</span></td>
@@ -394,7 +394,19 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             var entry = @json($lroEntry);
-            bamPopulateForm(entry, 'LRO');
+            var consumer = entry.consumer_zone || entry.consumerZone || null;
+            bamPopulateForm({
+                type:            entry.type,
+                date:            entry.date ? String(entry.date).substring(0, 10) : '',
+                account:         entry.account_no || entry.account || (consumer ? consumer.account_no : ''),
+                name:            entry.account_name || entry.name || (consumer ? consumer.account_name : ''),
+                bam_no:          entry.bam_no,
+                amount:          entry.amount,
+                acct_code:       entry.acct_code,
+                remarks:         entry.remarks,
+                status:          entry.status,
+                correct_reading: entry.correct_reading
+            }, 'LRO');
         });
     </script>
     @endisset
@@ -403,18 +415,19 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             var entry = @json($billingAdjustment);
+            var consumer = entry.consumer_zone || entry.consumerZone || null;
             bamPopulateForm({
                 type:            entry.type,
                 date:            @json(optional($billingAdjustment->date)->format('Y-m-d')),
-                account:         entry.account_no,
-                name:            entry.consumer_zone ? entry.consumer_zone.account_name : (entry.account_name || ''),
+                account:         entry.account_no || (consumer ? consumer.account_no : ''),
+                name:            consumer ? (consumer.account_name || '') : (entry.account_name || ''),
                 bam_no:          entry.bam_no,
                 amount:          entry.amount,
                 acct_code:       entry.acct_code,
                 remarks:         entry.remarks,
                 status:          entry.status,
                 correct_reading: entry.connect_reading
-            }, 'AR');
+            }, entry.ledger || 'AR');
         });
     </script>
     @endisset

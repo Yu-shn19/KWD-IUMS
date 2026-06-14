@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\ConsumerLedger;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ConsumerPayment extends Model
 {
@@ -13,8 +14,7 @@ class ConsumerPayment extends Model
 
     protected $fillable = [
         'reading_id',
-        'consumer_id',
-        'account_name',
+        'consumer_zone_id',
         'payment_method',
         'payment_amount',
         'senior_citizen_discount',
@@ -33,38 +33,99 @@ class ConsumerPayment extends Model
         'created_by',
     ];
 
+    public function consumerZone()
+    {
+        return $this->belongsTo(ConsumerZoneOne::class, 'consumer_zone_id');
+    }
+
+    /** @deprecated Use consumer_zone_id */
+    public function getConsumerIdAttribute(): ?int
+    {
+        if (array_key_exists('consumer_zone_id', $this->attributes)) {
+            return $this->attributes['consumer_zone_id'] !== null ? (int) $this->attributes['consumer_zone_id'] : null;
+        }
+
+        return isset($this->attributes['consumer_id']) ? (int) $this->attributes['consumer_id'] : null;
+    }
+
+    public function scopeForConsumerZone($query, ?int $consumerZoneId)
+    {
+        if (!$consumerZoneId) {
+            return $query->whereRaw('0 = 1');
+        }
+
+        if (Schema::hasColumn($this->getTable(), 'consumer_zone_id')) {
+            return $query->where('consumer_zone_id', $consumerZoneId);
+        }
+
+        if (Schema::hasColumn($this->getTable(), 'consumer_id')) {
+            return $query->where('consumer_id', $consumerZoneId);
+        }
+
+        return $query->whereRaw('0 = 1');
+    }
+
+    public static function consumerZoneIdColumn(): string
+    {
+        if (Schema::hasTable('consumer_payments') && Schema::hasColumn('consumer_payments', 'consumer_zone_id')) {
+            return 'consumer_zone_id';
+        }
+
+        return 'consumer_id';
+    }
+
+    /**
+     * Keep only attributes that exist on consumer_payments; map legacy consumer_id → consumer_zone_id.
+     */
+    public static function filterTableAttributes(array $data): array
+    {
+        if (!Schema::hasTable('consumer_payments')) {
+            return $data;
+        }
+
+        if (isset($data['consumer_id']) && !isset($data['consumer_zone_id'])) {
+            $data['consumer_zone_id'] = $data['consumer_id'];
+        }
+        unset($data['consumer_id'], $data['account_name'], $data['materials'], $data['fees_charges'], $data['inspection_fee']);
+
+        $payload = [];
+        foreach ($data as $key => $value) {
+            if (Schema::hasColumn('consumer_payments', $key)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
+    }
+
     /**
      * Get the related PAYMENT entry in consumer_ledgers
      * Uses direct relationship via consumer_payment_id, with fallback matching
      */
     public function ledgerEntry()
     {
-        // First try: Use direct link via consumer_payment_id (most reliable)
         if ($this->id) {
             $ledgerEntry = ConsumerLedger::where('consumer_payment_id', $this->id)
                 ->where('trans', 'PAYMENT')
                 ->first();
-            
+
             if ($ledgerEntry) {
                 return $ledgerEntry;
             }
         }
 
-        // Fallback: Try matching by consumer_id, OR number, and amount
-        // (for older entries that might not have consumer_payment_id set)
-        if (!$this->consumer_id) {
+        $consumerZoneId = $this->consumer_zone_id ?? $this->consumer_id;
+        if (!$consumerZoneId) {
             return null;
         }
 
-        $query = ConsumerLedger::where('consumer_zone_id', $this->consumer_id)
+        $query = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
             ->where('trans', 'PAYMENT');
 
-        // Try to match by OR number first (most reliable)
         if ($this->or_number) {
             $query->where('reference', $this->or_number);
         }
 
-        // Also match by payment amount for additional accuracy
         if ($this->payment_amount) {
             $query->where('credit', $this->payment_amount);
         }
@@ -72,33 +133,26 @@ class ConsumerPayment extends Model
         return $query->orderBy('id', 'desc')->first();
     }
 
-    /**
-     * Relationship: Get the PAYMENT entry in consumer_ledgers via direct link
-     */
     public function ledgerEntries()
     {
         return $this->hasMany(ConsumerLedger::class, 'consumer_payment_id')
             ->where('trans', 'PAYMENT');
     }
 
-    /**
-     * Boot the model and register event listeners
-     */
     protected static function boot()
     {
         parent::boot();
 
-        // When a payment is being deleted, also delete the corresponding PAYMENT entry in consumer_ledgers
         static::deleting(function ($payment) {
-            // First try: Use direct link via consumer_payment_id (most reliable)
             $ledgerEntry = ConsumerLedger::where('consumer_payment_id', $payment->id)
                 ->where('trans', 'PAYMENT')
                 ->first();
 
-            // Second try: If not found by direct link, try matching by consumer_id, OR number, and payment amount
-            if (!$ledgerEntry && $payment->consumer_id) {
+            $consumerZoneId = $payment->consumer_zone_id ?? $payment->consumer_id;
+
+            if (!$ledgerEntry && $consumerZoneId) {
                 if ($payment->or_number && $payment->payment_amount) {
-                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $payment->consumer_id)
+                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
                         ->where('trans', 'PAYMENT')
                         ->where('reference', $payment->or_number)
                         ->where('credit', $payment->payment_amount)
@@ -106,19 +160,17 @@ class ConsumerPayment extends Model
                         ->first();
                 }
 
-                // Third try: If not found, try by OR number only (in case amount was updated)
                 if (!$ledgerEntry && $payment->or_number) {
-                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $payment->consumer_id)
+                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
                         ->where('trans', 'PAYMENT')
                         ->where('reference', $payment->or_number)
                         ->orderBy('id', 'desc')
                         ->first();
                 }
 
-                // Fourth try: If still not found and we have payment amount, try by amount and date
                 if (!$ledgerEntry && $payment->payment_amount && $payment->paid_at) {
                     $paymentDate = \Carbon\Carbon::parse($payment->paid_at)->format('Y-m-d');
-                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $payment->consumer_id)
+                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
                         ->where('trans', 'PAYMENT')
                         ->where('credit', $payment->payment_amount)
                         ->where('date', $paymentDate)
@@ -133,10 +185,7 @@ class ConsumerPayment extends Model
                     'consumer_ledger_id' => $ledgerEntry->id,
                     'or_number' => $payment->or_number,
                     'payment_amount' => $payment->payment_amount,
-                    'consumer_id' => $payment->consumer_id,
-                    'match_method' => $ledgerEntry->consumer_payment_id == $payment->id ? 'direct_link' :
-                                     ($payment->or_number && $payment->payment_amount ? 'or_number_and_amount' : 
-                                     ($payment->or_number ? 'or_number_only' : 'amount_and_date'))
+                    'consumer_zone_id' => $consumerZoneId,
                 ]);
 
                 $ledgerEntry->delete();
@@ -144,12 +193,11 @@ class ConsumerPayment extends Model
                 Log::warning('No matching PAYMENT entry found in consumer_ledgers for cascade delete', [
                     'consumer_payment_id' => $payment->id,
                     'or_number' => $payment->or_number,
-                    'consumer_id' => $payment->consumer_id,
+                    'consumer_zone_id' => $consumerZoneId,
                     'payment_amount' => $payment->payment_amount,
-                    'paid_at' => $payment->paid_at
+                    'paid_at' => $payment->paid_at,
                 ]);
             }
         });
     }
 }
-

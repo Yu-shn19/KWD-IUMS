@@ -135,6 +135,16 @@
                                                     <option value="Disconnected" {{ ($filters['status'] ?? '') == 'Disconnected' ? 'selected' : '' }}>Disconnected</option>
                                                 </select>
                                             </div>
+                                            
+                                            <div class="col-md-2 mb-3">
+                                                <label class="small font-weight-bold mb-1">Gender</label>
+                                                <select name="gender" class="form-control form-control-sm">
+                                                    <option value="">All Gender</option>
+                                                    <option value="Male" {{ ($filters['gender'] ?? '') == 'Male' ? 'selected' : '' }}>Male</option>
+                                                    <option value="Female" {{ ($filters['gender'] ?? '') == 'Female' ? 'selected' : '' }}>Female</option>
+                                                    <option value="Others" {{ ($filters['gender'] ?? '') == 'Others' ? 'selected' : '' }}>Others</option>
+                                                </select>
+                                            </div>
 
                                             <div class="col-md-2 mb-3">
                                                 <div class="custom-control custom-checkbox mt-4">

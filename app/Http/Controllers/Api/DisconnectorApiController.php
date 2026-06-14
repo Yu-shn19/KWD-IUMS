@@ -35,7 +35,8 @@ class DisconnectorApiController extends Controller
                 ->orderBy('created_at', 'desc')
                 ->get();
 
-            $consumerIds = $orders->pluck('consumer_id')->filter()->unique()->values()->all();
+            $consumerZoneColumn = DisconnectionOrder::consumerZoneIdColumn();
+            $consumerIds = $orders->pluck($consumerZoneColumn)->filter()->unique()->values()->all();
             $accountNos = $orders->pluck('account_no')->filter()->unique()->values()->all();
             $agingByConsumer = $this->buildAgingBucketsFromReportLogic($consumerIds, Carbon::now());
             $agingByAccount = $this->buildAgingBucketsByAccount($accountNos, Carbon::now());
@@ -338,8 +339,9 @@ class DisconnectorApiController extends Controller
     private function formatAssignmentForMobile($order)
     {
         $consumerHasPaid = false;
-        if ($order->consumer_id) {
-            $consumerHasPaid = ConsumerPayment::where('consumer_id', $order->consumer_id)
+        $consumerZoneId = $order->consumer_zone_id;
+        if ($consumerZoneId) {
+            $consumerHasPaid = ConsumerPayment::forConsumerZone($consumerZoneId)
                 ->whereNotNull('paid_at')
                 ->exists();
         }
@@ -369,7 +371,8 @@ class DisconnectorApiController extends Controller
             'disconnection_date' => $order->disconnection_date?->format('Y-m-d'),
             'status' => $order->status,
             'notes' => $order->notes,
-            'consumer_id' => $order->consumer_id,
+            'consumer_zone_id' => $consumerZoneId,
+            'consumer_id' => $consumerZoneId,
             'consumer_has_paid' => $consumerHasPaid,
             'type' => 'disconnection',
             'assignment_type' => 'disconnection',
@@ -662,7 +665,8 @@ class DisconnectorApiController extends Controller
             }
 
             $orders = $ordersQuery->get();
-            $consumerIds = $orders->pluck('consumer_id')->filter()->unique()->values()->all();
+            $consumerZoneColumn = DisconnectionOrder::consumerZoneIdColumn();
+            $consumerIds = $orders->pluck($consumerZoneColumn)->filter()->unique()->values()->all();
             $accountNos = $orders->pluck('account_no')->filter()->unique()->values()->all();
 
             $byConsumer = $this->buildAgingBucketsFromReportLogic($consumerIds, $asOf);

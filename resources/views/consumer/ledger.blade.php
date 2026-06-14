@@ -1,16 +1,58 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" @if(request('embed')) class="ledger-embed-html" @endif>
 @include('partials.header')
 @if(request('embed'))
 <style>
-    /* Embed mode: show only the Account Ledger table (no sidebar, header, tabs, or summary card) */
+    /* Embed mode: compact card for modal iframe — show 9 ledger rows then scroll */
+    body.ledger-embed {
+        --ledger-visible-rows: 12;
+        --ledger-row-height: 34px;
+        --ledger-head-height: 42px;
+    }
     body.ledger-embed #wrapper .sidebar,
     body.ledger-embed #content > div:not(#container-wrapper),
+    body.ledger-embed #content-wrapper > footer,
     body.ledger-embed #container-wrapper > .ledger-filter-card,
     body.ledger-embed .scroll-to-top { display: none !important; }
+    html.ledger-embed-html,
+    body.ledger-embed,
+    body.ledger-embed #wrapper,
+    body.ledger-embed #content-wrapper,
+    body.ledger-embed #content {
+        height: auto;
+        min-height: 0;
+        overflow: hidden;
+    }
     body.ledger-embed #content-wrapper { margin-left: 0 !important; }
-    body.ledger-embed #container-wrapper { padding-top: 0.5rem !important; }
+    body.ledger-embed #container-wrapper {
+        height: auto;
+        padding: 0.5rem !important;
+        padding-bottom: 0 !important;
+    }
+    body.ledger-embed #ledgerCard {
+        margin-bottom: 0 !important;
+    }
+    body.ledger-embed #ledgerTableScroll {
+        max-height: calc(var(--ledger-head-height) + (var(--ledger-row-height) * var(--ledger-visible-rows))) !important;
+        overflow-x: auto;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-x pan-y;
+    }
     body.ledger-embed #ledgerCard .card-header .badge { font-size: 0.8rem; }
+    @media (max-width: 767.98px) {
+        body.ledger-embed {
+            --ledger-row-height: 30px;
+            --ledger-head-height: 38px;
+        }
+        body.ledger-embed #container-wrapper {
+            padding-left: 0.35rem !important;
+            padding-right: 0.35rem !important;
+        }
+        body.ledger-embed .ledger-onscreen-table {
+            font-size: 10px;
+        }
+    }
 </style>
 @endif
 
@@ -78,7 +120,8 @@
                             <h6 class="m-0 font-weight-bold text-primary mb-2 mb-md-0 pr-md-2">Account Ledger - F10</h6>
                             <div class="d-flex align-items-center flex-wrap justify-content-start justify-content-md-end ledger-header-badges">
                                 <span class="badge badge-secondary mr-2 mb-1 mb-md-0 d-none" id="ledgerConsumerStatus">N/A Consumer</span>
-                                <span class="badge badge-primary text-left text-break ledger-account-badge" id="ledgerAccountBadge">No Account Selected</span>
+                                <span class="badge badge-primary text-left text-break ledger-account-badge mr-2 mb-1 mb-md-0" id="ledgerAccountBadge">No Account Selected</span>
+                                <span class="badge badge-danger mb-1 mb-md-0 d-none ledger-sc-badge" id="ledgerConsumerSc"></span>
                             </div>
                         </div>
                         <div class="card-body p-0">
@@ -100,8 +143,8 @@
                                             <th class="text-center py-2 px-2" style="min-width: 90px;">Balance</th>
                                             <th class="text-center py-2 px-2" style="min-width: 80px;">UserName</th>
                                             <th class="text-center py-2 px-2" style="min-width: 140px;">TxTime</th>
-        </tr>
-      </thead>
+                                        </tr>
+                                    </thead>
                                     <tbody id="ledgerTableBody">
                                         <tr>
                                             <td colspan="14" class="text-center text-muted py-5">
@@ -245,6 +288,10 @@
             word-break: break-word;
             line-height: 1.35;
             max-width: 100%;
+        }
+        .ledger-sc-badge {
+            white-space: nowrap;
+            font-weight: 600;
         }
         @media (min-width: 768px) {
             .ledger-header-badges {
@@ -498,6 +545,20 @@
                 return `${month}/${day}/${year} ${String(displayHours).padStart(2, '0')}:${minutes}:${seconds} ${ampm}`;
             }
 
+            function notifyEmbedHeight() {
+                if (!document.body.classList.contains('ledger-embed')) {
+                    return;
+                }
+                const card = document.getElementById('ledgerCard');
+                if (!card) {
+                    return;
+                }
+                window.parent.postMessage({
+                    type: 'ledgerEmbedResize',
+                    height: card.offsetHeight,
+                }, '*');
+            }
+
             // Load ledger data
             function loadLedgerData(accountNo, year) {
                 if (!accountNo) {
@@ -549,6 +610,7 @@
                                     </td>
                                 </tr>
                             `);
+                            notifyEmbedHeight();
                         }
                     },
                     error: function(xhr) {
@@ -651,6 +713,38 @@
                 window.print();
             }
 
+            function formatLongDate(raw) {
+                if (!raw) {
+                    return '';
+                }
+                const d = new Date(raw);
+                if (Number.isNaN(d.getTime())) {
+                    return '';
+                }
+                return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+            }
+
+            function isSeniorConsumer(consumer) {
+                const rawPercent = String(consumer?.bill_disc_percent ?? '').trim();
+                const normalizedPercent = rawPercent.toUpperCase();
+                const percentNum = parseFloat(rawPercent);
+                const isSc = normalizedPercent === 'SC DISCOUNT'
+                    || (Number.isFinite(percentNum) && Math.abs(percentNum - 5) < 0.001);
+                const oscaId = String(consumer?.osca_id_no ?? consumer?.osca_id ?? '').trim();
+
+                return !!(isSc && oscaId);
+            }
+
+            function buildOscaDisplay(consumer) {
+                const oscaId = String(consumer?.osca_id_no ?? consumer?.osca_id ?? '').trim();
+                if (!oscaId) {
+                    return '';
+                }
+                const dateDisplay = formatLongDate(consumer?.bill_disc_updated_at);
+
+                return dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
+            }
+
             // Display ledger data
             function displayLedgerData(data) {
                 const ledgers = data.ledgers;
@@ -665,6 +759,14 @@
                     const badgeParts = [accountNo, accountName];
                     if (accountAddress) badgeParts.push(accountAddress);
                     $('#ledgerAccountBadge').text(`Account: ${badgeParts.filter(Boolean).join(' - ')}`);
+
+                    if (isSeniorConsumer(consumer)) {
+                        $('#ledgerConsumerSc')
+                            .text(buildOscaDisplay(consumer))
+                            .removeClass('d-none');
+                    } else {
+                        $('#ledgerConsumerSc').text('').addClass('d-none');
+                    }
 
                     const statusCodeRaw = (consumer.status_code || '').toString().trim().toUpperCase();
                     const statusLabelRaw = (consumer.status_label || consumer.status || '').toString().trim().toUpperCase();
@@ -782,15 +884,20 @@
                 // Scroll main page to ledger section and table to bottom so latest entries are visible
                 if (ledgers.length > 0) {
                     setTimeout(function() {
-                        var ledgerCard = document.getElementById('ledgerCard');
-                        if (ledgerCard) {
-                            ledgerCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                        if (!document.body.classList.contains('ledger-embed')) {
+                            var ledgerCard = document.getElementById('ledgerCard');
+                            if (ledgerCard) {
+                                ledgerCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                            }
                         }
                         var scrollEl = document.getElementById('ledgerTableScroll');
                         if (scrollEl) {
                             scrollEl.scrollTop = scrollEl.scrollHeight;
                         }
+                        notifyEmbedHeight();
                     }, 100);
+                } else {
+                    notifyEmbedHeight();
                 }
             }
 

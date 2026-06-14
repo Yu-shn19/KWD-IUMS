@@ -168,7 +168,7 @@ class DisconnectionController extends Controller
                 $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
                     $q = MeterReadingSchedule::whereNotNull('disconnection_date');
                     if ($withZone && $zone) {
-                        $q->where('zone', $zone);
+                        $q->forZoneCode($zone);
                     }
                     if ($isMonthFilter) {
                         $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
@@ -228,7 +228,7 @@ class DisconnectionController extends Controller
         $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
             $q = MeterReadingSchedule::whereNotNull('disconnection_date');
             if ($withZone && $zone) {
-                $q->where('zone', $zone);
+                $q->forZoneCode($zone);
             }
             if ($isMonthFilter) {
                 $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
@@ -342,91 +342,19 @@ class DisconnectionController extends Controller
         // BULK: Calculate balances using same method as ledger view (running balance calculation)
         $latestBalances = $this->calculateBalancesBulk($consumerIds, $ledgerCutoffDate);
 
-        // BULK: Get all schedules for all accounts (with billing month/date filter if provided), based on due_date
-        $schedulesQuery = MeterReadingSchedule::whereIn('account_number', $accountNos)
+        // BULK: Get all schedules for all consumers (with billing month/date filter if provided), based on due_date
+        $consumersById = $this->consumersByIdForZoneIds($consumerIds);
+        $schedulesQuery = MeterReadingSchedule::whereIn('consumer_zone_id', $consumerIds)
             ->where('due_date', '<=', $today)
             ->whereNotNull('due_date');
 
-        // Filter by billing month or billing date if provided
         if ($billingFilter) {
-            if ($isMonthFilter) {
-                // Filter by month (format: YYYY-MM)
-                $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
-                $schedulesQuery->where(function ($q) use ($monthCarbon) {
-                    $q->whereYear('bill_month', $monthCarbon->year)
-                        ->whereMonth('bill_month', $monthCarbon->month)
-                        ->orWhere(function ($subQ) use ($monthCarbon) {
-                            $subQ->whereYear('bill_date', $monthCarbon->year)
-                                ->whereMonth('bill_date', $monthCarbon->month);
-                        });
-                });
-            } else {
-                // Filter by specific billing date
-                $billingDateCarbon = Carbon::parse($billingFilter);
-                $schedulesQuery->where(function ($q) use ($billingDateCarbon) {
-                    $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
-                        ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
-                        ->orWhere(function ($subQ) use ($billingDateCarbon) {
-                            $subQ->whereYear('bill_month', $billingDateCarbon->year)
-                                ->whereMonth('bill_month', $billingDateCarbon->month);
-                        });
-                });
-            }
+            $this->applyScheduleBillingFilter($schedulesQuery, $billingFilter, $isMonthFilter);
         }
 
-        $allSchedules = $schedulesQuery->get()->groupBy('account_number');
-        $latestReadingsQuery = MeterReadingSchedule::whereIn('account_number', $accountNos)
-            ->whereNotNull('current_reading');
-        if ($billingFilter) {
-            if ($isMonthFilter) {
-                $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
-                $latestReadingsQuery->where(function ($q) use ($monthCarbon) {
-                    $q->whereYear('bill_month', $monthCarbon->year)
-                        ->whereMonth('bill_month', $monthCarbon->month)
-                        ->orWhere(function ($subQ) use ($monthCarbon) {
-                            $subQ->whereYear('bill_date', $monthCarbon->year)
-                                ->whereMonth('bill_date', $monthCarbon->month);
-                        });
-                });
-            } else {
-                $billingDateCarbon = Carbon::parse($billingFilter);
-                $latestReadingsQuery->where(function ($q) use ($billingDateCarbon) {
-                    $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
-                        ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
-                        ->orWhere(function ($subQ) use ($billingDateCarbon) {
-                            $subQ->whereYear('bill_month', $billingDateCarbon->year)
-                                ->whereMonth('bill_month', $billingDateCarbon->month);
-                        });
-                });
-            }
-        }
-        $latestScheduleReadingsByAccount = $latestReadingsQuery
-            ->orderBy('account_number')
-            ->orderByDesc('reading_date')
-            ->orderByDesc('bill_date')
-            ->orderByDesc('due_date')
-            ->orderByDesc('id')
-            ->get()
-            ->groupBy('account_number')
-            ->map(function ($items) {
-                $first = $items->first();
-
-                return $first ? (float) ($first->current_reading ?? 0) : 0.0;
-            });
-        $latestCurrentBillsByAccount = DB::table('downloaded_readings')
-            ->whereIn('account_number', $accountNos)
-            ->whereNotNull('current_bill')
-            ->orderBy('account_number')
-            ->orderByDesc('reading_date')
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->get()
-            ->groupBy('account_number')
-            ->map(function ($items) {
-                $first = $items->first();
-
-                return $first ? (float) ($first->current_bill ?? 0) : 0.0;
-            });
+        $allSchedules = $schedulesQuery->get()->groupBy(fn ($schedule) => $this->accountNoForScheduleConsumer($schedule, $consumersById));
+        $latestScheduleReadingsByAccount = $this->latestScheduleReadingsByAccount($consumerIds, $consumersById, $billingFilter, $isMonthFilter);
+        $latestCurrentBillsByAccount = $this->latestCurrentBillsByAccount($consumerIds, $consumersById);
 
         // BULK: Get all billing records for all consumers (approved BAM only — same as Account Ledger)
         $allBillingsQuery = ConsumerLedger::whereIn('consumer_zone_id', $consumerIds)
@@ -1372,55 +1300,11 @@ class DisconnectionController extends Controller
             ->get()
             ->groupBy('consumer_zone_id');
 
-        $latestReadingsQuery = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
-            ->whereNotNull('current_reading');
-        if (! empty($billingMonth)) {
-            $monthCarbon = Carbon::createFromFormat('Y-m', $billingMonth)->startOfMonth();
-            $latestReadingsQuery->where(function ($q) use ($monthCarbon) {
-                $q->whereYear('bill_month', $monthCarbon->year)
-                    ->whereMonth('bill_month', $monthCarbon->month)
-                    ->orWhere(function ($subQ) use ($monthCarbon) {
-                        $subQ->whereYear('bill_date', $monthCarbon->year)
-                            ->whereMonth('bill_date', $monthCarbon->month);
-                    });
-            });
-        } elseif (! empty($billingDate)) {
-            $billingDateCarbon = Carbon::parse($billingDate);
-            $latestReadingsQuery->where(function ($q) use ($billingDateCarbon) {
-                $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
-                    ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
-                    ->orWhere(function ($subQ) use ($billingDateCarbon) {
-                        $subQ->whereYear('bill_month', $billingDateCarbon->year)
-                            ->whereMonth('bill_month', $billingDateCarbon->month);
-                    });
-            });
-        }
-        $latestScheduleReadingsByAccount = $latestReadingsQuery
-            ->orderBy('account_number')
-            ->orderByDesc('due_date')
-            ->orderByDesc('bill_date')
-            ->orderByDesc('id')
-            ->get()
-            ->groupBy('account_number')
-            ->map(function ($items) {
-                $first = $items->first();
-
-                return $first ? (float) ($first->current_reading ?? 0) : 0.0;
-            });
-        $latestCurrentBillsByAccount = DB::table('downloaded_readings')
-            ->whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
-            ->whereNotNull('current_bill')
-            ->orderBy('account_number')
-            ->orderByDesc('reading_date')
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->get()
-            ->groupBy('account_number')
-            ->map(function ($items) {
-                $first = $items->first();
-
-                return $first ? (float) ($first->current_bill ?? 0) : 0.0;
-            });
+        $consumersById = $this->consumersByIdForZoneIds($consumerIds);
+        $billingFilter = $billingMonth ?: $billingDate;
+        $isMonthFilter = ! empty($billingMonth);
+        $latestScheduleReadingsByAccount = $this->latestScheduleReadingsByAccount($consumerIds, $consumersById, $billingFilter, $isMonthFilter);
+        $latestCurrentBillsByAccount = $this->latestCurrentBillsByAccount($consumerIds, $consumersById);
 
         $eligibleConsumers = collect();
 
@@ -1542,7 +1426,7 @@ class DisconnectionController extends Controller
         $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
             $q = MeterReadingSchedule::whereNotNull('disconnection_date');
             if ($withZone && $zone) {
-                $q->where('zone', $zone);
+                $q->forZoneCode($zone);
             }
             if ($isMonthFilter) {
                 $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
@@ -1804,7 +1688,7 @@ class DisconnectionController extends Controller
         ?string $listBillingDateYmd,
         ?string $listFilterType
     ): ?DisconnectionOrder {
-        $q = DisconnectionOrder::where('consumer_id', $consumerId)
+        $q = DisconnectionOrder::forConsumerZone($consumerId)
             ->whereDate('disconnection_date', $disconnectionDate->format('Y-m-d'))
             ->where('status', '!=', 'cancelled')
             ->lockForUpdate();
@@ -1863,33 +1747,9 @@ class DisconnectionController extends Controller
                 ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
-            $latestScheduleReadingsByAccount = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
-                ->whereNotNull('current_reading')
-                ->orderBy('account_number')
-                ->orderByDesc('due_date')
-                ->orderByDesc('bill_date')
-                ->orderByDesc('id')
-                ->get()
-                ->groupBy('account_number')
-                ->map(function ($items) {
-                    $first = $items->first();
-
-                    return $first ? (float) ($first->current_reading ?? 0) : 0.0;
-                });
-            $latestCurrentBillsByAccount = DB::table('downloaded_readings')
-                ->whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values())
-                ->whereNotNull('current_bill')
-                ->orderBy('account_number')
-                ->orderByDesc('reading_date')
-                ->orderByDesc('created_at')
-                ->orderByDesc('id')
-                ->get()
-                ->groupBy('account_number')
-                ->map(function ($items) {
-                    $first = $items->first();
-
-                    return $first ? (float) ($first->current_bill ?? 0) : 0.0;
-                });
+            $consumersById = $this->consumersByIdForZoneIds($consumerIds);
+            $latestScheduleReadingsByAccount = $this->latestScheduleReadingsByAccount($consumerIds, $consumersById);
+            $latestCurrentBillsByAccount = $this->latestCurrentBillsByAccount($consumerIds, $consumersById);
 
             $idsForLedger = $consumers->pluck('id')->values();
             $allBillingsForSplit = ConsumerLedger::whereIn('consumer_zone_id', $idsForLedger)
@@ -1985,8 +1845,8 @@ class DisconnectionController extends Controller
                     $cardNo = $consumer->sequence ?? null;
                     $cardNumber = is_numeric($cardNo) ? (int) $cardNo : 1;
 
-                    $order = DisconnectionOrder::create([
-                        'consumer_id' => $consumer->id,
+                    $order = DisconnectionOrder::create(DisconnectionOrder::filterTableAttributes([
+                        'consumer_zone_id' => $consumer->id,
                         'disconnector_id' => $disconnectorId,
                         'account_no' => $consumer->account_no,
                         'account_name' => $consumer->account_name,
@@ -2009,7 +1869,7 @@ class DisconnectionController extends Controller
                         'list_filter_type' => $listFilterType,
                         'status' => 'assigned',
                         'assigned_at' => now(),
-                    ]);
+                    ]));
 
                     $createdOrders[] = $order;
 
@@ -2344,5 +2204,91 @@ class DisconnectionController extends Controller
         } catch (\Throwable $e) {
             return redirect()->back()->with('error', 'Error updating order: '.$e->getMessage());
         }
+    }
+
+    private function consumersByIdForZoneIds($consumerIds)
+    {
+        $ids = collect($consumerIds)->filter()->unique()->values()->all();
+
+        return $ids === []
+            ? collect()
+            : ConsumerZoneOne::whereIn('id', $ids)->get()->keyBy('id');
+    }
+
+    private function accountNoForScheduleConsumer($schedule, $consumersById): string
+    {
+        $consumerZoneId = is_object($schedule)
+            ? ($schedule->consumer_zone_id ?? null)
+            : ($schedule['consumer_zone_id'] ?? null);
+
+        return trim((string) ($consumersById->get($consumerZoneId)?->account_no ?? ''));
+    }
+
+    private function applyScheduleBillingFilter($query, $billingFilter, $isMonthFilter): void
+    {
+        if (!$billingFilter) {
+            return;
+        }
+
+        if ($isMonthFilter) {
+            $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
+            $query->where(function ($q) use ($monthCarbon) {
+                $q->whereYear('bill_month', $monthCarbon->year)
+                    ->whereMonth('bill_month', $monthCarbon->month)
+                    ->orWhere(function ($subQ) use ($monthCarbon) {
+                        $subQ->whereYear('bill_date', $monthCarbon->year)
+                            ->whereMonth('bill_date', $monthCarbon->month);
+                    });
+            });
+        } else {
+            $billingDateCarbon = Carbon::parse($billingFilter);
+            $query->where(function ($q) use ($billingDateCarbon) {
+                $q->whereDate('bill_date', $billingDateCarbon->format('Y-m-d'))
+                    ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'))
+                    ->orWhere(function ($subQ) use ($billingDateCarbon) {
+                        $subQ->whereYear('bill_month', $billingDateCarbon->year)
+                            ->whereMonth('bill_month', $billingDateCarbon->month);
+                    });
+            });
+        }
+    }
+
+    private function latestScheduleReadingsByAccount($consumerIds, $consumersById, $billingFilter = null, $isMonthFilter = false)
+    {
+        $query = MeterReadingSchedule::whereIn('consumer_zone_id', $consumerIds)
+            ->whereNotNull('current_reading');
+        $this->applyScheduleBillingFilter($query, $billingFilter, (bool) $isMonthFilter);
+
+        return $query
+            ->orderBy('consumer_zone_id')
+            ->orderByDesc('reading_date')
+            ->orderByDesc('bill_date')
+            ->orderByDesc('due_date')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy(fn ($schedule) => $this->accountNoForScheduleConsumer($schedule, $consumersById))
+            ->map(function ($items) {
+                $first = $items->first();
+
+                return $first ? (float) ($first->current_reading ?? 0) : 0.0;
+            });
+    }
+
+    private function latestCurrentBillsByAccount($consumerIds, $consumersById)
+    {
+        return DB::table('downloaded_readings as dr')
+            ->whereIn('dr.consumer_zone_id', $consumerIds)
+            ->whereNotNull('dr.current_bill')
+            ->orderBy('dr.consumer_zone_id')
+            ->orderByDesc('dr.reading_date')
+            ->orderByDesc('dr.created_at')
+            ->orderByDesc('dr.id')
+            ->get(['dr.consumer_zone_id', 'dr.current_bill'])
+            ->groupBy(fn ($row) => $this->accountNoForScheduleConsumer($row, $consumersById))
+            ->map(function ($items) {
+                $first = $items->first();
+
+                return $first ? (float) ($first->current_bill ?? 0) : 0.0;
+            });
     }
 }

@@ -76,14 +76,12 @@ class DashboardController extends Controller
         // Monthly billing status: Paid vs Unpaid (for readings billed within the selected month).
         $monthlyBilledReadings = DB::table('downloaded_readings as dr')
             ->whereBetween('dr.reading_date', [$currentMonthStart->toDateString(), $currentMonthEnd->toDateString()])
-            ->whereNotNull('dr.account_number')
-            ->where('dr.account_number', '!=', '')
+            ->whereNotNull('dr.consumer_zone_id')
             ->count('dr.id');
 
         $paidMonthlyBilledReadings = DB::table('downloaded_readings as dr')
             ->whereBetween('dr.reading_date', [$currentMonthStart->toDateString(), $currentMonthEnd->toDateString()])
-            ->whereNotNull('dr.account_number')
-            ->where('dr.account_number', '!=', '')
+            ->whereNotNull('dr.consumer_zone_id')
             ->whereExists(function ($query) {
                 $query->select(DB::raw(1))
                     ->from('consumer_payments as cp')
@@ -100,9 +98,10 @@ class DashboardController extends Controller
         ];
 
         $recentMessages = DB::table('downloaded_readings as dr')
+            ->leftJoin('consumer_zone as cz', 'dr.consumer_zone_id', '=', 'cz.id')
             ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
             ->select(
-                'dr.account_name',
+                'cz.account_name',
                 'cp.remarks as payment_remarks',
                 'dr.reader_notes',
                 'dr.updated_at',

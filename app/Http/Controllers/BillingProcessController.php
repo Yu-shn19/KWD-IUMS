@@ -121,12 +121,13 @@ class BillingProcessController extends Controller
 
         $existingCount = 0;
         if ($effectiveZone) {
-            $existingCount = MeterReadingSchedule::where('zone', $effectiveZone)
+            $existingCount = MeterReadingSchedule::forZoneCode($effectiveZone)
                 ->where('bill_month', $billMonthYmd)
                 ->count();
         }
         if ($isAccountsScope) {
-            $existingForAccounts = MeterReadingSchedule::whereIn('account_number', $consumers->pluck('account_no')->filter()->unique()->values()->all())
+            $consumerZoneIds = $consumers->pluck('id')->filter()->unique()->values()->all();
+            $existingForAccounts = MeterReadingSchedule::whereIn('consumer_zone_id', $consumerZoneIds)
                 ->where('bill_month', $billMonthYmd)
                 ->count();
             $existingCount = $existingForAccounts;
@@ -211,7 +212,7 @@ class BillingProcessController extends Controller
 
             // When save_scope = 'zone' (default): block if any schedules exist for this zone+bill_month.
             // When save_scope = 'accounts' (Single/Multiple Consumer): allow additive save; skip per-account if that account already has a schedule for this period.
-            $existingSchedules = MeterReadingSchedule::where('zone', $zone)
+            $existingSchedules = MeterReadingSchedule::forZoneCode($zone)
                 ->where('bill_month', $billMonth->format('Y-m-d'))
                 ->count();
 
@@ -234,24 +235,32 @@ class BillingProcessController extends Controller
             DB::beginTransaction();
             try {
                 foreach ($request->schedules as $scheduleData) {
-                    // Additive (save_scope = 'accounts'): skip if this account already has a schedule for this zone+period to avoid duplicates
+                    $consumerZoneId = $scheduleData['consumer_zone_id'] ?? null;
+                    if (!$consumerZoneId && !empty($scheduleData['account_number'])) {
+                        $consumerZoneId = ConsumerZoneOne::where(function ($query) use ($scheduleData) {
+                            $accountNumber = $scheduleData['account_number'];
+                            $query->where('account_no', $accountNumber)
+                                ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [str_replace('-', '', $accountNumber)]);
+                        })->value('id');
+                    }
+
+                    if (!$consumerZoneId) {
+                        throw new \RuntimeException('Consumer not found for account: ' . ($scheduleData['account_number'] ?? 'unknown'));
+                    }
+
+                    // Additive (save_scope = 'accounts'): skip if this consumer already has a schedule for this period
                     if ($saveScope === 'accounts') {
                         $billDateRow = isset($scheduleData['bill_date']) ? Carbon::parse($scheduleData['bill_date'])->format('Y-m-d') : $billDateYmd;
                         $dueDateRow = isset($scheduleData['due_date']) ? Carbon::parse($scheduleData['due_date'])->format('Y-m-d') : $dueDateYmd;
                         $disconnectionDateRow = isset($scheduleData['disconnection_date']) ? Carbon::parse($scheduleData['disconnection_date'])->format('Y-m-d') : $disconnectionDateYmd;
-                        $alreadyExists = MeterReadingSchedule::where('zone', $scheduleData['zone'])
+                        $alreadyExists = MeterReadingSchedule::where('consumer_zone_id', $consumerZoneId)
                             ->where('bill_month', $billMonth->format('Y-m-d'))
                             ->where('bill_date', $billDateRow)
                             ->where('due_date', $dueDateRow)
                             ->where('disconnection_date', $disconnectionDateRow)
-                            ->where(function ($q) use ($scheduleData) {
-                                $acc = $scheduleData['account_number'];
-                                $q->where('account_number', $acc)
-                                  ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [str_replace('-', '', $acc)]);
-                            })
                             ->exists();
                         if ($alreadyExists) {
-                            continue; // skip duplicate account for this period
+                            continue;
                         }
                     }
 
@@ -276,14 +285,8 @@ class BillingProcessController extends Controller
                         ? (is_numeric($scheduleData['prev_read']) ? (float) $scheduleData['prev_read'] : 0)
                         : 0;
                     
-                    // Create meter reading schedule using account_number as the link (no consumer_id column)
                     $schedule = MeterReadingSchedule::create([
-                        'zone' => $scheduleData['zone'],
-                        'account_number' => $scheduleData['account_number'],
-                        'account_name' => $scheduleData['account_name'],
-                        'address' => $scheduleData['address'],
-                        'category' => $scheduleData['category'],
-                        'meter_number' => $scheduleData['meter_number'],
+                        'consumer_zone_id' => $consumerZoneId,
                         'bill_month' => Carbon::parse($scheduleData['bill_month']),
                         'bill_date' => Carbon::parse($scheduleData['bill_date']),
                         'due_date' => Carbon::parse($scheduleData['due_date']),
@@ -293,18 +296,12 @@ class BillingProcessController extends Controller
                         'arrears' => $scheduleData['arrears'] ?? 0.00,
                         'status' => 'Prepared',
                         'sedr_number' => $scheduleData['sedr'],
-                        'prepared_by' => $preparedBy, // Save username of user who created the preparation
+                        'prepared_by' => $preparedBy,
                     ]);
 
                     $savedSchedules[] = $schedule->id;
 
-                    // Create corresponding ConsumerLedger entry for this bill
-                    // Find consumer_zone_id from account_number
-                    $consumer = ConsumerZoneOne::where(function ($query) use ($scheduleData) {
-                        $accountNumber = $scheduleData['account_number'];
-                        $query->where('account_no', $accountNumber)
-                              ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [str_replace('-', '', $accountNumber)]);
-                    })->first();
+                    $consumer = ConsumerZoneOne::find($consumerZoneId);
 
                     if ($consumer) {
                         // Get the latest balance directly from consumer_ledgers table (source of truth)
@@ -433,20 +430,17 @@ class BillingProcessController extends Controller
         // (Meter Reading card → Save Previous Reading). When present on the
         // LATEST schedule for this account, it wins over all natural sources.
         if (Schema::hasColumn('meter_reading_schedules', 'previous_reading_override')) {
-            $override = DB::table('meter_reading_schedules')
-                ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                    $query->where('account_number', $accountNo)
-                        ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount]);
-                })
-                ->whereNotNull('previous_reading_override')
-                ->orderBy('bill_month', 'desc')
-                ->orderBy('id', 'desc')
+            $override = DB::table('meter_reading_schedules as mrs')
+                ->where('mrs.consumer_zone_id', $consumer->id)
+                ->whereNotNull('mrs.previous_reading_override')
+                ->orderBy('mrs.bill_month', 'desc')
+                ->orderBy('mrs.id', 'desc')
                 ->select(
-                    'previous_reading_override as reading',
-                    'previous_reading_override_at',
-                    'previous_reading_date',
-                    'arrears',
-                    'total_amount'
+                    'mrs.previous_reading_override as reading',
+                    'mrs.previous_reading_override_at',
+                    'mrs.previous_reading_date',
+                    'mrs.arrears',
+                    'mrs.total_amount'
                 )
                 ->first();
 
@@ -482,9 +476,13 @@ class BillingProcessController extends Controller
         // Priority 1: Check downloaded_readings (most recent actual reading)
         $latestDownloadedReading = DB::table('downloaded_readings as dr')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
             ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('dr.account_number', $accountNo)
-                    ->orWhereRaw("REPLACE(dr.account_number, '-', '') = ?", [$normalizedAccount]);
+                $query->where('cz.account_no', $accountNo)
+                    ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount]);
             })
             ->whereNotNull('dr.current_reading')
             ->where('dr.current_reading', '>', 0)
@@ -529,25 +527,24 @@ class BillingProcessController extends Controller
         }
 
         // Priority 2: Check meter_reading_schedules (latest completed reading)
-        $latestSchedule = DB::table('meter_reading_schedules')
-            ->where(function ($query) use ($accountNo, $normalizedAccount) {
-                $query->where('account_number', $accountNo)
-                    ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalizedAccount]);
-            })
-            ->whereNotNull('current_reading')
-            ->where('current_reading', '>', 0)
-            ->whereIn('status', ['Completed', 'Verified'])
+        $latestSchedule = DB::table('meter_reading_schedules as mrs')
+            ->where('mrs.consumer_zone_id', $consumer->id)
+            ->whereNotNull('mrs.current_reading')
+            ->where('mrs.current_reading', '>', 0)
+            ->whereIn('mrs.status', ['Completed', 'Verified'])
             ->select(
-                'current_reading as reading',
-                'consumption as volume',
-                'reading_date as date',
-                'current_bill',
-                'arrears',
-                'total_amount'
+                'mrs.current_reading as reading',
+                'mrs.consumption as volume',
+                'mrs.reading_date as date',
+                'mrs.current_bill',
+                'mrs.arrears',
+                'mrs.total_amount'
             )
-            ->orderBy('reading_date', 'desc')
-            ->orderBy('completed_at', 'desc')
-            ->first();
+            ->orderBy('mrs.reading_date', 'desc');
+        if (Schema::hasColumn('meter_reading_schedules', 'completed_at')) {
+            $latestSchedule = $latestSchedule->orderBy('mrs.completed_at', 'desc');
+        }
+        $latestSchedule = $latestSchedule->first();
 
         if ($latestSchedule) {
             // Get arrears from schedule (stored arrears value)
@@ -704,7 +701,7 @@ class BillingProcessController extends Controller
     private function isScheduleCoveredByConsumerPayment(int $consumerZoneId, ?int $downloadedReadingId, ?int $scheduleId): bool
     {
         if ($downloadedReadingId) {
-            $coveredByReading = ConsumerPayment::where('consumer_id', $consumerZoneId)
+            $coveredByReading = ConsumerPayment::forConsumerZone($consumerZoneId)
                 ->where('reading_id', $downloadedReadingId)
                 ->whereNotNull('paid_at')
                 ->exists();
@@ -721,7 +718,7 @@ class BillingProcessController extends Controller
         if ($scheduleId) {
             $readingIds = DownloadedReading::where('schedule_id', $scheduleId)->pluck('id');
             if ($readingIds->isNotEmpty()) {
-                $coveredByReading = ConsumerPayment::where('consumer_id', $consumerZoneId)
+                $coveredByReading = ConsumerPayment::forConsumerZone($consumerZoneId)
                     ->whereIn('reading_id', $readingIds)
                     ->whereNotNull('paid_at')
                     ->exists();
@@ -746,7 +743,7 @@ class BillingProcessController extends Controller
             return false;
         }
 
-        return ConsumerPayment::where('consumer_id', $consumerZoneId)
+        return ConsumerPayment::forConsumerZone($consumerZoneId)
             ->whereNull('reading_id')
             ->whereNotNull('paid_at')
             ->whereBetween('paid_at', [$start->format('Y-m-d 00:00:00'), $end->format('Y-m-d 23:59:59')])
@@ -763,7 +760,7 @@ class BillingProcessController extends Controller
             return 0.0;
         }
 
-        $query = ConsumerPayment::where('consumer_id', $consumerZoneId)
+        $query = ConsumerPayment::forConsumerZone($consumerZoneId)
             ->whereNull('reading_id')
             ->whereNotNull('paid_at')
             ->whereBetween('paid_at', [$start->format('Y-m-d 00:00:00'), $end->format('Y-m-d 23:59:59')]);
@@ -856,7 +853,7 @@ class BillingProcessController extends Controller
             }
             $paidPenalty = 0.0;
             if ($readingIds->isNotEmpty()) {
-                $readingPenaltyQuery = ConsumerPayment::where('consumer_id', $consumerZoneId)
+                $readingPenaltyQuery = ConsumerPayment::forConsumerZone($consumerZoneId)
                     ->whereIn('reading_id', $readingIds)
                     ->whereNotNull('paid_at');
                 if ($penaltyDate) {
@@ -1247,33 +1244,13 @@ class BillingProcessController extends Controller
             ], 404);
         }
 
-        $latestReading = DownloadedReading::with(['schedule' => function ($query) {
-                $query->select(
-                    'id',
-                    'account_number',
-                    'account_name',
-                    'zone',
-                    'category',
-                    'address',
-                    'meter_number',
-                    'bill_month',
-                    'current_bill',
-                    'arrears',
-                    'total_amount',
-                    'status'
-                );
-            }])
-            ->where(function ($query) use ($accountNumber) {
-                $trimmed = str_replace('-', '', $accountNumber);
-
-                $query->where('account_number', $accountNumber)
-                      ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$trimmed])
-                      ->orWhereHas('schedule', function ($scheduleQuery) use ($accountNumber, $trimmed) {
-                          $scheduleQuery->where('account_number', $accountNumber)
-                                        ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$trimmed]);
-                      });
-            })
-            ->orderByDesc(DB::raw("COALESCE(reading_date, completed_at, updated_at, created_at)"))
+        $latestReading = DownloadedReading::with(['schedule.consumerZone', 'consumerZone'])
+            ->forAccountNo($accountNumber)
+            ->orderByDesc(DB::raw(
+                Schema::hasColumn((new DownloadedReading())->getTable(), 'completed_at')
+                    ? 'COALESCE(reading_date, completed_at, updated_at, created_at)'
+                    : 'COALESCE(reading_date, updated_at, created_at)'
+            ))
             ->orderByDesc('id')
             ->first();
 
@@ -1376,28 +1353,25 @@ class BillingProcessController extends Controller
 
             $downloadedRows = DB::table('downloaded_readings as dr')
                 ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+                ->leftJoin('consumer_zone as cz', function ($join) {
+                    $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                        ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+                })
                 ->select([
                     'dr.id as downloaded_id',
-                    DB::raw('COALESCE(mrs.account_number, dr.account_number) as account_number'),
-                    DB::raw('COALESCE(mrs.account_name, dr.account_name) as account_name'),
-                    'mrs.meter_number',
+                    'cz.account_no as account_number',
+                    'cz.account_name',
+                    'cz.meter_number',
                     'dr.consumption as volume',
                     'dr.current_bill as downloaded_current_bill',
                 ])
-                ->where(function($query) use ($zone) {
-                    $query->where(function($qq) use ($zone) {
-                        $qq->where('dr.zone', $zone)
-                           ->orWhereRaw('LPAD(dr.zone, 3, "0") = ?', [$zone])
-                           ->orWhereRaw('TRIM(LEADING "0" FROM dr.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                    })
-                    ->orWhere(function($qq) use ($zone) {
-                        $qq->whereNotNull('mrs.zone')
-                           ->where(function($qqq) use ($zone) {
-                               $qqq->where('mrs.zone', $zone)
-                                   ->orWhereRaw('LPAD(mrs.zone, 3, "0") = ?', [$zone])
-                                   ->orWhereRaw('TRIM(LEADING "0" FROM mrs.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                           });
-                    });
+                ->where(function ($query) use ($zone) {
+                    $query->whereNotNull('cz.zone_code')
+                        ->where(function ($qq) use ($zone) {
+                            $qq->where('cz.zone_code', $zone)
+                                ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
+                                ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
+                        });
                 })
                 ->whereDate('dr.reading_date', $readingDate)
                 ->orderByDesc('dr.id')
@@ -1517,12 +1491,14 @@ class BillingProcessController extends Controller
 
         // Build base query for schedules in the selected zone (or all zones)
         $query = MeterReadingSchedule::query()
-            ->with('consumer')
-            ->orderBy('zone')
+            ->with('consumerZone')
+            ->joinConsumerZone()
+            ->select('meter_reading_schedules.*')
+            ->orderBy('cz.zone_code')
             ->orderByAccountNumberTail();
 
         if ($zone && $zone !== 'all') {
-            $query->where('zone', $zone);
+            $query->where('cz.zone_code', $zone);
         }
 
         $schedules = $query->get();
@@ -1546,7 +1522,7 @@ class BillingProcessController extends Controller
 
             return [
                 'Account #' => $item->account_number ?? '',
-                'Account Name' => $item->account_name ?? $item->consumer->account_name ?? '',
+                'Account Name' => $item->account_name ?? $item->consumerZone->account_name ?? '',
                 'Meter #' => $item->meter_number ?? '',
                 'Consumption' => $item->consumption !== null ? number_format((float) $item->consumption, 0) : '',
                 'Water Maintenance Charge' => number_format($maintenanceCharge, 2),
@@ -1677,12 +1653,25 @@ class BillingProcessController extends Controller
         $billMonthFilter = $request->get('bill_month');
 
         $query = MeterReadingSchedule::query()
-            ->select('zone', 'bill_month', 'bill_date', 'due_date', 'disconnection_date')
+            ->joinConsumerZone()
+            ->select(
+                'cz.zone_code as zone',
+                'meter_reading_schedules.bill_month',
+                'meter_reading_schedules.bill_date',
+                'meter_reading_schedules.due_date',
+                'meter_reading_schedules.disconnection_date'
+            )
             ->selectRaw('COUNT(*) as schedule_count')
-            ->groupBy('zone', 'bill_month', 'bill_date', 'due_date', 'disconnection_date');
+            ->groupBy(
+                'cz.zone_code',
+                'meter_reading_schedules.bill_month',
+                'meter_reading_schedules.bill_date',
+                'meter_reading_schedules.due_date',
+                'meter_reading_schedules.disconnection_date'
+            );
 
         if ($zoneFilter && $zoneFilter !== '' && $zoneFilter !== 'all') {
-            $query->where('zone', $zoneFilter);
+            $query->where('cz.zone_code', $zoneFilter);
         }
 
         if ($billMonthFilter && $billMonthFilter !== '' && $billMonthFilter !== 'all') {
@@ -1690,9 +1679,9 @@ class BillingProcessController extends Controller
         }
 
         if ($sortBy === 'bill_month') {
-            $query->orderByRaw('bill_month ' . $sortDir . ', zone ASC');
+            $query->orderByRaw('meter_reading_schedules.bill_month ' . $sortDir . ', cz.zone_code ASC');
         } else {
-            $query->orderByRaw('zone ' . $sortDir . ', bill_month DESC');
+            $query->orderByRaw('cz.zone_code ' . $sortDir . ', meter_reading_schedules.bill_month DESC');
         }
 
         $batches = $query->get()
@@ -1708,11 +1697,15 @@ class BillingProcessController extends Controller
             });
 
         // Distinct bill months for dropdown (optionally filtered by zone)
-        $distinctMonthsQuery = MeterReadingSchedule::query()->select('bill_month')->whereNotNull('bill_month')->distinct();
+        $distinctMonthsQuery = MeterReadingSchedule::query()
+            ->joinConsumerZone()
+            ->select('meter_reading_schedules.bill_month')
+            ->whereNotNull('meter_reading_schedules.bill_month')
+            ->distinct();
         if ($zoneFilter && $zoneFilter !== '' && $zoneFilter !== 'all') {
-            $distinctMonthsQuery->where('zone', $zoneFilter);
+            $distinctMonthsQuery->where('cz.zone_code', $zoneFilter);
         }
-        $distinct_bill_months = $distinctMonthsQuery->orderBy('bill_month', 'desc')->pluck('bill_month')->map(function ($d) {
+        $distinct_bill_months = $distinctMonthsQuery->orderBy('meter_reading_schedules.bill_month', 'desc')->pluck('bill_month')->map(function ($d) {
             return $d ? Carbon::parse($d)->format('Y-m-d') : null;
         })->filter()->values()->toArray();
 
@@ -1730,10 +1723,10 @@ class BillingProcessController extends Controller
         $zone = $request->get('zone');
         $billMonth = $request->get('bill_month');
 
-        $query = MeterReadingSchedule::with(['consumer', 'assignedReader']);
+        $query = MeterReadingSchedule::with(['consumerZone', 'assignedReader']);
 
         if ($zone) {
-            $query->where('zone', $zone);
+            $query->forZoneCode($zone);
         }
 
         if ($billMonth) {
@@ -1761,12 +1754,16 @@ class BillingProcessController extends Controller
         ]);
 
         try {
+            $updatePayload = [
+                'assigned_reader_id' => $request->reader_id,
+                'status' => 'Assigned',
+            ];
+            if (Schema::hasColumn('meter_reading_schedules', 'assigned_at')) {
+                $updatePayload['assigned_at'] = Carbon::now();
+            }
+
             $updated = MeterReadingSchedule::whereIn('id', $request->schedule_ids)
-                ->update([
-                    'assigned_reader_id' => $request->reader_id,
-                    'status' => 'Assigned',
-                    'assigned_at' => Carbon::now()
-                ]);
+                ->update($updatePayload);
 
             return response()->json([
                 'success' => true,
@@ -1796,7 +1793,7 @@ class BillingProcessController extends Controller
             $zone = $request->zone;
             $billMonth = Carbon::parse($request->bill_month);
 
-            $deleted = MeterReadingSchedule::where('zone', $zone)
+            $deleted = MeterReadingSchedule::forZoneCode($zone)
                 ->where('bill_month', $billMonth->format('Y-m-d'))
                 ->delete();
 
@@ -1838,7 +1835,7 @@ class BillingProcessController extends Controller
             $dueDate = Carbon::parse($request->due_date)->format('Y-m-d');
             $disconnectionDate = Carbon::parse($request->disconnection_date)->format('Y-m-d');
 
-            $scheduleIds = MeterReadingSchedule::where('zone', $zone)
+            $scheduleIds = MeterReadingSchedule::forZoneCode($zone)
                 ->where('bill_month', $billMonth)
                 ->where('bill_date', $billDate)
                 ->where('due_date', $dueDate)
@@ -1900,13 +1897,13 @@ class BillingProcessController extends Controller
             // Use COALESCE to handle cases where meter_reading_schedules might not exist
             $selectColumns = [
                 'dr.id as downloaded_id',
-                DB::raw('COALESCE(mrs.sedr_number, dr.account_number) as sedr'),
-                DB::raw('COALESCE(mrs.account_number, dr.account_number) as account_number'),
-                DB::raw('COALESCE(mrs.account_name, dr.account_name) as account_name'),
-                'mrs.address',
-                DB::raw('COALESCE(mrs.zone, dr.zone) as zone'),
-                DB::raw('COALESCE(mrs.category, NULL) as category'),
-                'mrs.meter_number',
+                'mrs.sedr_number as sedr',
+                'cz.account_no as account_number',
+                'cz.account_name',
+                'cz.address',
+                'cz.zone_code as zone',
+                'cz.category_code as category',
+                'cz.meter_number',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
@@ -1931,26 +1928,22 @@ class BillingProcessController extends Controller
 
             // Query downloaded_readings - primary table, use LEFT JOIN for schedules
             // Filter by zone and reading_date
-            // Check zone from both dr.zone and mrs.zone to handle all cases
+            // Filter by consumer_zone.zone_code
             $baseQuery = DB::table('downloaded_readings as dr')
                 ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+                ->leftJoin('consumer_zone as cz', function ($join) {
+                    $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                        ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+                })
                 ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
                 ->select($selectColumns)
-                ->where(function($query) use ($zone) {
-                    // Normalize zone comparison: exact, padded, and trimmed/no-leading-zero for both dr and mrs
-                    $query->where(function($qq) use ($zone) {
-                        $qq->where('dr.zone', $zone)
-                           ->orWhereRaw('LPAD(dr.zone, 3, "0") = ?', [$zone])
-                           ->orWhereRaw('TRIM(LEADING "0" FROM dr.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                    })
-                    ->orWhere(function($qq) use ($zone) {
-                        $qq->whereNotNull('mrs.zone')
-                           ->where(function($qqq) use ($zone) {
-                               $qqq->where('mrs.zone', $zone)
-                                   ->orWhereRaw('LPAD(mrs.zone, 3, "0") = ?', [$zone])
-                                   ->orWhereRaw('TRIM(LEADING "0" FROM mrs.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                           });
-                    });
+                ->where(function ($query) use ($zone) {
+                    $query->whereNotNull('cz.zone_code')
+                        ->where(function ($qq) use ($zone) {
+                            $qq->where('cz.zone_code', $zone)
+                                ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
+                                ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
+                        });
                 });
 
             // KARON NABAG O // Filter by exact Reading Date only (when readings were taken)
@@ -1958,7 +1951,7 @@ class BillingProcessController extends Controller
              $date = $readingDate->format('Y-m-d');
              $readings = (clone $baseQuery)
                  ->whereDate('dr.reading_date', $date)
-                 ->orderBy(DB::raw('COALESCE(mrs.sedr_number, dr.account_number)'))
+                 ->orderBy('mrs.sedr_number')
                 ->get();
             
                
@@ -2157,27 +2150,29 @@ class BillingProcessController extends Controller
             // Partial payments are allowed; rows are excluded later only when reconciled balance shows nothing owed.
             $schedulesQuery = MeterReadingSchedule::query()
                 ->leftJoin('downloaded_readings as dr', 'dr.schedule_id', '=', 'meter_reading_schedules.id')
+                ->joinConsumerZone()
                 ->where(function ($q) use ($zone) {
-                    $q->where('meter_reading_schedules.zone', $zone)
-                        ->orWhereRaw('LPAD(TRIM(meter_reading_schedules.zone), 3, "0") = ?', [$zone])
-                        ->orWhereRaw('TRIM(LEADING "0" FROM meter_reading_schedules.zone) = TRIM(LEADING "0" FROM ?)', [$zone]);
+                    $q->where('cz.zone_code', $zone)
+                        ->orWhereRaw('LPAD(TRIM(cz.zone_code), 3, "0") = ?', [$zone])
+                        ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
                 })
                 ->whereDate('meter_reading_schedules.bill_date', $billDate->format('Y-m-d'))
                 ->whereNotNull('meter_reading_schedules.due_date')
                 ->whereRaw('CAST(meter_reading_schedules.due_date AS DATE) < ?', [$today->format('Y-m-d')])
                 ->select(
                     'meter_reading_schedules.id as schedule_id',
-                    'meter_reading_schedules.account_number',
-                    'meter_reading_schedules.account_name',
-                    'meter_reading_schedules.address',
-                    'meter_reading_schedules.zone',
-                    'meter_reading_schedules.category',
-                    'meter_reading_schedules.meter_number',
+                    'cz.account_no as account_number',
+                    'cz.account_name',
+                    'cz.address',
+                    'cz.zone_code as zone',
+                    'cz.category_code as category',
+                    'cz.meter_number',
                     'meter_reading_schedules.sedr_number as sedr',
                     'meter_reading_schedules.previous_reading_date as prev_date',
                     'meter_reading_schedules.previous_reading as prev_read',
                     'meter_reading_schedules.bill_date',
                     'meter_reading_schedules.due_date',
+                    'meter_reading_schedules.consumer_zone_id',
                     'dr.id as downloaded_id',
                     'dr.current_reading as pres_read',
                     'dr.consumption as volume',
@@ -2188,8 +2183,13 @@ class BillingProcessController extends Controller
 
             $data = [];
             foreach ($rows as $row) {
-                $consumer = ConsumerZoneOne::where('account_no', $row->account_number)->first();
-                if (!$consumer) {
+                $consumer = !empty($row->consumer_zone_id)
+                    ? ConsumerZoneOne::find($row->consumer_zone_id)
+                    : null;
+                if (!$consumer && !empty($row->account_number)) {
+                    $consumer = ConsumerZoneOne::where('account_no', $row->account_number)->first();
+                }
+                if (!$consumer && !empty($row->account_number)) {
                     $norm = str_replace('-', '', $row->account_number);
                     $consumer = ConsumerZoneOne::whereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$norm])->first();
                 }
@@ -2326,11 +2326,11 @@ class BillingProcessController extends Controller
                     'penalties.reference',
                     'penalties.penalty_amount',
                     'penalties.bill_amount',
-                    'mrs.zone as mrs_zone',
+                    'cz.zone_code as mrs_zone',
                     'mrs.bill_month',
-                    'mrs.account_number as mrs_account_number',
-                    'mrs.account_name as mrs_account_name',
-                    'mrs.category',
+                    'cz.account_no as mrs_account_number',
+                    'cz.account_name as mrs_account_name',
+                    'cz.category_code as category',
                     'cz.zone_code',
                     'cz.sequence',
                     'cz.rate_code',
@@ -2341,9 +2341,7 @@ class BillingProcessController extends Controller
             // Apply zone filter (schedule zone or consumer_zone.zone_code)
             if ($zone && $zone !== '' && $zone !== 'All Zones') {
                 $query->where(function ($q) use ($zone) {
-                    $q->where('mrs.zone', $zone)
-                        ->orWhere('cz.zone_code', $zone)
-                        ->orWhereRaw('LPAD(TRIM(COALESCE(mrs.zone, "")), 3, "0") = ?', [$zone])
+                    $q->where('cz.zone_code', $zone)
                         ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
                 });
             }
@@ -2515,26 +2513,28 @@ class BillingProcessController extends Controller
             // Past-due schedules only; partial PAYMENT rows allowed — filter by reconciled balance below.
             $rows = MeterReadingSchedule::query()
                 ->leftJoin('downloaded_readings as dr', 'dr.schedule_id', '=', 'meter_reading_schedules.id')
+                ->joinConsumerZone()
                 ->where(function ($q) use ($accountNumber, $normalizedAccount) {
-                    $q->whereRaw('TRIM(meter_reading_schedules.account_number) = ?', [$accountNumber])
-                        ->orWhereRaw("REPLACE(TRIM(meter_reading_schedules.account_number), '-', '') = ?", [$normalizedAccount]);
+                    $q->whereRaw('TRIM(cz.account_no) = ?', [$accountNumber])
+                        ->orWhereRaw("REPLACE(TRIM(cz.account_no), '-', '') = ?", [$normalizedAccount]);
                 })
                 ->whereDate('meter_reading_schedules.bill_date', $billDate->format('Y-m-d'))
                 ->whereNotNull('meter_reading_schedules.due_date')
                 ->whereRaw('CAST(meter_reading_schedules.due_date AS DATE) < ?', [$today->format('Y-m-d')])
                 ->select(
                     'meter_reading_schedules.id as schedule_id',
-                    'meter_reading_schedules.account_number',
-                    'meter_reading_schedules.account_name',
-                    'meter_reading_schedules.address',
-                    'meter_reading_schedules.zone',
-                    'meter_reading_schedules.category',
-                    'meter_reading_schedules.meter_number',
+                    'cz.account_no as account_number',
+                    'cz.account_name',
+                    'cz.address',
+                    'cz.zone_code as zone',
+                    'cz.category_code as category',
+                    'cz.meter_number',
                     'meter_reading_schedules.sedr_number as sedr',
                     'meter_reading_schedules.previous_reading_date as prev_date',
                     'meter_reading_schedules.previous_reading as prev_read',
                     'meter_reading_schedules.bill_date',
                     'meter_reading_schedules.due_date',
+                    'meter_reading_schedules.consumer_zone_id',
                     'dr.id as downloaded_id',
                     'dr.current_reading as pres_read',
                     'dr.consumption as volume',
@@ -2544,8 +2544,13 @@ class BillingProcessController extends Controller
 
             $data = [];
             foreach ($rows as $row) {
-                $consumer = ConsumerZoneOne::where('account_no', $row->account_number)->first();
-                if (!$consumer) {
+                $consumer = !empty($row->consumer_zone_id)
+                    ? ConsumerZoneOne::find($row->consumer_zone_id)
+                    : null;
+                if (!$consumer && !empty($row->account_number)) {
+                    $consumer = ConsumerZoneOne::where('account_no', $row->account_number)->first();
+                }
+                if (!$consumer && !empty($row->account_number)) {
                     $norm = str_replace('-', '', $row->account_number);
                     $consumer = ConsumerZoneOne::whereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$norm])->first();
                 }
@@ -2739,8 +2744,8 @@ class BillingProcessController extends Controller
                                 'date' => $penaltyDate->format('Y-m-d'),
                                 'due_date' => $dueDateFormatted,
                                 'reference' => $reference,
-                                'reading' => null,
-                                'volume' => null,
+                                'reading' => 0,
+                                'volume' => 0,
                                 'billamount' => 0,
                                 'penalty' => $calculatedPenalty,
                                 'others' => 0,
@@ -2751,10 +2756,7 @@ class BillingProcessController extends Controller
                                 'txtime' => $penaltyDateTime,
                             ]);
 
-                            if ($consumerZone !== null) {
-                                $consumerZone->balance = $newBalance;
-                                $consumerZone->save();
-                            }
+                            // Balance is tracked on consumer_ledgers only.
                         }
                     });
                     $applied++;
@@ -2821,11 +2823,11 @@ class BillingProcessController extends Controller
                 'penalties.due_date',
                 'penalties.reference',
                 'penalties.penalty_amount',
-                'mrs.zone as mrs_zone',
+                'cz.zone_code as mrs_zone',
                 'mrs.bill_month',
-                'mrs.account_number as mrs_account_number',
-                'mrs.account_name as mrs_account_name',
-                'mrs.category',
+                'cz.account_no as mrs_account_number',
+                'cz.account_name as mrs_account_name',
+                'cz.category_code as category',
                 'cz.zone_code',
                 'cz.sequence',
                 'cz.rate_code',
@@ -2835,9 +2837,7 @@ class BillingProcessController extends Controller
 
         if ($zone && $zone !== '' && $zone !== 'All Zones') {
             $query->where(function ($q) use ($zone) {
-                $q->where('mrs.zone', $zone)
-                    ->orWhere('cz.zone_code', $zone)
-                    ->orWhereRaw('LPAD(TRIM(COALESCE(mrs.zone, "")), 3, "0") = ?', [$zone])
+                $q->where('cz.zone_code', $zone)
                     ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
             });
         }
@@ -3132,7 +3132,7 @@ class BillingProcessController extends Controller
 
         if (!empty($filters['address'])) {
             $baseQuery->where(function ($q) use ($filters) {
-                $q->where('address1', 'like', '%' . $filters['address'] . '%');
+                $q->where('address', 'like', '%' . $filters['address'] . '%');
 
                 if (Schema::hasColumn('consumer_zone', 'address_2')) {
                     $q->orWhere('address_2', 'like', '%' . $filters['address'] . '%');
@@ -3194,12 +3194,19 @@ class BillingProcessController extends Controller
         $previousScheduleByAccount = collect();
         $latestScheduleByAccount = collect();
         if ($accountNos->isNotEmpty()) {
-            $previousScheduleByAccount = MeterReadingSchedule::whereIn('account_number', $accountNos)
-                ->whereYear('bill_month', $previousMonth->year)
-                ->whereMonth('bill_month', $previousMonth->month)
-                ->orderBy('bill_date', 'desc')
-                ->orderBy('id', 'desc')
-                ->get(['account_number', 'bill_date', 'current_reading', 'previous_reading'])
+            $previousScheduleByAccount = MeterReadingSchedule::query()
+                ->joinConsumerZone()
+                ->whereIn('cz.account_no', $accountNos)
+                ->whereYear('meter_reading_schedules.bill_month', $previousMonth->year)
+                ->whereMonth('meter_reading_schedules.bill_month', $previousMonth->month)
+                ->orderBy('meter_reading_schedules.bill_date', 'desc')
+                ->orderBy('meter_reading_schedules.id', 'desc')
+                ->get([
+                    'cz.account_no as account_number',
+                    'meter_reading_schedules.bill_date',
+                    'meter_reading_schedules.current_reading',
+                    'meter_reading_schedules.previous_reading',
+                ])
                 ->groupBy('account_number')
                 ->map(function ($rows) {
                     return $rows->first();
@@ -3208,12 +3215,20 @@ class BillingProcessController extends Controller
             $latestGeneratedBillMonth = MeterReadingSchedule::whereNotNull('bill_month')->max('bill_month');
             if ($latestGeneratedBillMonth) {
                 $latestMonth = Carbon::parse($latestGeneratedBillMonth);
-                $latestScheduleByAccount = MeterReadingSchedule::whereIn('account_number', $accountNos)
-                    ->whereYear('bill_month', $latestMonth->year)
-                    ->whereMonth('bill_month', $latestMonth->month)
-                    ->orderBy('bill_date', 'desc')
-                    ->orderBy('id', 'desc')
-                    ->get(['account_number', 'bill_month', 'bill_date', 'current_reading', 'previous_reading'])
+                $latestScheduleByAccount = MeterReadingSchedule::query()
+                    ->joinConsumerZone()
+                    ->whereIn('cz.account_no', $accountNos)
+                    ->whereYear('meter_reading_schedules.bill_month', $latestMonth->year)
+                    ->whereMonth('meter_reading_schedules.bill_month', $latestMonth->month)
+                    ->orderBy('meter_reading_schedules.bill_date', 'desc')
+                    ->orderBy('meter_reading_schedules.id', 'desc')
+                    ->get([
+                        'cz.account_no as account_number',
+                        'meter_reading_schedules.bill_month',
+                        'meter_reading_schedules.bill_date',
+                        'meter_reading_schedules.current_reading',
+                        'meter_reading_schedules.previous_reading',
+                    ])
                     ->groupBy('account_number')
                     ->map(function ($rows) {
                         return $rows->first();
@@ -3320,11 +3335,10 @@ class BillingProcessController extends Controller
                         $normalized = str_replace('-', '', $accountNumber);
                         $consumer = ConsumerZoneOne::whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])->first();
                     }
-                    if (!$consumer && $downloaded && $downloaded->schedule && !empty($downloaded->schedule->account_number)) {
-                        $scheduleAccount = trim($downloaded->schedule->account_number);
-                        $consumer = ConsumerZoneOne::where('account_no', $scheduleAccount)->first();
-                        if (!$consumer) {
-                            $consumer = ConsumerZoneOne::whereRaw("REPLACE(account_no, '-', '') = ?", [str_replace('-', '', $scheduleAccount)])->first();
+                    if (!$consumer && $downloaded && $downloaded->schedule) {
+                        $consumerZoneId = $downloaded->schedule->consumer_zone_id ?? null;
+                        if ($consumerZoneId) {
+                            $consumer = ConsumerZoneOne::find($consumerZoneId);
                         }
                     }
                     if ($consumer) {
@@ -3347,8 +3361,7 @@ class BillingProcessController extends Controller
                         $normalized = str_replace('-', '', $accountNo);
                         $downloaded = DownloadedReading::lockForUpdate()
                             ->with('schedule')
-                            ->where('account_number', $accountNo)
-                            ->orWhereRaw("REPLACE(account_number, '-', '') = ?", [$normalized])
+                            ->forConsumerZone($consumerId)
                             ->orderBy('reading_date', 'desc')
                             ->orderBy('id', 'desc')
                             ->first();
@@ -3370,7 +3383,7 @@ class BillingProcessController extends Controller
                         if (!$paymentBeingUpdated) {
                             $byOr = ConsumerPayment::where('or_number', $validated['official_receipt_number']);
                             if ($consumerId) {
-                                $byOr->where('consumer_id', $consumerId);
+                                $byOr->where(ConsumerPayment::consumerZoneIdColumn(), $consumerId);
                             }
                             $paymentBeingUpdated = $byOr->first();
                         }
@@ -3395,9 +3408,8 @@ class BillingProcessController extends Controller
                     : $now;
 
                 // Update or create consumer_payment; store full breakdown so all particulars are in DB
-                $paymentData = [
-                    'consumer_id' => $consumerId,
-                    'account_name' => $validated['account_name'] ?? null,
+                $paymentData = ConsumerPayment::filterTableAttributes([
+                    'consumer_zone_id' => $consumerId,
                     'payment_method' => $validated['payment_method'],
                     'payment_amount' => round($validated['amount_due'], 2),
                     'amount_tendered' => round($validated['amount_tendered'], 2),
@@ -3417,7 +3429,7 @@ class BillingProcessController extends Controller
                     'paid_at' => $paidAt,
                     'remarks' => $validated['remarks'] ?? null,
                     'created_by' => $this->getFormattedUserName(),
-                ];
+                ]);
                 if ($downloaded) {
                     if ($isUpdate) {
                         if (empty($validated['official_receipt_number'])) {
@@ -3429,8 +3441,8 @@ class BillingProcessController extends Controller
                             ->first();
                         // Fallback: if not found, find by OR + consumer (same account) so "search by OR #" can update even when payment is linked to a different bill month
                         if (!$consumerPayment && $consumerId) {
-                            $consumerPayment = ConsumerPayment::where('or_number', $validated['official_receipt_number'])
-                                ->where('consumer_id', $consumerId)
+                            $consumerPayment = ConsumerPayment::forConsumerZone($consumerId)
+                                ->where('or_number', $validated['official_receipt_number'])
                                 ->first();
                         }
                         if ($consumerPayment) {
@@ -3449,12 +3461,12 @@ class BillingProcessController extends Controller
                     // Update by OR # when record was loaded by OR (no downloaded_id): find payment by OR and account/consumer
                     $byOr = ConsumerPayment::where('or_number', $validated['official_receipt_number']);
                     if ($consumerId) {
-                        $byOr->where('consumer_id', $consumerId);
+                        $byOr->where(ConsumerPayment::consumerZoneIdColumn(), $consumerId);
                     }
                     $consumerPayment = $byOr->first();
                     if ($consumerPayment) {
-                        if (!$consumerId && $consumerPayment->consumer_id) {
-                            $consumerId = $consumerPayment->consumer_id;
+                        if (!$consumerId && ($consumerPayment->consumer_zone_id ?? $consumerPayment->consumer_id)) {
+                            $consumerId = $consumerPayment->consumer_zone_id ?? $consumerPayment->consumer_id;
                         }
                         $consumerPayment->update($paymentData);
                     } else {
@@ -3684,7 +3696,7 @@ class BillingProcessController extends Controller
                     }
                 }
                 $downloaded->prepared_by = $this->getFormattedUserName();
-                if (!$downloaded->completed_at) {
+                if (Schema::hasColumn('downloaded_readings', 'completed_at') && !$downloaded->completed_at) {
                     $downloaded->completed_at = $now;
                 }
                 $downloaded->save();
@@ -3692,7 +3704,9 @@ class BillingProcessController extends Controller
                 if ($downloaded->schedule) {
                     $schedule = $downloaded->schedule;
                     $schedule->status = 'Completed';
-                    $schedule->completed_at = $schedule->completed_at ?? $now;
+                    if (Schema::hasColumn('meter_reading_schedules', 'completed_at')) {
+                        $schedule->completed_at = $schedule->completed_at ?? $now;
+                    }
                     $schedule->save();
 
                     $dueDate = $schedule->due_date ? Carbon::parse($schedule->due_date) : null;
@@ -3777,8 +3791,8 @@ class BillingProcessController extends Controller
                         'date' => $ledgerDate->format('Y-m-d'),
                         'due_date' => null,
                         'reference' => $orNumber,
-                        'reading' => null,
-                        'volume' => null,
+                        'reading' => 0,
+                        'volume' => 0,
                         'billamount' => 0,
                         'penalty' => round((float)($validated['penalty'] ?? 0), 2),
                         'others' => 0,
@@ -3848,8 +3862,8 @@ class BillingProcessController extends Controller
                                     'schedule_id' => $downloaded->schedule_id,
                                     'date' => $ledgerDate->format('Y-m-d'),
                                     'due_date' => null,
-                                    'reading' => null,
-                                    'volume' => null,
+                                    'reading' => 0,
+                                    'volume' => 0,
                                     'billamount' => 0,
                                     'penalty' => 0,
                                     'others' => 0,
@@ -3871,8 +3885,8 @@ class BillingProcessController extends Controller
                                 'date' => $ledgerDate->format('Y-m-d'),
                                 'due_date' => null,
                                 'reference' => $orNumber . '-SC',
-                                'reading' => null,
-                                'volume' => null,
+                                'reading' => 0,
+                                'volume' => 0,
                                 'billamount' => 0,
                                 'penalty' => 0,
                                 'others' => 0,
@@ -3890,27 +3904,24 @@ class BillingProcessController extends Controller
                 // Create LRO credit (CM) rows for any sundries included in this payment.
                 // Skip on update: do not create new LRO ledger lines when only updating payment data.
                 // Each CM row nets against the original DM row so the LRO Summary shows Payments = Charges → Balance = 0.
-                if (!$isUpdate && !empty($validated['sundries']) && $accountNumber) {
-                    $consumerName = $consumer ? ($consumer->account_name ?? '') : '';
+                if (!$isUpdate && !empty($validated['sundries']) && $consumerId) {
                     foreach ($validated['sundries'] as $sundry) {
                         $sundryAmount = round((float)($sundry['amount'] ?? 0), 2);
                         $sundryAcctCode = $sundry['acct_code'] ?? null;
                         if ($sundryAmount <= 0 || !$sundryAcctCode) {
                             continue;
                         }
-                        LROLedger::create([
-                            'account'   => $accountNumber,
+                        LROLedger::create(LROLedger::filterTableAttributes([
+                            'consumer_zone_id' => $consumerId,
                             'type'      => 'CM',
                             'date'      => $paidAt->format('Y-m-d'),
                             'bam_no'    => $sundry['bam_no'] ?? null,
                             'amount'    => $sundryAmount,
-                            'ar_type'   => 'LRO',
+                            'ledger'    => 'LRO',
                             'acct_code' => $sundryAcctCode,
-                            'name'      => $consumerName,
-                            'reference' => $sundry['bam_no'] ?? null,
                             'remarks'   => 'Payment OR#' . ($validated['official_receipt_number'] ?? ''),
                             'status'    => 'Posted',
-                        ]);
+                        ]));
                     }
                 }
 
@@ -4065,7 +4076,7 @@ class BillingProcessController extends Controller
         $debit = round($amount, 2);
         $username = Auth::check() ? (Auth::user()->name ?? 'SYSTEM') : 'SYSTEM';
         $dateTime = Carbon::parse($date)->startOfDay();
-        $currentBalance = (float) ($consumer->balance ?? 0);
+        $currentBalance = $consumer->getLedgerBalance();
         $newBalance = round($currentBalance + $debit, 2);
 
         ConsumerLedger::create([
@@ -4090,9 +4101,6 @@ class BillingProcessController extends Controller
             'username' => $username,
             'txtime' => $dateTime,
         ]);
-
-        $consumer->balance = $newBalance;
-        $consumer->save();
 
         return $reference;
     }
@@ -4377,10 +4385,9 @@ class BillingProcessController extends Controller
                 ]);
             }
 
-            $cancelled = ConsumerPayment::create([
+            $cancelled = ConsumerPayment::create(ConsumerPayment::filterTableAttributes([
                 'reading_id' => null,
-                'consumer_id' => null,
-                'account_name' => 'Cancelled',
+                'consumer_zone_id' => null,
                 'payment_method' => null,
                 'payment_amount' => 0,
                 'amount_tendered' => 0,
@@ -4389,7 +4396,7 @@ class BillingProcessController extends Controller
                 'paid_at' => null,
                 'remarks' => $remarksValue,
                 'created_by' => $this->getFormattedUserName(),
-            ]);
+            ]));
 
             return response()->json([
                 'success' => true,

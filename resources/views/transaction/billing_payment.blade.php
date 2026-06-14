@@ -157,11 +157,34 @@
         user-select: none;
     }
 
-    /* Ledger modal */
+    /* Ledger modal — height set from embed content (9 visible rows) via postMessage */
+    #ledgerModal .ledger-modal-dialog {
+        margin: 0.75rem auto;
+        max-width: min(1140px, calc(100% - 1.5rem));
+    }
+    #ledgerModal .modal-content {
+        max-height: calc(100vh - 1.5rem);
+        max-height: calc(100dvh - 1.5rem);
+    }
+    #ledgerModal .ledger-modal-body {
+        overflow: hidden;
+    }
     .ledger-modal-iframe {
         width: 100%;
-        height: 80vh;
+        height: 420px;
+        max-height: calc(100vh - 10rem);
+        max-height: calc(100dvh - 10rem);
         border: 0;
+        display: block;
+    }
+    @media (max-width: 767.98px) {
+        #ledgerModal .ledger-modal-dialog {
+            margin: 0.5rem auto;
+            max-width: calc(100% - 1rem);
+        }
+        .ledger-modal-iframe {
+            max-height: calc(100dvh - 8rem);
+        }
     }
 
     /* SUNDRIES Acct Code dropdown */
@@ -636,7 +659,7 @@
 
     <!-- Ledger Preview Modal -->
     <div class="modal fade" id="ledgerModal" tabindex="-1" role="dialog" aria-labelledby="ledgerModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document">
+        <div class="modal-dialog modal-xl ledger-modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="ledgerModalLabel">Account Ledger</h5>
@@ -644,14 +667,8 @@
                         <span aria-hidden="true">&times;</span>
                     </button>
                 </div>
-                <div class="modal-body p-0">
-                    <div id="ledgerLoading" class="d-flex align-items-center justify-content-center py-5">
-                        <div class="spinner-border text-primary mr-2" role="status">
-                            <span class="sr-only">Loading...</span>
-                        </div>
-                        <span>Loading ledger...</span>
-                    </div>
-                    <iframe id="ledgerIframe" class="ledger-modal-iframe d-none"></iframe>
+                <div class="modal-body p-0 ledger-modal-body">
+                    <iframe id="ledgerIframe" class="ledger-modal-iframe d-none" title="Account Ledger"></iframe>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
@@ -890,7 +907,9 @@
             };
 
             const renderScDiscountLedgerText = (account) => {
-                if (!scDiscountLedgerText) return;
+                if (!scDiscountLedgerText) {
+                    return;
+                }
                 const rawPercent = String(account?.bill_disc_percent ?? '').trim();
                 const normalizedPercent = rawPercent.toUpperCase();
                 const percentNum = parseFloat(rawPercent);
@@ -906,6 +925,31 @@
                 scDiscountLedgerText.textContent = dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
                 scDiscountLedgerText.classList.remove('d-none');
             };
+
+            function hideLedgerModalOscaBadge() {
+                if (!ledgerIframe) {
+                    return;
+                }
+                try {
+                    const doc = ledgerIframe.contentDocument || ledgerIframe.contentWindow?.document;
+                    if (!doc) {
+                        return;
+                    }
+                    if (!doc.getElementById('billingPaymentLedgerHideOsca')) {
+                        const style = doc.createElement('style');
+                        style.id = 'billingPaymentLedgerHideOsca';
+                        style.textContent = '#ledgerConsumerSc { display: none !important; }';
+                        (doc.head || doc.documentElement).appendChild(style);
+                    }
+                    const scBadge = doc.getElementById('ledgerConsumerSc');
+                    if (scBadge) {
+                        scBadge.textContent = '';
+                        scBadge.classList.add('d-none');
+                    }
+                } catch (e) {
+                    // iframe not ready
+                }
+            }
             
             // Track Senior eligibility for the currently loaded account.
             let currentAccountIsSenior = false;
@@ -3300,6 +3344,16 @@
                                 ledgerLoading.classList.add('d-none');
                             }
                             ledgerIframe.classList.remove('d-none');
+                            hideLedgerModalOscaBadge();
+                            resizeLedgerIframeFromEmbed();
+                            setTimeout(() => {
+                                hideLedgerModalOscaBadge();
+                                resizeLedgerIframeFromEmbed();
+                            }, 300);
+                            setTimeout(() => {
+                                hideLedgerModalOscaBadge();
+                                resizeLedgerIframeFromEmbed();
+                            }, 900);
                         };
                     }
 
@@ -3310,12 +3364,39 @@
                 });
             }
 
+            function resizeLedgerIframeFromEmbed() {
+                if (!ledgerIframe) {
+                    return;
+                }
+                try {
+                    const doc = ledgerIframe.contentDocument || ledgerIframe.contentWindow?.document;
+                    const card = doc?.getElementById('ledgerCard');
+                    const measured = card ? card.offsetHeight : doc?.documentElement?.scrollHeight;
+                    if (!measured) {
+                        return;
+                    }
+                    const maxHeight = Math.max(window.innerHeight - 120, 240);
+                    ledgerIframe.style.height = Math.min(measured, maxHeight) + 'px';
+                } catch (e) {
+                    // Cross-origin or not ready — keep CSS fallback height
+                }
+            }
+
+            window.addEventListener('message', (event) => {
+                if (!ledgerIframe || !event.data || event.data.type !== 'ledgerEmbedResize') {
+                    return;
+                }
+                hideLedgerModalOscaBadge();
+                resizeLedgerIframeFromEmbed();
+            });
+
             // Reset iframe when modal closes
             if (ledgerModal) {
                 ledgerModal.on('hidden.bs.modal', () => {
                     if (ledgerIframe) {
                         ledgerIframe.src = 'about:blank';
                         ledgerIframe.classList.add('d-none');
+                        ledgerIframe.style.height = '';
                     }
                     if (ledgerLoading) {
                         ledgerLoading.classList.remove('d-none');

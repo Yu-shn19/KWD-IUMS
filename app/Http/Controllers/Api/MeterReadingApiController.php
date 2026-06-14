@@ -9,6 +9,7 @@ use App\Models\DownloadedReading;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 
 class MeterReadingApiController extends Controller
@@ -108,11 +109,15 @@ class MeterReadingApiController extends Controller
             
             // Get zones that have active routes in the latest bill_month
             if ($latestBillMonth) {
-                $assignedZones = MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                    ->where('bill_month', $latestBillMonth)
-                    ->whereIn('status', ['Assigned', 'In Progress'])
+                $assignedZones = MeterReadingSchedule::query()
+                    ->joinConsumerZone()
+                    ->where('meter_reading_schedules.assigned_reader_id', $readerId)
+                    ->where('meter_reading_schedules.bill_month', $latestBillMonth)
+                    ->whereIn('meter_reading_schedules.status', ['Assigned', 'In Progress'])
                     ->distinct()
-                    ->pluck('zone')
+                    ->pluck('cz.zone_code')
+                    ->filter()
+                    ->values()
                     ->toArray();
             }
             
@@ -125,25 +130,31 @@ class MeterReadingApiController extends Controller
                 
                 // Get zones from completed routes in the latest bill_month
                 if ($latestBillMonth) {
-                    $assignedZones = MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                        ->where('bill_month', $latestBillMonth)
-                        ->where('status', 'Completed')
+                    $assignedZones = MeterReadingSchedule::query()
+                        ->joinConsumerZone()
+                        ->where('meter_reading_schedules.assigned_reader_id', $readerId)
+                        ->where('meter_reading_schedules.bill_month', $latestBillMonth)
+                        ->where('meter_reading_schedules.status', 'Completed')
                         ->distinct()
-                        ->pluck('zone')
+                        ->pluck('cz.zone_code')
+                        ->filter()
+                        ->values()
                         ->toArray();
                 }
             }
         }
 
-        $query = MeterReadingSchedule::where('assigned_reader_id', $readerId)
+        $query = MeterReadingSchedule::with('consumerZone')
+            ->where('assigned_reader_id', $readerId)
             ->whereIn('status', ['Assigned', 'In Progress', 'Completed']);
 
         // Filter by zone: use provided one, or zones with active assignments
         if ($zone) {
-            $query->where('zone', $zone);
+            $query->forZoneCode($zone);
         } elseif (!empty($assignedZones)) {
-            // Only show routes from zones that have active assignments (not mixed zones)
-            $query->whereIn('zone', $assignedZones);
+            $query->whereHas('consumerZone', function ($q) use ($assignedZones) {
+                $q->whereIn('zone_code', $assignedZones);
+            });
         }
 
         // Filter by bill_month: use provided one, or latest one, or none
@@ -178,12 +189,12 @@ class MeterReadingApiController extends Controller
         // Get rate codes from consumer_zone table for all schedules
         $rateCodes = collect();
         if ($schedules->isNotEmpty()) {
-            $accountNumbers = $schedules->pluck('account_number')->unique()->toArray();
+            $consumerZoneIds = $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->toArray();
             $rateCodes = DB::table('consumer_zone')
-                ->whereIn('account_no', $accountNumbers)
-                ->select('account_no', 'rate_code')
+                ->whereIn('id', $consumerZoneIds)
+                ->select('id', 'account_no', 'rate_code')
                 ->get()
-                ->keyBy('account_no');
+                ->keyBy('id');
         }
 
         return response()->json([
@@ -196,7 +207,7 @@ class MeterReadingApiController extends Controller
             'total_schedules' => $schedules->count(),
             'schedules' => $schedules->map(function($schedule) use ($downloadedReadings, $rateCodes) {
                 $downloaded = $downloadedReadings->get($schedule->id);
-                $rateCode = $rateCodes->get($schedule->account_number)?->rate_code ?? null;
+                $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
                 
                 return [
                     'id' => $schedule->id,
@@ -248,7 +259,7 @@ class MeterReadingApiController extends Controller
         ]);
 
         try {
-            $schedule = MeterReadingSchedule::find($request->schedule_id);
+            $schedule = MeterReadingSchedule::with('consumerZone')->find($request->schedule_id);
             \Log::info('📋 Schedule Found', [
                 'schedule_id' => $schedule->id,
                 'account_number' => $schedule->account_number,
@@ -269,13 +280,13 @@ class MeterReadingApiController extends Controller
             $previousReading = (int) ($schedule->previous_reading ?? 0);
             $consumption = max(0, $currentReading - $previousReading);
 
-            // Get rate_code from consumer_zone table (same as mobile app)
+            // Get rate_code from consumer_zone
             $rateCode = null;
-            $consumer = \App\Models\ConsumerZoneOne::where(function ($query) use ($schedule) {
-                $query->where('account_no', $schedule->account_number)
-                      ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [str_replace('-', '', $schedule->account_number)]);
-            })->first();
-            
+            $consumer = $schedule->consumerZone;
+            if (!$consumer && $schedule->consumer_zone_id) {
+                $consumer = \App\Models\ConsumerZoneOne::find($schedule->consumer_zone_id);
+            }
+
             if ($consumer) {
                 $rateCode = $consumer->rate_code;
             }
@@ -302,25 +313,27 @@ class MeterReadingApiController extends Controller
             // This table is for mobile app tracking and offline persistence
             $reader = User::find($request->reader_id);
             
+            $downloadedPayload = [
+                'consumer_zone_id' => $schedule->consumer_zone_id,
+                'previous_reading' => $previousReading,
+                'current_reading' => $currentReading,
+                'consumption' => $consumption,
+                'current_bill' => $currentBill,
+                'reading_date' => $request->reading_date ?? now(),
+                'status' => 'completed',
+                'reader_notes' => $request->reader_notes,
+                'prepared_by' => $this->formatName($reader),
+            ];
+            if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
+                $downloadedPayload['completed_at'] = now();
+            }
+
             DownloadedReading::updateOrCreate(
                 [
                     'schedule_id' => $schedule->id,
-                    'reader_id' => $request->reader_id
+                    'reader_id' => $request->reader_id,
                 ],
-                [
-                    'meter_reader_name' => $this->formatName($reader),
-                    'account_number' => $schedule->account_number,
-                    'account_name' => $schedule->account_name,
-                    'zone' => $schedule->zone,
-                    'previous_reading' => $previousReading,
-                    'current_reading' => $currentReading,
-                    'consumption' => $consumption,
-                    'current_bill' => $currentBill, // Save calculated bill to downloaded_readings
-                    'reading_date' => $request->reading_date ?? now(),
-                    'status' => 'completed',
-                    'reader_notes' => $request->reader_notes,
-                    'completed_at' => now()
-                ]
+                $downloadedPayload
             );
 
             // STEP 3: Update the ConsumerLedger entry with actual reading data

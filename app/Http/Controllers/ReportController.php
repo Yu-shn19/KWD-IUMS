@@ -72,12 +72,13 @@ class ReportController extends Controller
 
         $query = DB::table('meter_reading_schedules as mrs')
             ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
+            ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
             ->leftJoin('consumer_ledgers as cl', function ($join) {
                 $join->on('mrs.id', '=', 'cl.schedule_id')
                     ->whereIn('cl.trans', ['BILL', 'BILLING']);
             })
             ->select(
-                'mrs.zone',
+                'cz.zone_code as zone',
                 'mrs.bill_date',
                 'mrs.due_date',
                 'mrs.previous_reading as mrs_previous_reading',
@@ -97,7 +98,7 @@ class ReportController extends Controller
             ->whereBetween('mrs.bill_month', [$monthStart, $monthEnd]);
 
         if ($zone !== '') {
-            $query->where('mrs.zone', $zone);
+            $query->where('cz.zone_code', $zone);
         }
 
         $rows = $query->get();
@@ -152,10 +153,11 @@ class ReportController extends Controller
 
         $rows = DB::table('meter_reading_schedules as mrs')
             ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
+            ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
             ->whereBetween('mrs.bill_month', [$billMonthStart, $billMonthEnd])
-            ->whereNotNull('mrs.zone')
+            ->whereNotNull('cz.zone_code')
             ->select([
-                'mrs.zone',
+                'cz.zone_code as zone',
                 DB::raw('MIN(mrs.bill_date) as bill_date'),
                 DB::raw('MIN(mrs.due_date) as due_date'),
                 DB::raw('MIN(mrs.disconnection_date) as disconnection_date'),
@@ -165,8 +167,8 @@ class ReportController extends Controller
                 DB::raw("COUNT(DISTINCT CASE WHEN mrs.status = 'Completed' THEN mrs.id END) as reading_posting"),
                 DB::raw('COUNT(DISTINCT CASE WHEN dr.id IS NOT NULL THEN mrs.id END) as bill_printing_count'),
             ])
-            ->groupBy('mrs.zone')
-            ->orderBy('mrs.zone')
+            ->groupBy('cz.zone_code')
+            ->orderBy('cz.zone_code')
             ->get();
 
         $periodLabel = $billMonth->format('F-Y');
@@ -204,12 +206,13 @@ class ReportController extends Controller
 
     public function monthlyBillingReport(Request $request)
     {
-        $zones = MeterReadingSchedule::query()
-            ->select('zone')
-            ->whereNotNull('zone')
+        $zones = DB::table('consumer_zone')
+            ->select('zone_code')
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
             ->distinct()
-            ->orderBy('zone')
-            ->pluck('zone')
+            ->orderBy('zone_code')
+            ->pluck('zone_code')
             ->toArray();
 
         $defaultZone = $zones[0] ?? null;
@@ -226,24 +229,22 @@ class ReportController extends Controller
         // Prioritize consumer_ledgers debit data for current bill
         $query = DB::table('meter_reading_schedules as mrs')
             ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
-            ->leftJoin('consumer_zone as cz', function($join) {
-                $join->on(DB::raw('mrs.account_number COLLATE utf8mb4_unicode_ci'), '=', DB::raw('cz.account_no COLLATE utf8mb4_unicode_ci'));
-            })
+            ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
             ->leftJoin('consumer_ledgers as cl', function($join) {
                 $join->on('mrs.id', '=', 'cl.schedule_id')
                      ->whereIn('cl.trans', ['BILL', 'BILLING']);
             })
             ->select(
                 'mrs.id',
-                'mrs.zone',
+                'cz.zone_code as zone',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
-                'mrs.category',
+                'cz.category_code as category',
                 'mrs.sedr_number',
-                'mrs.account_number',
-                'mrs.account_name',
-                'mrs.address',
+                'cz.account_no as account_number',
+                'cz.account_name',
+                'cz.address',
                 'mrs.previous_reading_date',
                 'mrs.previous_reading as mrs_previous_reading',
                 'mrs.current_reading as mrs_current_reading',
@@ -262,11 +263,11 @@ class ReportController extends Controller
                 'cl.others as ledger_others'
             )
             ->whereBetween('mrs.bill_month', [$billMonthStart, $billMonthEnd])
-            ->orderBy('mrs.zone')
+            ->orderBy('cz.zone_code')
             ->orderBy('mrs.sedr_number');
 
         if ($zone) {
-            $query->where('mrs.zone', $zone);
+            $query->where('cz.zone_code', $zone);
         }
 
         $rawRecords = $query->get();
@@ -382,12 +383,13 @@ class ReportController extends Controller
      */
     public function exportMonthlyBillingReport(Request $request)
     {
-        $zones = MeterReadingSchedule::query()
-            ->select('zone')
-            ->whereNotNull('zone')
+        $zones = DB::table('consumer_zone')
+            ->select('zone_code')
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
             ->distinct()
-            ->orderBy('zone')
-            ->pluck('zone')
+            ->orderBy('zone_code')
+            ->pluck('zone_code')
             ->toArray();
 
         $defaultZone = $zones[0] ?? null;
@@ -403,24 +405,22 @@ class ReportController extends Controller
         // Use the same query logic as monthlyBillingReport
         $query = DB::table('meter_reading_schedules as mrs')
             ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
-            ->leftJoin('consumer_zone as cz', function($join) {
-                $join->on(DB::raw('mrs.account_number COLLATE utf8mb4_unicode_ci'), '=', DB::raw('cz.account_no COLLATE utf8mb4_unicode_ci'));
-            })
+            ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
             ->leftJoin('consumer_ledgers as cl', function($join) {
                 $join->on('mrs.id', '=', 'cl.schedule_id')
                      ->whereIn('cl.trans', ['BILL', 'BILLING']);
             })
             ->select(
                 'mrs.id',
-                'mrs.zone',
+                'cz.zone_code as zone',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
-                'mrs.category',
+                'cz.category_code as category',
                 'mrs.sedr_number',
-                'mrs.account_number',
-                'mrs.account_name',
-                'mrs.address',
+                'cz.account_no as account_number',
+                'cz.account_name',
+                'cz.address',
                 'mrs.previous_reading_date',
                 'mrs.previous_reading as mrs_previous_reading',
                 'mrs.current_reading as mrs_current_reading',
@@ -439,11 +439,11 @@ class ReportController extends Controller
                 'cl.others as ledger_others'
             )
             ->whereBetween('mrs.bill_month', [$billMonthStart, $billMonthEnd])
-            ->orderBy('mrs.zone')
+            ->orderBy('cz.zone_code')
             ->orderBy('mrs.sedr_number');
 
         if ($zone) {
-            $query->where('mrs.zone', $zone);
+            $query->where('cz.zone_code', $zone);
         }
 
         $rawRecords = $query->get();
@@ -693,9 +693,7 @@ class ReportController extends Controller
         
         // Query schedules that have passed disconnection date
         $schedulesQuery = DB::table('meter_reading_schedules as mrs')
-            ->join('consumer_zone as cz', function($join) {
-                $join->on(DB::raw('mrs.account_number COLLATE utf8mb4_unicode_ci'), '=', DB::raw('cz.account_no COLLATE utf8mb4_unicode_ci'));
-            })
+            ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
             ->where('mrs.disconnection_date', '<=', $today)
             ->whereNotNull('mrs.disconnection_date')
             ->select('cz.account_no')
@@ -1098,7 +1096,7 @@ class ReportController extends Controller
         $query = DB::table('consumer_payments as cp')
             ->leftJoin('downloaded_readings as dr', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->leftJoin('consumer_zone as cz', 'cp.consumer_id', '=', 'cz.id')
+            ->leftJoin('consumer_zone as cz', 'cp.consumer_zone_id', '=', 'cz.id')
             ->where(function ($q) {
                 $q->where('cp.payment_amount', '>', 0)
                   ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
@@ -1107,9 +1105,9 @@ class ReportController extends Controller
                 'cp.id',
                 'cp.or_number',
                 DB::raw('COALESCE(cp.paid_at, cp.created_at) as paid_date'),
-                DB::raw('COALESCE(dr.account_number, mrs.account_number, cz.account_no) as account_number'),
-                DB::raw('COALESCE(dr.account_name, mrs.account_name, cz.account_name, cp.account_name) as account_name'),
-                DB::raw('COALESCE(dr.zone, mrs.zone, cz.zone_code) as zone'),
+                'cz.account_no as account_number',
+                'cz.account_name',
+                'cz.zone_code as zone',
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
                 'cp.senior_citizen_discount',
@@ -1151,9 +1149,9 @@ class ReportController extends Controller
         // Apply zone filter
         if ($zone && $zone !== '') {
             $query->where(function($q) use ($zone) {
-                $q->where('dr.zone', $zone)
-                  ->orWhere('mrs.zone', $zone)
-                  ->orWhere('cz.zone_code', $zone);
+                $q->where('cz.zone_code', $zone)
+                  ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
+                  ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
             });
         }
 
@@ -1332,7 +1330,7 @@ class ReportController extends Controller
         $query = DB::table('consumer_payments as cp')
             ->leftJoin('downloaded_readings as dr', 'cp.reading_id', '=', 'dr.id')
             ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->leftJoin('consumer_zone as cz', 'cp.consumer_id', '=', 'cz.id')
+            ->leftJoin('consumer_zone as cz', 'cp.consumer_zone_id', '=', 'cz.id')
             ->where(function ($q) {
                 $q->where('cp.payment_amount', '>', 0)
                   ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
@@ -1341,9 +1339,9 @@ class ReportController extends Controller
                 'cp.id',
                 'cp.or_number',
                 DB::raw('COALESCE(cp.paid_at, cp.created_at) as paid_date'),
-                DB::raw('COALESCE(dr.account_number, mrs.account_number, cz.account_no) as account_number'),
-                DB::raw('COALESCE(dr.account_name, mrs.account_name, cz.account_name, cp.account_name) as account_name'),
-                DB::raw('COALESCE(dr.zone, mrs.zone, cz.zone_code) as zone'),
+                'cz.account_no as account_number',
+                'cz.account_name',
+                'cz.zone_code as zone',
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
                 'cp.senior_citizen_discount',
@@ -1385,9 +1383,9 @@ class ReportController extends Controller
         // Zone filter
         if ($zone && $zone !== '') {
             $query->where(function ($q) use ($zone) {
-                $q->where('dr.zone', $zone)
-                  ->orWhere('mrs.zone', $zone)
-                  ->orWhere('cz.zone_code', $zone);
+                $q->where('cz.zone_code', $zone)
+                  ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
+                  ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
             });
         }
 
@@ -1789,21 +1787,23 @@ class ReportController extends Controller
 
             try {
         // Get available zones
-        $zones = MeterReadingSchedule::query()
-            ->select('zone')
-            ->whereNotNull('zone')
+        $zones = DB::table('consumer_zone')
+            ->select('zone_code')
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
             ->distinct()
-            ->orderBy('zone')
-            ->pluck('zone')
+            ->orderBy('zone_code')
+            ->pluck('zone_code')
             ->toArray();
 
         // Get available categories
-        $categories = MeterReadingSchedule::query()
-            ->select('category')
-            ->whereNotNull('category')
+        $categories = DB::table('consumer_zone')
+            ->select('category_code')
+            ->whereNotNull('category_code')
+            ->where('category_code', '!=', '')
             ->distinct()
-            ->orderBy('category')
-            ->pluck('category')
+            ->orderBy('category_code')
+            ->pluck('category_code')
             ->toArray();
 
         // OPTIMIZATION: Only get unpaid bills from last 3 years to avoid loading 700k+ rows
@@ -1821,8 +1821,7 @@ class ReportController extends Controller
                 'cz.account_name',
                 'cz.status_code',
                 'cz.category_code as consumer_category',
-                'mrs.category as schedule_category',
-                'mrs.zone as schedule_zone',
+                'cz.zone_code as schedule_zone',
                 'mrs.id as schedule_id',
                 'mrs.due_date as mrs_due_date',
                 'cl.due_date as cl_due_date',
@@ -1858,12 +1857,9 @@ class ReportController extends Controller
             $query->where('cz.zone_code', $zone);
         }
 
-        // Apply category filter (check both mrs.category and cz.category_code)
+        // Apply category filter (consumer_zone.category_code)
         if ($category && $category !== '' && $category !== 'All Categories') {
-            $query->where(function($q) use ($category) {
-                $q->where('mrs.category', $category)
-                  ->orWhere('cz.category_code', $category);
-            });
+            $query->where('cz.category_code', $category);
         }
 
         // Apply billing cut-off filter
@@ -2102,21 +2098,23 @@ class ReportController extends Controller
             // Call the same internal logic to get detailRecords
             // We'll need to duplicate the core logic or refactor, but for now let's duplicate the key parts
             // Get available zones
-            $zones = MeterReadingSchedule::query()
-                ->select('zone')
-                ->whereNotNull('zone')
+            $zones = DB::table('consumer_zone')
+                ->select('zone_code')
+                ->whereNotNull('zone_code')
+                ->where('zone_code', '!=', '')
                 ->distinct()
-                ->orderBy('zone')
-                ->pluck('zone')
+                ->orderBy('zone_code')
+                ->pluck('zone_code')
                 ->toArray();
 
             // Get available categories
-            $categories = MeterReadingSchedule::query()
-                ->select('category')
-                ->whereNotNull('category')
+            $categories = DB::table('consumer_zone')
+                ->select('category_code')
+                ->whereNotNull('category_code')
+                ->where('category_code', '!=', '')
                 ->distinct()
-                ->orderBy('category')
-                ->pluck('category')
+                ->orderBy('category_code')
+                ->pluck('category_code')
                 ->toArray();
 
             // OPTIMIZATION: Only get unpaid bills from last 3 years
@@ -2134,8 +2132,7 @@ class ReportController extends Controller
                     'cz.account_name',
                     'cz.status_code',
                     'cz.category_code as consumer_category',
-                    'mrs.category as schedule_category',
-                    'mrs.zone as schedule_zone',
+                    'cz.zone_code as schedule_zone',
                     'mrs.id as schedule_id',
                     'mrs.due_date as mrs_due_date',
                     'cl.due_date as cl_due_date',
@@ -2168,18 +2165,12 @@ class ReportController extends Controller
 
             // Apply zone filter
             if ($zone && $zone !== '' && $zone !== 'All Zones') {
-                $query->where(function($q) use ($zone) {
-                    $q->where('cz.zone_code', $zone)
-                      ->orWhere('mrs.zone', $zone);
-                });
+                $query->where('cz.zone_code', $zone);
             }
 
             // Apply category filter
             if ($category && $category !== '' && $category !== 'All Categories') {
-                $query->where(function($q) use ($category) {
-                    $q->where('cz.category_code', $category)
-                      ->orWhere('mrs.category', $category);
-                });
+                $query->where('cz.category_code', $category);
             }
 
             $records = $query->get();
@@ -2481,6 +2472,25 @@ class ReportController extends Controller
                 ->with('error', 'Error exporting AR aging summary: ' . $e->getMessage());
         }
     }
+
+    /**
+     * Correlated subquery: latest stored balance from consumer_ledgers for a consumer_zone row.
+     */
+    protected function latestLedgerBalanceExpr(string $consumerZoneIdRef = 'id'): string
+    {
+        return "(SELECT cl.balance FROM consumer_ledgers cl
+            WHERE cl.consumer_zone_id = {$consumerZoneIdRef}
+            ORDER BY COALESCE(cl.txtime, cl.created_at) DESC, cl.id DESC
+            LIMIT 1)";
+    }
+
+    /**
+     * Latest ledger balance clamped to zero or positive (for unpaid totals).
+     */
+    protected function positiveLatestLedgerBalanceExpr(string $consumerZoneIdRef = 'id'): string
+    {
+        return 'GREATEST(COALESCE(' . $this->latestLedgerBalanceExpr($consumerZoneIdRef) . ', 0), 0)';
+    }
     
     /**
      * Visual Summary: KPIs, charts, and tables backed by the database.
@@ -2488,7 +2498,7 @@ class ReportController extends Controller
      * Query: zone_route (empty = all), bill_month (Y-m).
      * Consumer counts / status / arrears use a snapshot end of min(selected bill month end, today), with NULL created_at treated as included.
      * Monthly revenue KPI uses the selected bill month (clipped to today); the revenue line chart uses rolling 12 months to today.
-     * Top consumption: bill-month readings that are individually paid, active consumers with zero AR balance (FIFO or consumer_zone.balance), ranked by consumption; top outstanding uses FIFO total_balance when AR aging SQL runs (same as AR Aging), else consumer_zone.balance.
+     * Top consumption: bill-month readings that are individually paid, active consumers with zero AR balance (FIFO or latest consumer_ledgers.balance), ranked by consumption; top outstanding uses FIFO total_balance when AR aging SQL runs (same as AR Aging), else latest consumer_ledgers.balance.
      * Pending arrears / unpaid-by-zone FIFO: billing & aging as-of = bill-month snapshot end (min(month end, today));
      * payment cut-off = today so ledger payments through the run date apply (aligns with AR Aging when payment cut-off is later than billing).
      */
@@ -2547,11 +2557,12 @@ class ReportController extends Controller
             ->orderBy('zone_code')
             ->pluck('zone_code');
         $zonesFromSchedules = MeterReadingSchedule::query()
-            ->whereNotNull('zone')
-            ->where('zone', '!=', '')
+            ->joinConsumerZone()
+            ->whereNotNull('cz.zone_code')
+            ->where('cz.zone_code', '!=', '')
             ->distinct()
-            ->orderBy('zone')
-            ->pluck('zone');
+            ->orderBy('cz.zone_code')
+            ->pluck('cz.zone_code');
         $zoneOptions = $zonesFromConsumers->merge($zonesFromSchedules)->filter()->unique()->sort()->values();
 
         $totalConsumers = (int) $baseConsumerQuery()->count();
@@ -2584,16 +2595,16 @@ class ReportController extends Controller
             $q = DB::table('consumer_payments as cp')
                 ->leftJoin('downloaded_readings as dr', 'cp.reading_id', '=', 'dr.id')
                 ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-                ->leftJoin('consumer_zone as cz', 'cp.consumer_id', '=', 'cz.id')
+                ->leftJoin('consumer_zone as cz', 'cp.consumer_zone_id', '=', 'cz.id')
                 ->where(function ($w) {
                     $w->where('cp.payment_amount', '>', 0)
                         ->orWhere('cp.remarks', 'like', 'Cancelled OR#%');
                 });
             if ($zoneRoute !== '') {
                 $q->where(function ($w) use ($zoneRoute) {
-                    $w->where('dr.zone', $zoneRoute)
-                        ->orWhere('mrs.zone', $zoneRoute)
-                        ->orWhere('cz.zone_code', $zoneRoute);
+                    $w->where('cz.zone_code', $zoneRoute)
+                        ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zoneRoute])
+                        ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zoneRoute]);
                 });
             }
 
@@ -2667,12 +2678,11 @@ class ReportController extends Controller
             $pendingArrears = round($fifoArRows->sum(fn ($r) => (float) ($r->total_balance ?? 0)), 2);
         } catch (\Throwable $e) {
             try {
-                Log::warning('Visual summary AR aging total failed, using consumer_zone balances: ' . $e->getMessage());
+                Log::warning('Visual summary AR aging total failed, using consumer_ledgers balances: ' . $e->getMessage());
             } catch (\Throwable $e2) {
             }
-            $pendingArrears = (float) DB::table('consumer_zone')
-                ->when($zoneRoute !== '', fn ($q) => $q->where('zone_code', $zoneRoute))
-                ->sum(DB::raw('GREATEST(COALESCE(balance, 0), 0)'));
+            $pendingArrears = (float) $baseConsumerQuery()
+                ->sum(DB::raw($this->positiveLatestLedgerBalanceExpr('consumer_zone.id')));
         }
 
         // Collection Efficiency denominator (requested):
@@ -2712,7 +2722,7 @@ class ReportController extends Controller
             $disconnectedConsumers,
         ];
 
-        $zoneKeySql = 'COALESCE(dr.zone, mrs.zone, cz.zone_code)';
+        $zoneKeySql = 'cz.zone_code';
         // Collection Report "Summary by Zone" totals for the Visual Summary bill month (same joins, filters, date rules).
         $zoneCollectionsQuery = $collectionPaymentsBase();
         $applyCollectionReportDateRange($zoneCollectionsQuery, $periodStart, $periodEnd);
@@ -2769,10 +2779,11 @@ class ReportController extends Controller
                 ->sortBy(fn ($row) => $row->zone_code)
                 ->values();
         } else {
+            $ledgerBalanceExpr = $this->positiveLatestLedgerBalanceExpr('consumer_zone.id');
             $zoneUnpaidQuery = $baseConsumerQuery()
                 ->whereNotNull('zone_code')
                 ->where('zone_code', '!=', '')
-                ->select('zone_code', DB::raw('SUM(GREATEST(COALESCE(balance, 0), 0)) as total_unpaid'))
+                ->select('zone_code', DB::raw("SUM({$ledgerBalanceExpr}) as total_unpaid"))
                 ->groupBy('zone_code')
                 ->orderBy('zone_code');
 
@@ -2780,7 +2791,7 @@ class ReportController extends Controller
                 ? collect([(object) [
                     'zone_code' => $zoneRoute,
                     'total_unpaid' => round((float) $baseConsumerQuery()
-                        ->sum(DB::raw('GREATEST(COALESCE(balance, 0), 0)')), 2),
+                        ->sum(DB::raw($ledgerBalanceExpr)), 2),
                 ]])
                 : $zoneUnpaidQuery->get();
         }
@@ -2803,7 +2814,7 @@ class ReportController extends Controller
                 ->unique();
         }
         $storedOutstandingIds = $baseConsumerQuery()
-            ->whereRaw('COALESCE(balance, 0) > 0.01')
+            ->whereRaw($this->positiveLatestLedgerBalanceExpr('consumer_zone.id') . ' > 0.01')
             ->pluck('id');
         $excludeConsumerIds = $outstandingConsumerIds
             ->merge($storedOutstandingIds)
@@ -2815,28 +2826,23 @@ class ReportController extends Controller
         $paidReadingSql = "(LOWER(TRIM(COALESCE(dr.status, ''))) = 'paid' OR ({$readingPaidSql}) + 0.01 >= ({$readingBillSql}))";
 
         $topConsumptionQuery = DB::table('downloaded_readings as dr')
-            ->join('consumer_zone as cz', function ($join) {
-                $join->whereRaw(
-                    'TRIM(dr.account_number) COLLATE utf8mb4_unicode_ci = TRIM(cz.account_no) COLLATE utf8mb4_unicode_ci'
-                );
-            })
+            ->join('consumer_zone as cz', 'dr.consumer_zone_id', '=', 'cz.id')
             ->select(
                 'cz.id as consumer_zone_id',
                 'cz.account_no as account_number',
                 'cz.account_name',
-                DB::raw('COALESCE(MAX(dr.zone), cz.zone_code) as zone'),
+                'cz.zone_code as zone',
                 DB::raw('SUM(COALESCE(dr.consumption, 0)) as total_consumption'),
                 DB::raw('SUM(COALESCE(dr.current_bill, 0)) as total_amount'),
                 DB::raw("SUM({$readingBillSql}) as total_amount_billed"),
                 DB::raw("SUM({$readingPaidSql}) as total_amount_paid")
             )
             ->whereBetween('dr.reading_date', [$periodStart->toDateString(), $periodEnd->toDateString()])
-            ->whereNotNull('dr.account_number')
-            ->whereRaw("TRIM(dr.account_number) <> ''")
+            ->whereNotNull('dr.consumer_zone_id')
             ->whereNotNull('cz.account_name')
             ->whereRaw("TRIM(cz.account_name) <> ''")
             ->whereRaw($activeStatusSql)
-            ->whereRaw('COALESCE(cz.balance, 0) <= 0.01')
+            ->whereRaw('COALESCE(' . $this->latestLedgerBalanceExpr('cz.id') . ', 0) <= 0.01')
             ->whereRaw($paidReadingSql)
             ->when($excludeConsumerIds->isNotEmpty(), function ($q) use ($excludeConsumerIds) {
                 $q->whereNotIn('cz.id', $excludeConsumerIds->all());
@@ -2848,10 +2854,9 @@ class ReportController extends Controller
                 });
             })
             ->when($zoneRoute !== '', function ($q) use ($zoneRoute) {
-                $q->where(function ($w) use ($zoneRoute) {
-                    $w->where('dr.zone', $zoneRoute)
-                        ->orWhere('cz.zone_code', $zoneRoute);
-                });
+                $q->where('cz.zone_code', $zoneRoute)
+                    ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zoneRoute])
+                    ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zoneRoute]);
             })
             ->groupBy('cz.id', 'cz.account_no', 'cz.account_name', 'cz.zone_code')
             ->havingRaw('SUM(COALESCE(dr.consumption, 0)) > 0')
@@ -2862,7 +2867,7 @@ class ReportController extends Controller
         $topConsumption = $topConsumptionQuery->get();
 
         // Top outstanding: use FIFO total_balance (same as AR Aging detail "balance") when available;
-        // otherwise consumer_zone.balance (stored field may differ from ledgers until sync).
+        // otherwise latest consumer_ledgers.balance per consumer.
         if ($fifoArRows->isNotEmpty()) {
             $fifoConsumerIds = $fifoArRows->pluck('consumer_zone_id')->filter()->unique()->values();
             $metaQuery = DB::table('consumer_zone')->whereIn('id', $fifoConsumerIds)
@@ -2895,10 +2900,15 @@ class ReportController extends Controller
                 ->take(10)
                 ->values();
         } else {
+            $ledgerBalanceExpr = $this->positiveLatestLedgerBalanceExpr('consumer_zone.id');
             $topOutstanding = $baseConsumerQuery()
                 ->whereRaw("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')")
-                ->select('account_name', 'zone_code', 'balance')
-                ->where('balance', '>', 0)
+                ->select(
+                    'account_name',
+                    'zone_code',
+                    DB::raw("{$ledgerBalanceExpr} as balance")
+                )
+                ->whereRaw("{$ledgerBalanceExpr} > 0.01")
                 ->orderByDesc('balance')
                 ->orderByDesc('id')
                 ->limit(10)
