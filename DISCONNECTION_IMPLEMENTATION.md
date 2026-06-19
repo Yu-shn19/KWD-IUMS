@@ -17,7 +17,7 @@
 #### New Model
 - **File**: `app/Models/DisconnectionOrder.php`
 - **Methods**:
-  - `consumer()` - relationship to ConsumerZoneOne
+  - `consumer()` - relationship to ConsumerZone
   - `disconnector()` - relationship to User
   - `assignTo($disconnectorId)` - assign order
   - `markAsDisconnected()` - update status

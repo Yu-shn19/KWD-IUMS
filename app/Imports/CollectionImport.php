@@ -2,7 +2,8 @@
 
 namespace App\Imports;
 
-use App\Models\Collection;
+use App\Models\ConsumerPayment;
+use App\Models\ConsumerZone;
 use Carbon\Carbon;
 use Maatwebsite\Excel\Concerns\ToModel;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
@@ -10,6 +11,16 @@ use Maatwebsite\Excel\Concerns\SkipsOnFailure;
 use Maatwebsite\Excel\Concerns\SkipsFailures;
 use Maatwebsite\Excel\Concerns\WithChunkReading;
 use Illuminate\Support\Facades\Log;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 class CollectionImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithChunkReading
 {
@@ -379,24 +390,70 @@ class CollectionImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithC
                     $collectionData[$key] = trim($value);
                 }
             }
-            
-            // Create and save the collection entry
-            $collection = Collection::create($collectionData);
-            
-            if ($collection && $collection->id) {
-                $this->importedCount++;
-                Log::info("Collection entry created successfully", [
-                    'id' => $collection->id,
-                    'account_no' => $collectionData['account_no'] ?? null,
-                    'or_number' => $collectionData['or_number'] ?? null
-                ]);
-                return $collection;
-            } else {
+
+            $cancel = strtoupper(trim((string) ($collectionData['cancel'] ?? '')));
+            if (in_array($cancel, ['Y', 'YES', '1'], true)) {
                 $this->skippedCount++;
-                $this->errors[] = "Row {$rowCount}: Failed to create collection row";
-                Log::warning("Failed to create collection row", ['data' => $collectionData]);
                 return null;
             }
+
+            $accountNo = trim((string) ($collectionData['account_no'] ?? ''));
+            if ($accountNo === '') {
+                $this->skippedCount++;
+                $this->errors[] = "Row {$rowCount}: Missing account number";
+                return null;
+            }
+
+            $consumer = ConsumerZone::query()->where(mr_col('account_no'), $accountNo)->first();
+            if (!$consumer) {
+                $normalized = str_replace('-', '', $accountNo);
+                $consumer = ConsumerZone::query()->whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])->first();
+            }
+
+            if (!$consumer) {
+                $this->skippedCount++;
+                $this->errors[] = "Row {$rowCount}: Consumer not found for account {$accountNo}";
+                return null;
+            }
+
+            $paidAt = null;
+            if ($collDate) {
+                $paidAt = $collDate . ' ' . ($collTime ?: '00:00:00');
+            }
+
+            $paymentPayload = ConsumerPayment::filterTableAttributes([
+                'consumer_zone_id' => $consumer->id,
+                'payment_method' => $collectionData['pay_mode'] ?? null,
+                'payment_amount' => (float) ($collectionData['pay_amount'] ?? 0),
+                'senior_citizen_discount' => (float) ($collectionData['sc_discount'] ?? 0),
+                'current_bill' => (float) ($collectionData['current_bill'] ?? 0),
+                'penalty' => (float) ($collectionData['penalty'] ?? 0),
+                'meter_maintenance' => (float) ($collectionData['meter_rental'] ?? 0),
+                'arrears_cy' => (float) ($collectionData['arrears'] ?? 0),
+                'arrears_py' => (float) ($collectionData['prev_yr'] ?? 0),
+                'others' => (float) ($collectionData['others'] ?? 0),
+                'advances' => (float) ($collectionData['advances'] ?? 0),
+                'or_number' => $collectionData['or_number'] ?? null,
+                'paid_at' => $paidAt,
+                'created_by' => $collectionData['username'] ?? null,
+            ]);
+
+            $payment = ConsumerPayment::create($paymentPayload);
+
+            if ($payment && $payment->id) {
+                $this->importedCount++;
+                Log::info('Consumer payment created from collection import', [
+                    'id' => $payment->id,
+                    'account_no' => $accountNo,
+                    'or_number' => $paymentPayload['or_number'] ?? null,
+                ]);
+                return $payment;
+            }
+
+            $this->skippedCount++;
+            $this->errors[] = "Row {$rowCount}: Failed to create payment row";
+            Log::warning('Failed to create consumer payment from import row', ['data' => $paymentPayload]);
+            return null;
         } catch (\Exception $e) {
             $this->skippedCount++;
             $this->errors[] = "Row {$rowCount}: Error importing row - " . $e->getMessage();

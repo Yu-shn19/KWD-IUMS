@@ -7,8 +7,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 
 class UserController extends Controller
 {
@@ -165,9 +165,15 @@ class UserController extends Controller
     public function updateProfile(Request $request)
     {
         $user = Auth::user();
+        if (!$user instanceof User) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
 
         // Log request data for debugging
-        \Log::info('Profile update request', [
+        Log::info('Profile update request', [
             'has_file' => $request->hasFile('profile_picture'),
             'all_files' => array_keys($request->allFiles()),
             'request_keys' => array_keys($request->all())
@@ -221,7 +227,7 @@ class UserController extends Controller
             ];
 
             // Handle profile picture upload
-            \Log::info('Checking for profile picture file', [
+            Log::info('Checking for profile picture file', [
                 'has_file' => $request->hasFile('profile_picture'),
                 'all_files' => array_keys($request->allFiles()),
                 'content_type' => $request->header('Content-Type'),
@@ -233,7 +239,7 @@ class UserController extends Controller
                     $file = $request->file('profile_picture');
                     
                     // Log file info for debugging
-                    \Log::info('Profile picture upload attempt', [
+                    Log::info('Profile picture upload attempt', [
                         'user_id' => $user->id,
                         'file_name' => $file->getClientOriginalName(),
                         'file_size' => $file->getSize(),
@@ -244,7 +250,7 @@ class UserController extends Controller
                     ]);
                     
                     if (!$file->isValid()) {
-                        \Log::error('Invalid file uploaded', [
+                        Log::error('Invalid file uploaded', [
                             'error_code' => $file->getError(),
                             'error_message' => $file->getErrorMessage()
                         ]);
@@ -255,21 +261,21 @@ class UserController extends Controller
                     $directory = public_path('WDMS/profile-pictures');
                     if (!File::exists($directory)) {
                         File::makeDirectory($directory, 0755, true);
-                        \Log::info('Created profile-pictures directory', ['path' => $directory]);
+                        Log::info('Created profile-pictures directory', ['path' => $directory]);
                     }
                     
                     // Delete old profile picture if exists
                     $oldPicturePath = public_path('WDMS/profile-pictures/' . $user->profile_picture);
                     if ($user->profile_picture && File::exists($oldPicturePath)) {
                         File::delete($oldPicturePath);
-                        \Log::info('Deleted old profile picture', ['filename' => $user->profile_picture]);
+                        Log::info('Deleted old profile picture', ['filename' => $user->profile_picture]);
                     }
 
                     // Store new profile picture in public/WDMS/profile-pictures
                     $filename = 'user_' . $user->id . '_' . time() . '.' . $file->getClientOriginalExtension();
                     $file->move($directory, $filename);
                     
-                    \Log::info('Profile picture stored', [
+                    Log::info('Profile picture stored', [
                         'filename' => $filename,
                         'path' => $directory . '/' . $filename,
                         'full_path' => public_path('WDMS/profile-pictures/' . $filename),
@@ -281,7 +287,7 @@ class UserController extends Controller
                     
                     $data['profile_picture'] = $filename;
                 } catch (\Exception $e) {
-                    \Log::error('Error uploading profile picture', [
+                    Log::error('Error uploading profile picture', [
                         'error' => $e->getMessage(),
                         'trace' => $e->getTraceAsString()
                     ]);
@@ -292,7 +298,7 @@ class UserController extends Controller
                     ], 500);
                 }
             } else {
-                \Log::info('No profile picture file in request', [
+                Log::info('No profile picture file in request', [
                     'has_file' => $request->hasFile('profile_picture'),
                     'all_files' => $request->allFiles(),
                     'request_all' => array_keys($request->all()),
@@ -310,7 +316,7 @@ class UserController extends Controller
             // Refresh user to get updated data
             $user->refresh();
 
-            \Log::info('Profile updated successfully', [
+            Log::info('Profile updated successfully', [
                 'user_id' => $user->id,
                 'profile_picture' => $user->profile_picture,
                 'updated_fields' => array_keys($data)

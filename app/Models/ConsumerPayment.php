@@ -8,6 +8,16 @@ use App\Models\ConsumerLedger;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class ConsumerPayment extends Model
 {
     use HasFactory;
@@ -33,9 +43,64 @@ class ConsumerPayment extends Model
         'created_by',
     ];
 
+    protected $casts = [
+        'paid_at' => 'datetime',
+    ];
+
+    public function scopeImportable($query)
+    {
+        return $query
+            ->whereNotNull(mr_col('consumer_zone_id'))
+            ->whereNotNull(mr_col('paid_at'))
+            ->where(mr_col('payment_amount'), '>', 0);
+    }
+
+    public function scopeForAccountNo($query, string $accountNo)
+    {
+        return $query->whereHas('consumerZone', function ($q) use ($accountNo) {
+            $q->where(mr_col('account_no'), $accountNo);
+        });
+    }
+
+    /** Legacy alias: collection import/sync used coll_date (date portion of paid_at). */
+    public function getCollDateAttribute(): ?\Carbon\Carbon
+    {
+        return $this->paid_at ? \Carbon\Carbon::parse($this->paid_at)->copy()->startOfDay() : null;
+    }
+
+    /** Legacy alias: collection import/sync used coll_time (time portion of paid_at). */
+    public function getCollTimeAttribute(): ?string
+    {
+        return $this->paid_at ? \Carbon\Carbon::parse($this->paid_at)->format('H:i:s') : null;
+    }
+
+    /** Legacy alias for payment_amount. */
+    public function getPayAmountAttribute()
+    {
+        return $this->payment_amount;
+    }
+
+    /** Legacy alias for senior_citizen_discount. */
+    public function getScDiscountAttribute()
+    {
+        return $this->senior_citizen_discount;
+    }
+
+    /** Legacy alias for created_by. */
+    public function getUsernameAttribute(): ?string
+    {
+        return $this->created_by;
+    }
+
+    /** Account number via consumer_zone relationship. */
+    public function getAccountNoAttribute(): ?string
+    {
+        return $this->consumerZone?->account_no;
+    }
+
     public function consumerZone()
     {
-        return $this->belongsTo(ConsumerZoneOne::class, 'consumer_zone_id');
+        return $this->belongsTo(ConsumerZone::class, 'consumer_zone_id');
     }
 
     /** @deprecated Use consumer_zone_id */
@@ -55,11 +120,11 @@ class ConsumerPayment extends Model
         }
 
         if (Schema::hasColumn($this->getTable(), 'consumer_zone_id')) {
-            return $query->where('consumer_zone_id', $consumerZoneId);
+            return $query->where(mr_col('consumer_zone_id'), $consumerZoneId);
         }
 
         if (Schema::hasColumn($this->getTable(), 'consumer_id')) {
-            return $query->where('consumer_id', $consumerZoneId);
+            return $query->where(mr_col('consumer_id'), $consumerZoneId);
         }
 
         return $query->whereRaw('0 = 1');
@@ -105,8 +170,9 @@ class ConsumerPayment extends Model
     public function ledgerEntry()
     {
         if ($this->id) {
-            $ledgerEntry = ConsumerLedger::where('consumer_payment_id', $this->id)
-                ->where('trans', 'PAYMENT')
+            $ledgerEntry = ConsumerLedger::query()
+                ->where(mr_col('consumer_payment_id'), $this->id)
+                ->where(mr_col('trans'), 'PAYMENT')
                 ->first();
 
             if ($ledgerEntry) {
@@ -119,24 +185,25 @@ class ConsumerPayment extends Model
             return null;
         }
 
-        $query = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-            ->where('trans', 'PAYMENT');
+        $query = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->where(mr_col('trans'), 'PAYMENT');
 
         if ($this->or_number) {
-            $query->where('reference', $this->or_number);
+            $query->where(mr_col('reference'), $this->or_number);
         }
 
         if ($this->payment_amount) {
-            $query->where('credit', $this->payment_amount);
+            $query->where(mr_col('credit'), $this->payment_amount);
         }
 
-        return $query->orderBy('id', 'desc')->first();
+        return $query->orderBy(mr_col('id'), 'desc')->first();
     }
 
     public function ledgerEntries()
     {
         return $this->hasMany(ConsumerLedger::class, 'consumer_payment_id')
-            ->where('trans', 'PAYMENT');
+            ->where(mr_col('trans'), 'PAYMENT');
     }
 
     protected static function boot()
@@ -144,37 +211,41 @@ class ConsumerPayment extends Model
         parent::boot();
 
         static::deleting(function ($payment) {
-            $ledgerEntry = ConsumerLedger::where('consumer_payment_id', $payment->id)
-                ->where('trans', 'PAYMENT')
+            $ledgerEntry = ConsumerLedger::query()
+                ->where(mr_col('consumer_payment_id'), $payment->id)
+                ->where(mr_col('trans'), 'PAYMENT')
                 ->first();
 
             $consumerZoneId = $payment->consumer_zone_id ?? $payment->consumer_id;
 
             if (!$ledgerEntry && $consumerZoneId) {
                 if ($payment->or_number && $payment->payment_amount) {
-                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                        ->where('trans', 'PAYMENT')
-                        ->where('reference', $payment->or_number)
-                        ->where('credit', $payment->payment_amount)
-                        ->orderBy('id', 'desc')
+                    $ledgerEntry = ConsumerLedger::query()
+                        ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                        ->where(mr_col('trans'), 'PAYMENT')
+                        ->where(mr_col('reference'), $payment->or_number)
+                        ->where(mr_col('credit'), $payment->payment_amount)
+                        ->orderBy(mr_col('id'), 'desc')
                         ->first();
                 }
 
                 if (!$ledgerEntry && $payment->or_number) {
-                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                        ->where('trans', 'PAYMENT')
-                        ->where('reference', $payment->or_number)
-                        ->orderBy('id', 'desc')
+                    $ledgerEntry = ConsumerLedger::query()
+                        ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                        ->where(mr_col('trans'), 'PAYMENT')
+                        ->where(mr_col('reference'), $payment->or_number)
+                        ->orderBy(mr_col('id'), 'desc')
                         ->first();
                 }
 
                 if (!$ledgerEntry && $payment->payment_amount && $payment->paid_at) {
                     $paymentDate = \Carbon\Carbon::parse($payment->paid_at)->format('Y-m-d');
-                    $ledgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                        ->where('trans', 'PAYMENT')
-                        ->where('credit', $payment->payment_amount)
-                        ->where('date', $paymentDate)
-                        ->orderBy('id', 'desc')
+                    $ledgerEntry = ConsumerLedger::query()
+                        ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                        ->where(mr_col('trans'), 'PAYMENT')
+                        ->where(mr_col('credit'), $payment->payment_amount)
+                        ->where(mr_col('date'), $paymentDate)
+                        ->orderBy(mr_col('id'), 'desc')
                         ->first();
                 }
             }

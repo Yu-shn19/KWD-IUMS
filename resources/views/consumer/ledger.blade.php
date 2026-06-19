@@ -672,7 +672,7 @@
 
                 $('#printAcctNo').text(consumer.account_no || sess.account_no || '');
                 $('#printName').text(consumer.account_name || sess.account_name || '');
-                $('#printAddress').text(consumer.address1 || sess.address1 || '');
+                $('#printAddress').text(consumer.address || sess.address || '');
                 $('#printZone').text(consumer.zone_code || sess.zone_code || '');
                 const seq = consumer.sequence != null && consumer.sequence !== '' ? consumer.sequence : (sess.sequence != null && sess.sequence !== '' ? sess.sequence : '');
                 $('#printCard').text(seq !== '' ? String(seq) : '');
@@ -755,7 +755,7 @@
                 if (consumer) {
                     const accountNo = (consumer.account_no || consumer.account_number || '').toString().trim();
                     const accountName = (consumer.account_name || consumer.name || '').toString().trim();
-                    const accountAddress = (consumer.address || consumer.address1 || '').toString().trim();
+                    const accountAddress = (consumer.address || '').toString().trim();
                     const badgeParts = [accountNo, accountName];
                     if (accountAddress) badgeParts.push(accountAddress);
                     $('#ledgerAccountBadge').text(`Account: ${badgeParts.filter(Boolean).join(' - ')}`);

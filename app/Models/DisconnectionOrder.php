@@ -91,7 +91,7 @@ class DisconnectionOrder extends Model
 
     public function consumerZone(): BelongsTo
     {
-        return $this->belongsTo(ConsumerZoneOne::class, static::consumerZoneIdColumn());
+        return $this->belongsTo(ConsumerZone::class, static::consumerZoneIdColumn());
     }
 
     /** @deprecated Use consumerZone() */

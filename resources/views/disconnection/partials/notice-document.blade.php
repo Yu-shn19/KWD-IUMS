@@ -37,7 +37,7 @@
                 </div>
                 <div class="nd-soa-row nd-address-row">
                     <span class="nd-soa-label">Address:</span>
-                    <span class="nd-soa-value">{{ $consumer->address1 }}</span>
+                    <span class="nd-soa-value">{{ $consumer->address }}</span>
                 </div>
                 <div class="nd-soa-row">
                     <span class="nd-soa-label">Zone:</span>

@@ -1972,7 +1972,7 @@
         //     // Update header address
         //     const headerAddress = document.getElementById('consumerHeaderAddress');
         //     if (headerAddress) {
-        //         const addr = [consumer.address, consumer.address2 || consumer.address_2].filter(Boolean).join(' ').trim();
+        //         const addr = (consumer.address || '').trim();
         //         headerAddress.textContent = addr || '—';
         //     }
 
@@ -2072,9 +2072,7 @@
 
             const headerAddress = document.getElementById('consumerHeaderAddress');
             if (headerAddress) {
-                const a1 = (consumer.address || '').trim();
-                const a2 = (consumer.address2 || consumer.address_2 || '').trim();
-                headerAddress.textContent = [a1, a2].filter(Boolean).join(' ') || '—';
+                headerAddress.textContent = (consumer.address || '').trim() || '—';
             }
 
             // Update header status badge - use status_label or status_code
@@ -2082,7 +2080,7 @@
             if (headerStatus) {
                 headerStatus.textContent = statusText + ' Consumer';
                 
-                // Badge colors: Active / Pending / Disconnected (matches ConsumerZoneOne::status_label)
+                // Badge colors: Active / Pending / Disconnected (matches ConsumerZone::status_label)
                 headerStatus.className = 'badge';
                 if (statusUpper === 'ACTIVE' || statusUpper === 'A') {
                     headerStatus.classList.add('bg-success');

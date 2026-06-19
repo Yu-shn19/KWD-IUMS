@@ -7,6 +7,16 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class DisconnectionNotificationController extends Controller
 {
     /**
@@ -17,11 +27,15 @@ class DisconnectionNotificationController extends Controller
         $since = $request->query('since');
         $sinceCarbon = $since ? Carbon::parse($since) : now()->subMinutes(30);
 
-        $orders = DisconnectionOrder::with('disconnector')
-            ->where('status', 'disconnected')
-            ->whereNotNull('disconnected_at')
-            ->where('disconnected_at', '>', $sinceCarbon)
-            ->orderBy('disconnected_at', 'desc')
+        $doStatus = mr_col('status');
+        $doDisconnectedAt = mr_col('disconnected_at');
+
+        $orders = DisconnectionOrder::query()
+            ->with('disconnector')
+            ->where($doStatus, 'disconnected')
+            ->whereNotNull($doDisconnectedAt)
+            ->where($doDisconnectedAt, '>', $sinceCarbon)
+            ->orderBy($doDisconnectedAt, 'desc')
             ->limit(20)
             ->get();
 

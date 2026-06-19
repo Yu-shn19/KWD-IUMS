@@ -4,8 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\BillingAdjustment;
 use App\Models\ConsumerLedger;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use App\Models\LROLedger;
+use App\Support\SundryAccountCodes;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -19,15 +20,24 @@ class BillingAdjustmentController extends Controller
      */
     public function index()
     {
-        $billingAdjustments = BillingAdjustment::with('consumerZone')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+        $this->purgeStalePendingLroLedgerRows();
+
+        $dateColumn = 'date';
+        $billingIdColumn = (new BillingAdjustment)->getKeyName();
+        $lroIdColumn = (new LROLedger)->getKeyName();
+
+        $billingAdjustments = BillingAdjustment::query()
+            ->with('consumerZone')
+            ->orderBy($dateColumn, 'desc')
+            ->orderBy($billingIdColumn, 'desc')
             ->get();
 
-        // LRO BAM entries stored in lro_ledger table
-        $lroEntries = LROLedger::with('consumerZone')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+        // LRO BAM entries stored in lro_ledger table (approved/paid — pending lives in billing_adjustments)
+        $lroEntries = LROLedger::query()
+            ->with('consumerZone')
+            ->whereRaw($this->lroLedgerListedStatusesRaw())
+            ->orderBy($dateColumn, 'desc')
+            ->orderBy($lroIdColumn, 'desc')
             ->get();
 
         $previewBamNo = $this->generateBamNumber();
@@ -38,25 +48,90 @@ class BillingAdjustmentController extends Controller
     /**
      * Show the form for editing a billing adjustment
      */
-    public function edit($id)
+    public function edit(int $id)
     {
+        $dateColumn = 'date';
+        $billingIdColumn = (new BillingAdjustment)->getKeyName();
+        $lroIdColumn = (new LROLedger)->getKeyName();
+
         $billingAdjustment = BillingAdjustment::with(['consumerLedgers', 'consumerZone'])->findOrFail($id);
-        $billingAdjustments = BillingAdjustment::with('consumerZone')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+
+        if ($this->isPaidArCm($billingAdjustment)) {
+            return redirect()
+                ->route('billing-adjustment')
+                ->with('error', 'Paid AR CM entries cannot be edited.');
+        }
+        $billingAdjustments = BillingAdjustment::query()
+            ->with('consumerZone')
+            ->orderBy($dateColumn, 'desc')
+            ->orderBy($billingIdColumn, 'desc')
             ->get();
-        $lroEntries = LROLedger::with('consumerZone')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+        $lroEntries = LROLedger::query()
+            ->with('consumerZone')
+            ->whereRaw($this->lroLedgerListedStatusesRaw())
+            ->orderBy($dateColumn, 'desc')
+            ->orderBy($lroIdColumn, 'desc')
             ->get();
         $previewBamNo = $this->generateBamNumber();
         return view('transaction.billing_adjustment', compact('billingAdjustment', 'billingAdjustments', 'lroEntries', 'previewBamNo'));
     }
 
     /**
+     * Delete a paid AR CM billing adjustment (removes consumer ledger rows and recalculates balances).
+     */
+    public function destroyAr(int $id)
+    {
+        try {
+            DB::beginTransaction();
+
+            $billingAdjustment = BillingAdjustment::with('consumerLedgers')->findOrFail($id);
+
+            if (!$this->isPaidArCm($billingAdjustment)) {
+                DB::rollBack();
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only paid AR CM entries can be deleted from the list.',
+                ], 422);
+            }
+
+            $ledger = $billingAdjustment->consumerLedgers->first();
+            $consumerZoneId = $ledger
+                ? (int) $ledger->consumer_zone_id
+                : (int) ($billingAdjustment->consumer_zone_id ?? 0);
+            $fromDateTime = $ledger && $ledger->txtime
+                ? Carbon::parse($ledger->txtime)->format('Y-m-d H:i:s')
+                : ($billingAdjustment->date
+                    ? Carbon::parse($billingAdjustment->date)->format('Y-m-d 00:00:00')
+                    : null);
+
+            $billingAdjustment->delete();
+
+            if ($consumerZoneId > 0 && $fromDateTime) {
+                $this->recalculateBalancesFrom($consumerZoneId, $fromDateTime);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Paid AR CM billing adjustment deleted successfully.',
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('destroyAr failed', ['id' => $id, 'error' => $e->getMessage()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete billing adjustment: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Get billing adjustment data for editing
      */
-    public function show($id)
+    public function show(int $id)
     {
         $billingAdjustment = BillingAdjustment::with(['consumerLedgers', 'consumerZone'])->findOrFail($id);
         return response()->json([
@@ -84,7 +159,7 @@ class BillingAdjustmentController extends Controller
             'loans' => 'nullable|numeric|min:0',
             'others' => 'nullable|numeric|min:0',
             'remarks' => 'nullable|string',
-            'status' => 'required|in:Pending,Approved,Cancelled',
+            'status' => 'required|string|max:20',
             'connect_reading' => 'nullable|integer|min:0',
         ]);
 
@@ -100,6 +175,12 @@ class BillingAdjustmentController extends Controller
                     'success' => false,
                     'message' => 'Account not found: ' . $request->account_no
                 ], 404);
+            }
+
+            if ($reject = $this->rejectSundryBamRules($request->acct_code, $request->ledger, $request->type)) {
+                DB::rollBack();
+
+                return $reject;
             }
 
             // Generate auto BAM number (format: BAM-YYYYMMDD-XXXXX)
@@ -140,6 +221,11 @@ class BillingAdjustmentController extends Controller
                 $credit = 0;
             }
 
+            $status = $this->normalizeBillingStatus(
+                $request->status,
+                strtoupper((string) $request->type) === 'CM' && strtoupper((string) $request->ledger) === 'AR'
+            );
+
             // Create billing adjustment record (account_no lives on consumer_zone via consumer_zone_id)
             $billingAdjustment = BillingAdjustment::create($this->buildBillingAdjustmentAttributes([
                 'type' => $request->type,
@@ -156,29 +242,34 @@ class BillingAdjustmentController extends Controller
                 'loans' => (float)($request->loans ?? 0),
                 'others' => (float)($request->others ?? 0),
                 'remarks' => $request->remarks,
-                'status' => $this->normalizeArStatus($request->status),
+                'status' => $status,
                 'connect_reading' => (int)($request->connect_reading ?? 0),
                 'username' => $this->authUsername(),
             ]));
 
-            // Create consumer ledger entry
-            $ledger = ConsumerLedger::create([
-                'consumer_zone_id' => $consumerZone->id,
-                'billing_adjustment_id' => $billingAdjustment->id,
-                'trans' => $request->type, // Use actual type: CM or DM
-                'date' => $date,
-                'due_date' => null,
-                'reading' => 0,
-                'volume' => 0,
-                'billamount' => 0,
-                'penalty' => 0,
-                'others' => 0,
-                'debit' => $debit,
-                'credit' => $credit,
-                'balance' => $newBalance,
-                'username' => $this->authUsername(),
-                'txtime' => $dateTime,
-            ]);
+            if ($this->shouldPostToConsumerLedgerForBam($status, $request->acct_code, $request->ledger)) {
+                ConsumerLedger::create([
+                    'consumer_zone_id' => $consumerZone->id,
+                    'billing_adjustment_id' => $billingAdjustment->id,
+                    'trans' => $request->type,
+                    'date' => $date,
+                    'due_date' => null,
+                    'reading' => 0,
+                    'volume' => 0,
+                    'billamount' => 0,
+                    'penalty' => 0,
+                    'others' => 0,
+                    'debit' => $debit,
+                    'credit' => $credit,
+                    'balance' => $newBalance,
+                    'username' => $this->authUsername(),
+                    'txtime' => $dateTime,
+                ]);
+
+                $this->recalculateSubsequentBalances($consumerZone->id, $dateTime, $newBalance);
+            } else {
+                $this->removeMatchingLroLedgerRows($billingAdjustment);
+            }
 
             DB::commit();
 
@@ -209,18 +300,34 @@ class BillingAdjustmentController extends Controller
      * removes the consumer_ledger and billing_adjustments record and creates a fresh lro_ledger entry.
      * Otherwise maps new-UI field names to the existing update() implementation.
      */
-    public function updateFromNewUi(Request $request, $id)
+    public function updateFromNewUi(Request $request,int $id)
     {
         $ar = strtoupper((string) $request->input('ar', 'AR'));
         $status = strtoupper((string) $request->input('status', 'Pending'));
+        $requestType = strtoupper((string) $request->input('type', 'CM'));
 
-        // Prevent silent AR -> LRO migration when user sets status to Paid/Posted.
-        // Moving to LRO must be explicit via ledger selection.
-        if ($ar !== 'LRO' && $status === 'POSTED') {
+        $existingBillingAdjustment = BillingAdjustment::findOrFail($id);
+        if ($this->isPaidArCm($existingBillingAdjustment)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Paid status is only allowed in LRO ledger. Set Ledger to LRO to continue.',
+                'message' => 'Paid AR CM entries cannot be edited. Use Delete from the list.',
             ], 422);
+        }
+
+        // Paid status is allowed for AR CM and LRO entries only.
+        if ($ar !== 'LRO' && $status === 'POSTED' && $requestType !== 'CM') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Paid status is only allowed for CM entries.',
+            ], 422);
+        }
+
+        if ($reject = $this->rejectSundryBamRules(
+            $request->input('acct_code'),
+            $ar,
+            $request->input('type', 'CM')
+        )) {
+            return $reject;
         }
 
         // ── Explicit AR → LRO switch ─────────────────────────────────────────────
@@ -228,11 +335,12 @@ class BillingAdjustmentController extends Controller
             try {
                 DB::beginTransaction();
 
-                // Remove the consumer_ledger row linked to this billing_adjustment
-                ConsumerLedger::where('billing_adjustment_id', $id)->delete();
-
-                // Remove the billing_adjustment record itself
-                BillingAdjustment::where('id', $id)->delete();
+                $billingAdjustmentIdColumn = 'billing_adjustment_id';
+                $idColumn = (new BillingAdjustment)->getKeyName();
+                $billingAdjustment = BillingAdjustment::findOrFail($id);
+                $existingLedger = ConsumerLedger::query()
+                    ->where($billingAdjustmentIdColumn, $id)
+                    ->first();
 
                 $type = $request->input('type', 'CM');
                 if (!in_array($type, ['CM', 'DM'], true)) {
@@ -247,29 +355,75 @@ class BillingAdjustmentController extends Controller
                     return response()->json(['success' => false, 'message' => 'Account not found: ' . $accountNo], 404);
                 }
 
-                $entry = LROLedger::create($this->buildLroLedgerAttributes([
+                if ($this->shouldPostToLroLedger($status)) {
+                    if ($existingLedger) {
+                        $oldConsumerZoneId = (int) $existingLedger->consumer_zone_id;
+                        $oldDateTime = $existingLedger->txtime
+                            ? Carbon::parse($existingLedger->txtime)->format('Y-m-d H:i:s')
+                            : Carbon::parse($billingAdjustment->date)->format('Y-m-d H:i:s');
+                        $existingLedger->delete();
+                        $this->recalculateBalancesFrom($oldConsumerZoneId, $oldDateTime);
+                    }
+
+                    $preservedBamNo = $request->input('bam_no') ?: $billingAdjustment->bam_no;
+
+                    BillingAdjustment::query()->where($idColumn, $id)->delete();
+
+                    $lroStatus = $this->resolveLroLedgerStatus($status);
+
+                    $entry = LROLedger::create($this->buildLroLedgerAttributes(array_merge([
+                        'type'            => $type,
+                        'ledger'          => 'LRO',
+                        'date'            => $request->input('date') ?: null,
+                        'consumer_zone_id'=> $consumerZone?->id,
+                        'bam_no'          => $preservedBamNo,
+                        'amount'          => (float)($request->input('amount', 0)),
+                        'acct_code'       => $request->input('acct_code'),
+                        'remarks'         => $request->input('remarks'),
+                        'correct_reading' => (float)($request->input('correct_reading', 0)),
+                    ], $lroStatus)));
+
+                    DB::commit();
+
+                    return response()->json([
+                        'success' => true,
+                        'message' => $this->isPaidStatus($status)
+                            ? 'Marked as paid; record moved to LRO ledger.'
+                            : 'Approved; record moved to LRO ledger.',
+                        'data'    => ['id' => $entry->id, 'bam_no' => $entry->bam_no],
+                    ]);
+                }
+
+                if ($existingLedger) {
+                    $oldConsumerZoneId = (int) $existingLedger->consumer_zone_id;
+                    $oldDateTime = $existingLedger->txtime
+                        ? Carbon::parse($existingLedger->txtime)->format('Y-m-d H:i:s')
+                        : Carbon::parse($billingAdjustment->date)->format('Y-m-d H:i:s');
+                    $existingLedger->delete();
+                    $this->recalculateBalancesFrom($oldConsumerZoneId, $oldDateTime);
+                }
+
+                $billingAdjustment->update($this->buildBillingAdjustmentAttributes([
                     'type'            => $type,
                     'ledger'          => 'LRO',
-                    'date'            => $request->input('date') ?: null,
-                    'consumer_zone_id'=> $consumerZone?->id,
-                    'bam_no'          => $request->input('bam_no'),
-                    'amount'          => (float)($request->input('amount', 0)),
+                    'date'            => $request->input('date') ?: $billingAdjustment->date,
+                    'consumer_zone_id'=> $consumerZone?->id ?? $billingAdjustment->consumer_zone_id,
+                    'amount'          => (float)($request->input('amount', $billingAdjustment->amount ?? 0)),
                     'acct_code'       => $request->input('acct_code'),
                     'remarks'         => $request->input('remarks'),
-                    'status'          => $status === 'POSTED' ? 'Posted' : $request->input('status', 'Pending'),
-                    'correct_reading' => (float)($request->input('correct_reading', 0)),
+                    'status'          => $this->normalizeArStatus($request->input('status', 'Pending')),
+                    'connect_reading' => (int)($request->input('correct_reading', $billingAdjustment->connect_reading ?? 0)),
+                    'username'        => $this->authUsername(),
                 ]));
+
+                $this->removeMatchingLroLedgerRows($billingAdjustment->fresh());
 
                 DB::commit();
 
-                $message = $status === 'POSTED'
-                    ? 'Marked as paid; record moved to LRO ledger.'
-                    : 'Moved to LRO ledger successfully.';
-
                 return response()->json([
                     'success' => true,
-                    'message' => $message,
-                    'data'    => ['id' => $entry->id, 'bam_no' => $entry->bam_no],
+                    'message' => 'Moved to LRO (pending — not posted to ledger yet).',
+                    'data'    => ['id' => $billingAdjustment->id, 'bam_no' => $billingAdjustment->bam_no],
                 ]);
             } catch (\Throwable $e) {
                 DB::rollBack();
@@ -296,7 +450,10 @@ class BillingAdjustmentController extends Controller
         $mapped['loans']           = $mapped['loans']           ?? 0;
         $mapped['others']          = $mapped['others']          ?? 0;
         $mapped['connect_reading'] = $mapped['correct_reading'] ?? 0;
-        $mapped['status'] = $this->normalizeArStatus($request->input('status', 'Pending'));
+        $mapped['status'] = $this->normalizeBillingStatus(
+            $request->input('status', 'Pending'),
+            $type === 'CM'
+        );
 
         $newRequest = new Request($mapped);
         return $this->update($newRequest, $id);
@@ -305,19 +462,63 @@ class BillingAdjustmentController extends Controller
     /**
      * Show the form for editing an LRO billing adjustment
      */
-    public function editLro($id)
+    public function editLro(int $id)
     {
+        $dateColumn = 'date';
+        $billingIdColumn = (new BillingAdjustment)->getKeyName();
+        $lroIdColumn = (new LROLedger)->getKeyName();
+
         $lroEntry = LROLedger::with('consumerZone')->findOrFail($id);
-        $billingAdjustments = BillingAdjustment::with('consumerZone')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+
+        if ($this->isPaidStatus($lroEntry->status)) {
+            return redirect()
+                ->route('billing-adjustment')
+                ->with('error', 'Paid LRO entries cannot be edited.');
+        }
+        $billingAdjustments = BillingAdjustment::query()
+            ->with('consumerZone')
+            ->orderBy($dateColumn, 'desc')
+            ->orderBy($billingIdColumn, 'desc')
             ->get();
-        $lroEntries = LROLedger::with('consumerZone')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+        $lroEntries = LROLedger::query()
+            ->with('consumerZone')
+            ->whereRaw($this->lroLedgerListedStatusesRaw())
+            ->orderBy($dateColumn, 'desc')
+            ->orderBy($lroIdColumn, 'desc')
             ->get();
         $previewBamNo = $lroEntry->bam_no ?? $this->generateBamNumber();
         return view('transaction.billing_adjustment', compact('lroEntry', 'billingAdjustments', 'lroEntries', 'previewBamNo'));
+    }
+
+    /**
+     * Delete a paid LRO billing adjustment from lro_ledger.
+     */
+    public function destroyLro(int $id)
+    {
+        try {
+            $entry = LROLedger::findOrFail($id);
+
+            if (!$this->isPaidStatus($entry->status)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Only paid LRO entries can be deleted from the list.',
+                ], 422);
+            }
+
+            $entry->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Paid LRO billing adjustment deleted successfully.',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('destroyLro failed', ['id' => $id, 'error' => $e->getMessage()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete LRO billing adjustment: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
@@ -326,7 +527,7 @@ class BillingAdjustmentController extends Controller
      * then creates a new billing_adjustments + consumer_ledgers entry (same order as AR→LRO).
      * Otherwise updates the lro_ledger row in place.
      */
-    public function updateLro(Request $request, $id)
+    public function updateLro(Request $request,int $id)
     {
         $entry = LROLedger::findOrFail($id);
 
@@ -350,6 +551,12 @@ class BillingAdjustmentController extends Controller
                     $type = 'CM';
                 }
 
+                if ($reject = $this->rejectSundryBamRules($request->input('acct_code', $entry->acct_code), 'AR', $type)) {
+                    DB::rollBack();
+
+                    return $reject;
+                }
+
                 $amount   = (float) $request->input('amount', 0);
                 $dateRaw  = $request->input('date');
                 try {
@@ -359,30 +566,16 @@ class BillingAdjustmentController extends Controller
                 }
                 $date     = $dateCarbon->format('Y-m-d');
                 $dateTime = $dateCarbon->format('Y-m-d H:i:s');
+                $preservedBamNo = $entry->bam_no;
+                $arStatus = $this->normalizeArStatus($request->input('status', 'Pending'));
 
-                // Remove the old LRO row first (same order as AR→LRO: remove then create)
                 $entry->delete();
 
-                // Get latest consumer ledger balance
-                $previousBalance = $this->getLedgerBalanceBefore($consumerZone->id);
-
-                if ($type === 'CM') {
-                    $newBalance = round($previousBalance - $amount, 2);
-                    $debit      = 0;
-                    $credit     = $amount;
-                } else {
-                    $newBalance = round($previousBalance + $amount, 2);
-                    $debit      = $amount;
-                    $credit     = 0;
-                }
-
-
-                // Create billing_adjustments record (account_no via consumer_zone_id)
                 $billingAdjustment = BillingAdjustment::create($this->buildBillingAdjustmentAttributes([
                     'type'            => $type,
                     'ledger'          => 'AR',
                     'date'            => $date,
-                    'bam_no'          => $request->input('bam_no') ?: $entry->bam_no,
+                    'bam_no'          => $request->input('bam_no') ?: $preservedBamNo,
                     'consumer_zone_id'=> $consumerZone->id,
                     'amount'          => $amount,
                     'acct_code'       => $request->input('acct_code'),
@@ -393,35 +586,52 @@ class BillingAdjustmentController extends Controller
                     'loans'           => 0,
                     'others'          => 0,
                     'remarks'         => $request->input('remarks'),
-                    'status'          => $this->normalizeArStatus($request->input('status', 'Pending')),
+                    'status'          => $arStatus,
                     'connect_reading' => (int)($request->input('correct_reading', 0)),
                     'username'        => $this->authUsername(),
                 ]));
 
-                // Create consumer_ledgers row
-                ConsumerLedger::create([
-                    'consumer_zone_id'      => $consumerZone->id,
-                    'billing_adjustment_id' => $billingAdjustment->id,
-                    'trans'                 => $type,
-                    'date'                  => $date,
-                    'due_date'              => null,
-                    'reading'               => 0,
-                    'volume'                => 0,
-                    'billamount'            => 0,
-                    'penalty'               => 0,
-                    'others'                => 0,
-                    'debit'                 => $debit,
-                    'credit'                => $credit,
-                    'balance'               => $newBalance,
-                    'username'              => $this->authUsername(),
-                    'txtime'                => $dateTime,
-                ]);
+                if ($this->shouldPostToConsumerLedger($arStatus)) {
+                    $previousBalance = $this->getLedgerBalanceBefore($consumerZone->id, $dateTime);
+
+                    if ($type === 'CM') {
+                        $newBalance = round($previousBalance - $amount, 2);
+                        $debit      = 0;
+                        $credit     = $amount;
+                    } else {
+                        $newBalance = round($previousBalance + $amount, 2);
+                        $debit      = $amount;
+                        $credit     = 0;
+                    }
+
+                    ConsumerLedger::create([
+                        'consumer_zone_id'      => $consumerZone->id,
+                        'billing_adjustment_id' => $billingAdjustment->id,
+                        'trans'                 => $type,
+                        'date'                  => $date,
+                        'due_date'              => null,
+                        'reading'               => 0,
+                        'volume'                => 0,
+                        'billamount'            => 0,
+                        'penalty'               => 0,
+                        'others'                => 0,
+                        'debit'                 => $debit,
+                        'credit'                => $credit,
+                        'balance'               => $newBalance,
+                        'username'              => $this->authUsername(),
+                        'txtime'                => $dateTime,
+                    ]);
+
+                    $this->recalculateSubsequentBalances($consumerZone->id, $dateTime, $newBalance);
+                }
 
                 DB::commit();
 
                 return response()->json([
                     'success' => true,
-                    'message' => 'Moved to AR (Consumer Ledger) successfully.',
+                    'message' => $this->shouldPostToConsumerLedger($arStatus)
+                        ? 'Moved to AR (Consumer Ledger) successfully.'
+                        : 'Moved to AR (pending — not posted to ledger yet).',
                     'data'    => ['id' => $billingAdjustment->id, 'bam_no' => $billingAdjustment->bam_no],
                 ]);
             } catch (\Throwable $e) {
@@ -432,6 +642,13 @@ class BillingAdjustmentController extends Controller
         }
 
         // ── Normal LRO update ─────────────────────────────────────────────────────
+        if ($this->isPaidStatus($entry->status)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Paid LRO entries cannot be edited. Use Delete from the list.',
+            ], 422);
+        }
+
         $validated = $request->validate([
             'type'            => ['nullable', 'string', 'max:20'],
             'date'            => ['nullable', 'date'],
@@ -455,7 +672,52 @@ class BillingAdjustmentController extends Controller
             return response()->json(['success' => false, 'message' => 'Account not found: ' . $nextAccount], 404);
         }
 
-        $entry->update($this->buildLroLedgerAttributes([
+        $acctCode = $validated['acct_code'] ?? $entry->acct_code;
+        $entryType = $validated['type'] ?? $entry->type;
+        if ($reject = $this->rejectSundryBamRules($acctCode, 'LRO', $entryType)) {
+            return $reject;
+        }
+
+        $nextStatus = $validated['status'] ?? $entry->status;
+        if (!$this->shouldPostToLroLedger($nextStatus)) {
+            try {
+                DB::beginTransaction();
+
+                $billingAdjustment = BillingAdjustment::create($this->buildBillingAdjustmentAttributes([
+                    'type'            => $validated['type'] ?? $entry->type,
+                    'ledger'          => 'LRO',
+                    'date'            => !empty($validated['date']) ? $validated['date'] : $entry->date,
+                    'bam_no'          => $validated['bam_no'] ?? $entry->bam_no,
+                    'consumer_zone_id'=> $consumerZone?->id ?? $entry->consumer_zone_id,
+                    'amount'          => isset($validated['amount']) ? (float) $validated['amount'] : $entry->amount,
+                    'acct_code'       => $validated['acct_code'] ?? $entry->acct_code,
+                    'remarks'         => $validated['remarks'] ?? $entry->remarks,
+                    'status'          => $this->normalizeArStatus($nextStatus),
+                    'connect_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : $entry->correct_reading,
+                    'username'        => $this->authUsername(),
+                ]));
+
+                $entry->delete();
+
+                $this->removeMatchingLroLedgerRows($billingAdjustment);
+
+                DB::commit();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Moved to pending LRO (removed from LRO ledger).',
+                    'data'    => ['id' => $billingAdjustment->id, 'bam_no' => $billingAdjustment->bam_no],
+                ]);
+            } catch (\Throwable $e) {
+                DB::rollBack();
+                Log::error('updateLro pending move failed', ['id' => $id, 'error' => $e->getMessage()]);
+                return response()->json(['success' => false, 'message' => 'Failed: ' . $e->getMessage()], 500);
+            }
+        }
+
+        $lroStatus = $this->resolveLroLedgerStatus($validated['status'] ?? $entry->status);
+
+        $entry->update($this->buildLroLedgerAttributes(array_merge([
             'type'            => $validated['type']            ?? $entry->type,
             'ledger'          => 'LRO',
             'date'            => !empty($validated['date'])    ? $validated['date'] : $entry->date,
@@ -464,9 +726,8 @@ class BillingAdjustmentController extends Controller
             'amount'          => isset($validated['amount'])   ? (float) $validated['amount'] : $entry->amount,
             'acct_code'       => $validated['acct_code']       ?? $entry->acct_code,
             'remarks'         => $validated['remarks']         ?? $entry->remarks,
-            'status'          => $validated['status']          ?? $entry->status,
             'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : $entry->correct_reading,
-        ]));
+        ], $lroStatus)));
 
         return response()->json([
             'success' => true,
@@ -513,33 +774,80 @@ class BillingAdjustmentController extends Controller
                 return response()->json(['success' => false, 'message' => 'Account not found: ' . $accountNo], 404);
             }
 
-            $entry = LROLedger::create($this->buildLroLedgerAttributes([
+            if ($reject = $this->rejectSundryBamRules(
+                $validated['acct_code'] ?? null,
+                'LRO',
+                $validated['type'] ?? 'CM'
+            )) {
+                return $reject;
+            }
+
+            $statusRaw = $validated['status'] ?? 'Pending';
+            $bamNo = $validated['bam_no'] ?? $this->generateBamNumber();
+
+            if ($this->shouldPostToLroLedger($statusRaw)) {
+                $lroStatus = $this->resolveLroLedgerStatus($statusRaw);
+
+                $entry = LROLedger::create($this->buildLroLedgerAttributes(array_merge([
+                    'type' => $validated['type'] ?? SundryAccountCodes::defaultChargeType($validated['acct_code'] ?? null),
+                    'ledger' => 'LRO',
+                    'date' => !empty($validated['date']) ? $validated['date'] : null,
+                    'consumer_zone_id' => $consumerZone?->id,
+                    'bam_no' => $bamNo,
+                    'amount' => (float) ($validated['amount'] ?? 0),
+                    'acct_code' => $validated['acct_code'] ?? null,
+                    'remarks' => $validated['remarks'] ?? null,
+                    'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : 0,
+                ], $lroStatus)));
+
+                return response()->json([
+                    'success' => true,
+                    'message' => $this->isPaidStatus($statusRaw)
+                        ? 'Billing adjustment saved to LRO ledger (paid).'
+                        : 'Billing adjustment saved to LRO ledger (approved).',
+                    'data' => ['id' => $entry->id, 'bam_no' => $entry->bam_no],
+                ]);
+            }
+
+            $billingAdjustment = BillingAdjustment::create($this->buildBillingAdjustmentAttributes([
                 'type' => $validated['type'] ?? 'CM',
                 'ledger' => 'LRO',
                 'date' => !empty($validated['date']) ? $validated['date'] : null,
+                'bam_no' => $bamNo,
                 'consumer_zone_id' => $consumerZone?->id,
-                'bam_no' => $validated['bam_no'] ?? null,
                 'amount' => (float) ($validated['amount'] ?? 0),
                 'acct_code' => $validated['acct_code'] ?? null,
                 'remarks' => $validated['remarks'] ?? null,
-                'status' => $validated['status'] ?? 'Pending',
-                'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : 0,
+                'status' => $this->normalizeArStatus($statusRaw),
+                'connect_reading' => isset($validated['correct_reading']) ? (int) $validated['correct_reading'] : 0,
+                'username' => $this->authUsername(),
             ]));
+
+            $this->removeMatchingLroLedgerRows($billingAdjustment);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Billing adjustment saved.',
-                'data' => ['id' => $entry->id],
+                'message' => 'Billing adjustment saved (pending — not posted to ledger yet).',
+                'data' => ['id' => $billingAdjustment->id, 'bam_no' => $billingAdjustment->bam_no],
             ]);
         }
 
         // AR path: adapt new UI payload to the existing store() implementation
         $status = strtoupper((string) $request->input('status', 'Pending'));
-        if ($status === 'POSTED') {
+        $type = strtoupper((string) $request->input('type', 'CM'));
+        if ($status === 'POSTED' && $type !== 'CM') {
             return response()->json([
                 'success' => false,
-                'message' => 'Paid status is only allowed in LRO ledger. Set Ledger to LRO to continue.',
+                'message' => 'Paid status is only allowed for CM entries.',
             ], 422);
+        }
+
+        if ($reject = $this->rejectSundryBamRules(
+            $request->input('acct_code'),
+            'AR',
+            $request->input('type', 'CM')
+        )) {
+            return $reject;
         }
 
         $mapped = $request->all();
@@ -547,7 +855,7 @@ class BillingAdjustmentController extends Controller
         // Map fields to match the original implementation
         $mapped['ledger'] = 'AR';
         $mapped['account_no'] = $request->input('account');
-        $mapped['status'] = $this->normalizeArStatus($request->input('status', 'Pending'));
+        $mapped['status'] = $this->normalizeBillingStatus($request->input('status', 'Pending'), $type === 'CM');
 
         // Ensure type is CM or DM
         $type = $request->input('type', 'CM');
@@ -596,7 +904,7 @@ class BillingAdjustmentController extends Controller
     /**
      * Update an existing billing adjustment
      */
-    public function update(Request $request, $id)
+    public function update(Request $request,int $id)
     {
         $request->validate([
             'type' => 'required|in:CM,DM',
@@ -612,7 +920,7 @@ class BillingAdjustmentController extends Controller
             'loans' => 'nullable|numeric|min:0',
             'others' => 'nullable|numeric|min:0',
             'remarks' => 'nullable|string',
-            'status' => 'required|in:Pending,Approved,Cancelled',
+            'status' => 'required|string|max:20',
             'connect_reading' => 'nullable|integer|min:0',
         ]);
 
@@ -620,16 +928,20 @@ class BillingAdjustmentController extends Controller
             DB::beginTransaction();
 
             $billingAdjustment = BillingAdjustment::findOrFail($id);
-            $oldLedger = ConsumerLedger::where('billing_adjustment_id', $id)->first();
 
-            if (!$oldLedger) {
+            if ($this->isPaidArCm($billingAdjustment)) {
                 DB::rollBack();
 
                 return response()->json([
                     'success' => false,
-                    'message' => 'Related consumer ledger entry not found'
-                ], 404);
+                    'message' => 'Paid AR CM entries cannot be edited. Use Delete from the list.',
+                ], 422);
             }
+
+            $billingAdjustmentIdColumn = 'billing_adjustment_id';
+            $oldLedger = ConsumerLedger::query()
+                ->where($billingAdjustmentIdColumn, $id)
+                ->first();
 
             $consumerZone = $this->findConsumerForLroAccount($request->account_no);
 
@@ -640,6 +952,12 @@ class BillingAdjustmentController extends Controller
                     'success' => false,
                     'message' => 'Account not found: ' . $request->account_no
                 ], 404);
+            }
+
+            if ($reject = $this->rejectSundryBamRules($request->acct_code, $request->ledger, $request->type)) {
+                DB::rollBack();
+
+                return $reject;
             }
 
             // Parse date
@@ -660,46 +978,20 @@ class BillingAdjustmentController extends Controller
             $date = $dateCarbon->format('Y-m-d');
             $dateTime = $dateCarbon->format('Y-m-d H:i:s');
 
-            // Store old values for balance reversal
-            $oldAmount = (float)$billingAdjustment->amount;
-            $oldType = $billingAdjustment->type;
-            $oldDate = $billingAdjustment->date;
-            $oldDateTime = Carbon::parse($oldDate)->format('Y-m-d H:i:s');
-            $oldBalance = (float)($oldLedger->balance ?? 0);
+            $status = $this->normalizeBillingStatus(
+                $request->status,
+                strtoupper((string) $request->type) === 'CM' && strtoupper((string) $request->ledger) === 'AR'
+            );
+            $newAmount = (float) $request->amount;
 
-            // Calculate what the balance was BEFORE the old transaction
-            // If CM: oldBalance = previousBalance - oldAmount, so previousBalance = oldBalance + oldAmount
-            // If DM: oldBalance = previousBalance + oldAmount, so previousBalance = oldBalance - oldAmount
-            if ($oldType === 'CM') {
-                $previousBalanceBeforeOld = round($oldBalance + $oldAmount, 2);
-            } else {
-                $previousBalanceBeforeOld = round($oldBalance - $oldAmount, 2);
-            }
-
-            // Verify by checking the actual ledger entry before this one
-            $actualPreviousLedger = ConsumerLedger::where('consumer_zone_id', $oldLedger->consumer_zone_id)
-                ->where('txtime', '<', $oldDateTime)
-                ->orderBy('txtime', 'desc')
-                ->orderBy('id', 'desc')
-                ->first();
-            
-            if ($actualPreviousLedger) {
-                $previousBalanceBeforeOld = (float)($actualPreviousLedger->balance ?? $previousBalanceBeforeOld);
-            }
-
-            // Calculate new balance with new transaction values
-            $newAmount = (float)$request->amount;
             if ($request->type === 'CM') {
-                $newBalance = round($previousBalanceBeforeOld - $newAmount, 2);
                 $debit = 0;
                 $credit = $newAmount;
             } else {
-                $newBalance = round($previousBalanceBeforeOld + $newAmount, 2);
                 $debit = $newAmount;
                 $credit = 0;
             }
 
-            // Update billing adjustment record
             $billingAdjustment->update($this->buildBillingAdjustmentAttributes([
                 'type' => $request->type,
                 'ledger' => $request->ledger,
@@ -714,25 +1006,81 @@ class BillingAdjustmentController extends Controller
                 'loans' => (float)($request->loans ?? 0),
                 'others' => (float)($request->others ?? 0),
                 'remarks' => $request->remarks,
-                'status' => $this->normalizeArStatus($request->status),
+                'status' => $status,
                 'connect_reading' => (int)($request->connect_reading ?? 0),
                 'username' => $this->authUsername(),
             ]));
 
-            // Update consumer ledger entry
-            $oldLedger->update([
-                'consumer_zone_id' => $consumerZone->id,
-                'trans' => $request->type, // Use actual type: CM or DM
-                'date' => $date,
-                'debit' => $debit,
-                'credit' => $credit,
-                'balance' => $newBalance,
-                'username' => $this->authUsername(),
-                'txtime' => $dateTime,
-            ]);
+            if ($this->shouldPostToConsumerLedgerForBam($status, $request->acct_code, $request->ledger)) {
+                $previousBalance = $oldLedger
+                    ? $this->getLedgerBalanceBeforeEntry((int) $consumerZone->id, $dateTime, (int) $oldLedger->id)
+                    : $this->getLedgerBalanceBefore($consumerZone->id, $dateTime);
+                $newBalance = $request->type === 'CM'
+                    ? round($previousBalance - $newAmount, 2)
+                    : round($previousBalance + $newAmount, 2);
 
-            // Recalculate balances for all subsequent ledger entries
-            $this->recalculateSubsequentBalances($consumerZone->id, $dateTime, $newBalance);
+                if ($oldLedger) {
+                    $oldConsumerZoneId = (int) $oldLedger->consumer_zone_id;
+                    $oldDateTime = $oldLedger->txtime
+                        ? Carbon::parse($oldLedger->txtime)->format('Y-m-d H:i:s')
+                        : Carbon::parse($billingAdjustment->date)->format('Y-m-d H:i:s');
+
+                    $oldLedger->update([
+                        'consumer_zone_id' => $consumerZone->id,
+                        'trans' => $request->type,
+                        'date' => $date,
+                        'debit' => $debit,
+                        'credit' => $credit,
+                        'balance' => $newBalance,
+                        'username' => $this->authUsername(),
+                        'txtime' => $dateTime,
+                    ]);
+
+                    $newConsumerZoneId = (int) $consumerZone->id;
+                    $consumerChanged = $oldConsumerZoneId !== $newConsumerZoneId;
+                    $dateChanged = $oldDateTime !== $dateTime;
+
+                    if ($consumerChanged) {
+                        $this->recalculateBalancesFrom($oldConsumerZoneId, $oldDateTime);
+                        $this->recalculateBalancesFrom($newConsumerZoneId, $dateTime);
+                    } elseif ($dateChanged) {
+                        $this->recalculateBalancesFrom($newConsumerZoneId, min($oldDateTime, $dateTime));
+                    } else {
+                        $this->recalculateBalancesFrom($newConsumerZoneId, $dateTime);
+                    }
+                } else {
+                    ConsumerLedger::create([
+                        'consumer_zone_id' => $consumerZone->id,
+                        'billing_adjustment_id' => $billingAdjustment->id,
+                        'trans' => $request->type,
+                        'date' => $date,
+                        'due_date' => null,
+                        'reading' => 0,
+                        'volume' => 0,
+                        'billamount' => 0,
+                        'penalty' => 0,
+                        'others' => 0,
+                        'debit' => $debit,
+                        'credit' => $credit,
+                        'balance' => $newBalance,
+                        'username' => $this->authUsername(),
+                        'txtime' => $dateTime,
+                    ]);
+
+                    $this->recalculateSubsequentBalances($consumerZone->id, $dateTime, $newBalance);
+                }
+            } elseif ($oldLedger) {
+                $oldConsumerZoneId = (int) $oldLedger->consumer_zone_id;
+                $oldDateTime = $oldLedger->txtime
+                    ? Carbon::parse($oldLedger->txtime)->format('Y-m-d H:i:s')
+                    : Carbon::parse($billingAdjustment->date)->format('Y-m-d H:i:s');
+                $oldLedger->delete();
+                $this->recalculateBalancesFrom($oldConsumerZoneId, $oldDateTime);
+            }
+
+            if (!$this->shouldPostToConsumerLedger($status) || strtoupper((string) $request->ledger) === 'LRO') {
+                $this->removeMatchingLroLedgerRows($billingAdjustment->fresh());
+            }
 
             DB::commit();
 
@@ -758,23 +1106,87 @@ class BillingAdjustmentController extends Controller
     }
 
     /**
-     * Recalculate balances for all ledger entries after a given datetime
+     * Recalculate balances for all ledger entries after a given datetime.
      */
-    private function recalculateSubsequentBalances($consumerZoneId, $afterDateTime, $startingBalance)
+    private function recalculateSubsequentBalances(int $consumerZoneId, string $afterDateTime, float $startingBalance): void
     {
-        $subsequentEntries = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-            ->where('txtime', '>', $afterDateTime)
-            ->orderBy('txtime', 'asc')
-            ->orderBy('id', 'asc')
+        $consumerZoneIdColumn = 'consumer_zone_id';
+        $txtimeColumn = 'txtime';
+        $idColumn = (new ConsumerLedger)->getKeyName();
+
+        $subsequentEntries = ConsumerLedger::query()
+            ->where($consumerZoneIdColumn, $consumerZoneId)
+            ->where($txtimeColumn, '>', $afterDateTime)
+            ->orderBy($txtimeColumn, 'asc')
+            ->orderBy($idColumn, 'asc')
             ->get();
 
+        $this->applyRunningBalances($subsequentEntries, $startingBalance);
+    }
+
+    /**
+     * Recalculate running balances from a datetime forward (inclusive), ordered by txtime then id.
+     */
+    private function recalculateBalancesFrom(int $consumerZoneId, string $fromDateTime): void
+    {
+        $startingBalance = $this->getLedgerBalanceBefore($consumerZoneId, $fromDateTime);
+
+        $consumerZoneIdColumn = 'consumer_zone_id';
+        $txtimeColumn = 'txtime';
+        $idColumn = (new ConsumerLedger)->getKeyName();
+
+        $entries = ConsumerLedger::query()
+            ->where($consumerZoneIdColumn, $consumerZoneId)
+            ->where($txtimeColumn, '>=', $fromDateTime)
+            ->orderBy($txtimeColumn, 'asc')
+            ->orderBy($idColumn, 'asc')
+            ->get();
+
+        $this->applyRunningBalances($entries, $startingBalance);
+    }
+
+    /**
+     * Walk ledger rows in order, persist updated running balances when they change.
+     *
+     * @param  \Illuminate\Support\Collection<int, ConsumerLedger>  $entries
+     */
+    private function applyRunningBalances($entries, float $startingBalance): void
+    {
         $currentBalance = $startingBalance;
 
-        foreach ($subsequentEntries as $entry) {
-            $currentBalance = round($currentBalance + (float)$entry->debit - (float)$entry->credit, 2);
-            $entry->balance = $currentBalance;
-            $entry->save();
+        foreach ($entries as $entry) {
+            $currentBalance = round($currentBalance + (float) $entry->debit - (float) $entry->credit, 2);
+
+            if ((float) $entry->balance !== $currentBalance) {
+                $entry->balance = $currentBalance;
+                $entry->save();
+            }
         }
+    }
+
+    /**
+     * Running balance immediately before a specific ledger entry (handles same-txtime ordering).
+     */
+    private function getLedgerBalanceBeforeEntry(int $consumerZoneId, string $dateTime, int $ledgerId): float
+    {
+        $balance = $this->getLedgerBalanceBefore($consumerZoneId, $dateTime);
+
+        $consumerZoneIdColumn = 'consumer_zone_id';
+        $txtimeColumn = 'txtime';
+        $idColumn = (new ConsumerLedger)->getKeyName();
+
+        $sameTimeEarlier = ConsumerLedger::query()
+            ->where($consumerZoneIdColumn, $consumerZoneId)
+            ->where($txtimeColumn, '=', $dateTime)
+            ->where($idColumn, '<', $ledgerId)
+            ->orderBy($idColumn, 'asc')
+            ->get();
+
+        foreach ($sameTimeEarlier as $entry) {
+            $balance = round($balance + (float) $entry->debit - (float) $entry->credit, 2);
+        }
+
+        return $balance;
     }
 
     /**
@@ -782,41 +1194,197 @@ class BillingAdjustmentController extends Controller
      */
     private function getLedgerBalanceBefore(int $consumerZoneId, ?string $beforeDateTime = null): float
     {
-        $query = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+        $consumerZoneIdColumn = 'consumer_zone_id';
+        $txtimeColumn = 'txtime';
+        $idColumn = (new ConsumerLedger)->getKeyName();
+
+        $query = ConsumerLedger::query()->where($consumerZoneIdColumn, $consumerZoneId);
 
         if ($beforeDateTime !== null && $beforeDateTime !== '') {
-            $query->where('txtime', '<', $beforeDateTime);
+            $query->where($txtimeColumn, '<', $beforeDateTime);
         }
 
         $latestLedger = $query
-            ->orderBy('txtime', 'desc')
-            ->orderBy('id', 'desc')
+            ->orderBy($txtimeColumn, 'desc')
+            ->orderBy($idColumn, 'desc')
             ->first();
 
         return $latestLedger ? (float) ($latestLedger->balance ?? 0) : 0.0;
     }
 
     /**
-     * Map UI status values to billing_adjustments.status (Pending, Approved, Cancelled).
+     * Map UI status values to billing_adjustments.status.
+     * When $allowPosted is true (AR CM), Posted/Paid is stored as Posted.
      */
-    private function normalizeArStatus(?string $status): string
+    private function normalizeBillingStatus(?string $status, bool $allowPosted = false): string
     {
-        $normalized = ucfirst(strtolower(trim((string) ($status ?? 'Pending'))));
+        $raw = trim((string) ($status ?? 'Pending'));
+        $upper = strtoupper($raw);
 
+        if ($allowPosted && in_array($upper, ['POSTED', 'PAID'], true)) {
+            return 'Posted';
+        }
+
+        $normalized = ucfirst(strtolower($raw));
         if (in_array($normalized, ['Pending', 'Approved', 'Cancelled'], true)) {
             return $normalized;
         }
 
-        if (strcasecmp((string) $status, 'Posted') === 0) {
+        if (in_array($upper, ['POSTED', 'PAID'], true)) {
             return 'Approved';
         }
 
         return 'Pending';
     }
 
+    /**
+     * Map UI status for pending LRO rows in billing_adjustments (never stores Posted).
+     */
+    private function normalizeArStatus(?string $status): string
+    {
+        return $this->normalizeBillingStatus($status, false);
+    }
+
+    private function isPendingStatus(?string $status): bool
+    {
+        return strcasecmp(trim((string) ($status ?? 'Pending')), 'Pending') === 0;
+    }
+
+    private function isCancelledStatus(?string $status): bool
+    {
+        return strcasecmp(trim((string) ($status ?? '')), 'Cancelled') === 0;
+    }
+
+    private function isPaidStatus(?string $status): bool
+    {
+        $normalized = strtoupper(trim((string) ($status ?? '')));
+
+        return in_array($normalized, ['POSTED', 'PAID'], true);
+    }
+
+    private function isPaidArCm(BillingAdjustment $billingAdjustment): bool
+    {
+        return strtoupper((string) ($billingAdjustment->ledger ?? '')) === 'AR'
+            && ($billingAdjustment->type ?? '') === 'CM'
+            && $this->isPaidStatus($billingAdjustment->status);
+    }
+
+    private function shouldPostToConsumerLedger(?string $status): bool
+    {
+        $normalized = strtoupper(trim((string) ($status ?? '')));
+
+        return in_array($normalized, ['APPROVED', 'POSTED', 'PAID'], true);
+    }
+
+    private function shouldPostToConsumerLedgerForBam(?string $status, ?string $acctCode, ?string $ledger): bool
+    {
+        if (SundryAccountCodes::isSundry($acctCode)) {
+            return false;
+        }
+
+        if (strtoupper(trim((string) ($ledger ?? ''))) !== 'AR') {
+            return false;
+        }
+
+        return $this->shouldPostToConsumerLedger($status);
+    }
+
+    /**
+     * Sundries belong on LRO ledger as DM charges; CM credits are created via Billing Payment.
+     */
+    private function rejectSundryBamRules(?string $acctCode, ?string $ledger, ?string $type): ?\Illuminate\Http\JsonResponse
+    {
+        if (!SundryAccountCodes::isSundry($acctCode)) {
+            return null;
+        }
+
+        if (strtoupper(trim((string) ($ledger ?? ''))) === 'AR') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Sundries must use LRO ledger only. They cannot be posted to the Account (Consumer) Ledger.',
+            ], 422);
+        }
+
+        if (strtoupper(trim((string) ($type ?? ''))) === 'CM') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Sundry charges must be Type DM (Debit Memo). CM credits are created automatically when sundries are paid in Billing Payment.',
+            ], 422);
+        }
+
+        return null;
+    }
+
+    private function shouldPostToLroLedger(?string $status): bool
+    {
+        $normalized = strtoupper(trim((string) ($status ?? '')));
+
+        return in_array($normalized, ['APPROVED', 'POSTED', 'PAID'], true);
+    }
+
+    /**
+     * @return array{status: string, paid_at: \Illuminate\Support\Carbon|null}
+     */
+    private function resolveLroLedgerStatus(?string $status): array
+    {
+        if ($this->isPaidStatus($status)) {
+            return ['status' => 'Posted', 'paid_at' => now()];
+        }
+
+        if (strcasecmp(trim((string) ($status ?? '')), 'Approved') === 0) {
+            return ['status' => 'Approved', 'paid_at' => null];
+        }
+
+        return ['status' => 'Pending', 'paid_at' => null];
+    }
+
+    private function lroLedgerListedStatusesRaw(): string
+    {
+        return "UPPER(TRIM(COALESCE(status, ''))) IN ('APPROVED', 'POSTED', 'PAID')";
+    }
+
+    /**
+     * Remove stale lro_ledger rows that match a pending/cancelled billing adjustment memo.
+     */
+    private function removeMatchingLroLedgerRows(BillingAdjustment $billingAdjustment): void
+    {
+        $consumerZoneId = $billingAdjustment->consumer_zone_id;
+        if (!$consumerZoneId) {
+            return;
+        }
+
+        $query = LROLedger::query()->where(['consumer_zone_id' => $consumerZoneId]);
+
+        $bamNo = trim((string) ($billingAdjustment->bam_no ?? ''));
+        if ($bamNo !== '') {
+            $query->where(['bam_no' => $bamNo]);
+        } else {
+            $query->where([
+                'type' => $billingAdjustment->type,
+                'amount' => $billingAdjustment->amount,
+            ]);
+
+            if (!empty($billingAdjustment->date)) {
+                $query->whereDate('date', Carbon::parse($billingAdjustment->date)->format('Y-m-d'));
+            }
+        }
+
+        $query->delete();
+    }
+
+    /**
+     * Remove legacy lro_ledger rows that should never appear in the consumer LRO ledger (pending/cancelled).
+     */
+    private function purgeStalePendingLroLedgerRows(): void
+    {
+        LROLedger::query()
+            ->whereRaw("UPPER(TRIM(COALESCE(status, ''))) IN ('PENDING', 'CANCELLED')")
+            ->delete();
+    }
+
     private function authUsername(): string
     {
-        $user = auth()->user();
+        $user = auth();
 
         return $user?->name ?? 'SYSTEM';
     }
@@ -824,14 +1392,15 @@ class BillingAdjustmentController extends Controller
     /**
      * Resolve consumer by account using exact and normalized matching.
      */
-    private function findConsumerForLroAccount(?string $accountNo): ?ConsumerZoneOne
+    private function findConsumerForLroAccount(?string $accountNo): ?ConsumerZone
     {
         $accountNo = trim((string) ($accountNo ?? ''));
         if ($accountNo === '') {
             return null;
         }
 
-        $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+        $accountNoColumn = 'account_no';
+        $consumer = ConsumerZone::query()->where($accountNoColumn, $accountNo)->first();
         if ($consumer) {
             return $consumer;
         }
@@ -839,8 +1408,8 @@ class BillingAdjustmentController extends Controller
         $normalized = str_replace('-', '', $accountNo);
         $upper = strtoupper(trim($accountNo));
 
-        return ConsumerZoneOne::where(function ($q) use ($accountNo, $normalized, $upper) {
-            $q->where('account_no', $accountNo)
+        return ConsumerZone::query()->where(function ($q) use ($accountNo, $normalized, $upper, $accountNoColumn) {
+            $q->where($accountNoColumn, $accountNo)
                 ->orWhereRaw("REPLACE(TRIM(account_no), '-', '') = ?", [$normalized])
                 ->orWhereRaw('UPPER(TRIM(account_no)) = ?', [$upper]);
         })->first();
@@ -849,7 +1418,7 @@ class BillingAdjustmentController extends Controller
     /**
      * Build billing_adjustments attributes, keeping only columns that exist on the table.
      * account_no is resolved from consumer_zone via consumer_zone_id (not stored on billing_adjustments).
-     */
+     */ 
     private function buildBillingAdjustmentAttributes(array $data): array
     {
         if (!Schema::hasTable('billing_adjustments')) {

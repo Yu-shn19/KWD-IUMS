@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +25,7 @@ class ActivatePendingConsumersCommand extends Command
             $this->info("Backfill enrolled: {$enrolled}");
         }
 
-        $query = ConsumerZoneOne::query()
+        $query = ConsumerZone::query()
             ->where('pending_install_activation', true)
             ->whereNotNull('auto_activate_on')
             ->whereDate('auto_activate_on', '<=', $today)
@@ -94,7 +94,7 @@ class ActivatePendingConsumersCommand extends Command
         $days = (int) config('consumer.days_before_active', 15);
         $enrolled = 0;
 
-        ConsumerZoneOne::query()
+        ConsumerZone::query()
             ->where(function ($q) {
                 $q->where('status_code', 'P')
                     ->orWhere('status_code', 'p')

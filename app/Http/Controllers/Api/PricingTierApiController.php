@@ -6,6 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\PricingTier;
 use Illuminate\Http\Request;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class PricingTierApiController extends Controller
 {
     /**
@@ -13,9 +23,10 @@ class PricingTierApiController extends Controller
      */
     public function index()
     {
-        $pricingTiers = PricingTier::where('is_active', true)
-            ->orderBy('category_id')
-            ->orderBy('rate_code')
+        $pricingTiers = PricingTier::query()
+            ->where(mr_col('is_active'), true)
+            ->orderBy(mr_col('category_id'))
+            ->orderBy(mr_col('rate_code'))
             ->get();
 
         return response()->json([

@@ -3,7 +3,7 @@
 namespace App\Imports;
 
 use App\Models\ConsumerLedger;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use Carbon\Carbon;
 use Maatwebsite\Excel\Concerns\ToModel;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
@@ -177,11 +177,11 @@ class ConsumerLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, W
         }
         
         // Lookup consumer_zone by account_no (try exact match first, then trim both)
-        $consumerZone = ConsumerZoneOne::where('account_no', $accountNo)->first();
+        $consumerZone = ConsumerZone::where('account_no', $accountNo)->first();
         
         if (!$consumerZone) {
             // Try with trimmed values in case of whitespace issues
-            $consumerZone = ConsumerZoneOne::whereRaw('TRIM(account_no) = ?', [trim($accountNo)])->first();
+            $consumerZone = ConsumerZone::whereRaw('TRIM(account_no) = ?', [trim($accountNo)])->first();
         }
         
         if (!$consumerZone) {

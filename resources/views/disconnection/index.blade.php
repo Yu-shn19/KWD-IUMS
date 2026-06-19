@@ -374,7 +374,7 @@
                                                                         data-zone="{{ $zoneCode }}"
                                                                         data-account-no="{{ strtolower($consumer->account_no) }}"
                                                                         data-account-name="{{ strtolower($consumer->account_name) }}"
-                                                                        data-address="{{ strtolower($consumer->address1 ?? '') }}"
+                                                                        data-address="{{ strtolower($consumer->address ?? '') }}"
                                                                         data-this-month-arrears="{{ number_format((float)($consumer->aging_30_days ?? 0), 2, '.', '') }}"
                                                                         data-last-month-arrears="{{ number_format((float)($consumer->aging_60_days ?? 0), 2, '.', '') }}"
                                                                         data-others-ar="{{ number_format((float)($consumer->aging_90_days ?? 0) + (float)($consumer->aging_over_90 ?? 0), 2, '.', '') }}"
@@ -387,7 +387,7 @@
                                                                         </td>
                                                                         <td>{{ $consumer->account_no }}</td>
                                                                         <td>{{ $consumer->account_name }}</td>
-                                                                        <td>{{ $consumer->address1 }}</td>
+                                                                        <td>{{ $consumer->address }}</td>
                                                                         <td>{{ $consumer->meter_number }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->last_reading ?? 0), 0) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->current_bill_with_maintenance ?? 20), 2) }}</td>
@@ -711,7 +711,7 @@
                                     <td>{{ $consumer->account_no }}</td>
                                     <td>
                                         {{ $consumer->account_name }}<br>
-                                        <small>{{ $consumer->address1 }}</small>
+                                        <small>{{ $consumer->address }}</small>
                                     </td>
                                     <td class="text-center">{{ $consumer->meter_number }}</td>
                                     <td class="text-right">{{ number_format((float)($consumer->last_reading ?? 0), 0) }}</td>

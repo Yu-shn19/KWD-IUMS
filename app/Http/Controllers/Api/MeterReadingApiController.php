@@ -6,11 +6,23 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
+use App\Models\ConsumerLedger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 class MeterReadingApiController extends Controller
 {
@@ -35,7 +47,7 @@ class MeterReadingApiController extends Controller
         }
 
         // Find user by email (username field contains email)
-        $user = User::where('email', $username)->first();
+        $user = User::query()->where(mr_col('email'), $username)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json([
@@ -102,18 +114,19 @@ class MeterReadingApiController extends Controller
         
         if ($readerId && !$billMonth) {
             // First, try to get latest bill_month from active routes (Assigned/In Progress)
-            $latestBillMonth = MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                ->whereIn('status', ['Assigned', 'In Progress'])
-                ->orderBy('bill_month', 'DESC')
-                ->value('bill_month');
+            $latestBillMonth = MeterReadingSchedule::query()
+                ->where(mr_col('assigned_reader_id'), $readerId)
+                ->whereIn(mr_col('status'), ['Assigned', 'In Progress'])
+                ->orderBy(mr_col('bill_month'), 'DESC')
+                ->value(mr_col('bill_month'));
             
             // Get zones that have active routes in the latest bill_month
             if ($latestBillMonth) {
                 $assignedZones = MeterReadingSchedule::query()
                     ->joinConsumerZone()
-                    ->where('meter_reading_schedules.assigned_reader_id', $readerId)
-                    ->where('meter_reading_schedules.bill_month', $latestBillMonth)
-                    ->whereIn('meter_reading_schedules.status', ['Assigned', 'In Progress'])
+                    ->where(mr_col('meter_reading_schedules.assigned_reader_id'), $readerId)
+                    ->where(mr_col('meter_reading_schedules.bill_month'), $latestBillMonth)
+                    ->whereIn(mr_col('meter_reading_schedules.status'), ['Assigned', 'In Progress'])
                     ->distinct()
                     ->pluck('cz.zone_code')
                     ->filter()
@@ -123,18 +136,19 @@ class MeterReadingApiController extends Controller
             
             // If no active routes, then get from completed routes
             if (!$latestBillMonth) {
-                $latestBillMonth = MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                    ->where('status', 'Completed')
-                    ->orderBy('bill_month', 'DESC')
-                    ->value('bill_month');
+                $latestBillMonth = MeterReadingSchedule::query()
+                    ->where(mr_col('assigned_reader_id'), $readerId)
+                    ->where(mr_col('status'), 'Completed')
+                    ->orderBy(mr_col('bill_month'), 'DESC')
+                    ->value(mr_col('bill_month'));
                 
                 // Get zones from completed routes in the latest bill_month
                 if ($latestBillMonth) {
                     $assignedZones = MeterReadingSchedule::query()
                         ->joinConsumerZone()
-                        ->where('meter_reading_schedules.assigned_reader_id', $readerId)
-                        ->where('meter_reading_schedules.bill_month', $latestBillMonth)
-                        ->where('meter_reading_schedules.status', 'Completed')
+                        ->where(mr_col('meter_reading_schedules.assigned_reader_id'), $readerId)
+                        ->where(mr_col('meter_reading_schedules.bill_month'), $latestBillMonth)
+                        ->where(mr_col('meter_reading_schedules.status'), 'Completed')
                         ->distinct()
                         ->pluck('cz.zone_code')
                         ->filter()
@@ -145,24 +159,24 @@ class MeterReadingApiController extends Controller
         }
 
         $query = MeterReadingSchedule::with('consumerZone')
-            ->where('assigned_reader_id', $readerId)
-            ->whereIn('status', ['Assigned', 'In Progress', 'Completed']);
+            ->where(mr_col('assigned_reader_id'), $readerId)
+            ->whereIn(mr_col('status'), ['Assigned', 'In Progress', 'Completed']);
 
         // Filter by zone: use provided one, or zones with active assignments
         if ($zone) {
             $query->forZoneCode($zone);
         } elseif (!empty($assignedZones)) {
             $query->whereHas('consumerZone', function ($q) use ($assignedZones) {
-                $q->whereIn('zone_code', $assignedZones);
+                $q->whereIn(mr_col('zone_code'), $assignedZones);
             });
         }
 
         // Filter by bill_month: use provided one, or latest one, or none
         if ($billMonth) {
-            $query->where('bill_month', Carbon::parse($billMonth)->format('Y-m-d'));
+            $query->where(mr_col('bill_month'), Carbon::parse($billMonth)->format('Y-m-d'));
         } elseif ($latestBillMonth) {
             // Automatically filter by latest bill_month to exclude old completed routes
-            $query->where('bill_month', $latestBillMonth);
+            $query->where(mr_col('bill_month'), $latestBillMonth);
         }
 
         // Order by status priority (active routes first), then by account # tail (after last "-")
@@ -179,22 +193,23 @@ class MeterReadingApiController extends Controller
         $downloadedReadings = collect();
         if ($schedules->isNotEmpty()) {
             $scheduleIds = $schedules->pluck('id')->toArray();
-        $downloadedReadings = DownloadedReading::where('reader_id', $readerId)
-            ->where('status', 'completed')
-                ->whereIn('schedule_id', $scheduleIds)
+        $downloadedReadings = DownloadedReading::query()
+            ->where(mr_col('reader_id'), $readerId)
+            ->where(mr_col('status'), 'completed')
+                ->whereIn(mr_col('schedule_id'), $scheduleIds)
             ->get()
-            ->keyBy('schedule_id');
+            ->keyBy(mr_col('schedule_id'));
         }
 
         // Get rate codes from consumer_zone table for all schedules
         $rateCodes = collect();
         if ($schedules->isNotEmpty()) {
             $consumerZoneIds = $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->toArray();
-            $rateCodes = DB::table('consumer_zone')
-                ->whereIn('id', $consumerZoneIds)
+            $rateCodes = DB::table(mr_col('consumer_zone'))
+                ->whereIn(mr_col('id'), $consumerZoneIds)
                 ->select('id', 'account_no', 'rate_code')
                 ->get()
-                ->keyBy('id');
+                ->keyBy(mr_col('id'));
         }
 
         return response()->json([
@@ -242,7 +257,7 @@ class MeterReadingApiController extends Controller
     public function submitReading(Request $request)
     {
         // Log incoming request for debugging
-        \Log::info('📥 Submit Reading Request Received', [
+        Log::info('📥 Submit Reading Request Received', [
             'schedule_id' => $request->input('schedule_id'),
             'current_reading' => $request->input('current_reading'),
             'reader_id' => $request->input('reader_id'),
@@ -260,7 +275,7 @@ class MeterReadingApiController extends Controller
 
         try {
             $schedule = MeterReadingSchedule::with('consumerZone')->find($request->schedule_id);
-            \Log::info('📋 Schedule Found', [
+            Log::info('📋 Schedule Found', [
                 'schedule_id' => $schedule->id,
                 'account_number' => $schedule->account_number,
                 'previous_reading' => $schedule->previous_reading
@@ -284,7 +299,7 @@ class MeterReadingApiController extends Controller
             $rateCode = null;
             $consumer = $schedule->consumerZone;
             if (!$consumer && $schedule->consumer_zone_id) {
-                $consumer = \App\Models\ConsumerZoneOne::find($schedule->consumer_zone_id);
+                $consumer = \App\Models\ConsumerZone::find($schedule->consumer_zone_id);
             }
 
             if ($consumer) {
@@ -339,16 +354,18 @@ class MeterReadingApiController extends Controller
 
             if ($consumer) {
                 // Find the existing ledger entry for this schedule
-                $ledgerEntry = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
-                    ->where('schedule_id', $schedule->id)
-                    ->whereIn('trans', ['BILL', 'BILLING']) // Accept both formats
+                $ledgerEntry = ConsumerLedger::query()
+                    ->where(mr_col('consumer_zone_id'), $consumer->id)
+                    ->where(mr_col('schedule_id'), $schedule->id)
+                    ->whereIn(mr_col('trans'), ['BILL', 'BILLING']) // Accept both formats
                     ->first();
 
                 if ($ledgerEntry) {
                     // Get the previous balance (before this entry)
-                    $previousEntry = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
-                        ->where('id', '<', $ledgerEntry->id)
-                        ->orderBy('id', 'desc')
+                    $previousEntry = ConsumerLedger::query()
+                        ->where(mr_col('consumer_zone_id'), $consumer->id)
+                        ->where(mr_col('id'), '<', $ledgerEntry->id)
+                        ->orderBy(mr_col('id'), 'desc')
                         ->first();
                     
                     $previousBalance = $previousEntry ? (float)$previousEntry->balance : (float)($consumer->balance ?? 0);
@@ -373,9 +390,10 @@ class MeterReadingApiController extends Controller
                     ]);
 
                     // Recalculate balances for all subsequent entries
-                    $subsequentEntries = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
-                        ->where('id', '>', $ledgerEntry->id)
-                        ->orderBy('id', 'asc')
+                    $subsequentEntries = ConsumerLedger::query()
+                        ->where(mr_col('consumer_zone_id'), $consumer->id)
+                        ->where(mr_col('id'), '>', $ledgerEntry->id)
+                        ->orderBy(mr_col('id'), 'asc')
                         ->get();
                     
                     $runningBalance = $newBalance;
@@ -388,7 +406,7 @@ class MeterReadingApiController extends Controller
                 }
             }
 
-            \Log::info('✅ Reading Submitted Successfully', [
+            Log::info('✅ Reading Submitted Successfully', [
                 'schedule_id' => $schedule->id,
                 'account_number' => $schedule->account_number,
                 'current_reading' => $schedule->current_reading,
@@ -410,7 +428,7 @@ class MeterReadingApiController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            \Log::error('❌ Error Submitting Reading', [
+            Log::error('❌ Error Submitting Reading', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'schedule_id' => $request->schedule_id ?? 'N/A',
@@ -479,17 +497,21 @@ class MeterReadingApiController extends Controller
         $readerId = $request->reader_id;
 
         $stats = [
-            'total_assigned' => MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                ->whereIn('status', ['Assigned', 'In Progress', 'Completed'])
+            'total_assigned' => MeterReadingSchedule::query()
+                ->where(mr_col('assigned_reader_id'), $readerId)
+                ->whereIn(mr_col('status'), ['Assigned', 'In Progress', 'Completed'])
                 ->count(),
-            'pending' => MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                ->where('status', 'Assigned')
+            'pending' => MeterReadingSchedule::query()
+                ->where(mr_col('assigned_reader_id'), $readerId)
+                ->where(mr_col('status'), 'Assigned')
                 ->count(),
-            'in_progress' => MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                ->where('status', 'In Progress')
+            'in_progress' => MeterReadingSchedule::query()
+                ->where(mr_col('assigned_reader_id'), $readerId)
+                ->where(mr_col('status'), 'In Progress')
                 ->count(),
-            'completed' => MeterReadingSchedule::where('assigned_reader_id', $readerId)
-                ->where('status', 'Completed')
+            'completed' => MeterReadingSchedule::query()
+                ->where(mr_col('assigned_reader_id'), $readerId)
+                ->where(mr_col('status'), 'Completed')
                 ->count()
         ];
 

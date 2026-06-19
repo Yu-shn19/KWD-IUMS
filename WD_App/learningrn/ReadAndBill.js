@@ -1079,7 +1079,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     if (!customer) return;
 
     try {
-      const address = customer.address || customer.customer_address || customer.address1 || '';
+      const address = customer.address || customer.customer_address || '';
       const name = customer.name || 'Customer';
 
       // Get account number - try multiple field names

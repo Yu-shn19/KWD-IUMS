@@ -5,9 +5,19 @@ namespace App\Services;
 use App\Http\Controllers\ConsumerLedgerController;
 use App\Models\ConsumerLedger;
 use App\Models\ConsumerPayment;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 class ConsumerLedgerCardBuilder
 {
@@ -17,13 +27,13 @@ class ConsumerLedgerCardBuilder
      * @param  array{as_of?: string}  $filters
      * @return array{beginning: array<string, mixed>|null, rows: Collection<int, array<string, mixed>>}
      */
-    public function build(ConsumerZoneOne $consumer, array $filters): array
+    public function build(ConsumerZone $consumer, array $filters): array
     {
         [, $periodEnd] = $this->resolvePeriod($filters);
 
         $ledgersQuery = ConsumerLedger::query()
             ->with('consumerPayment')
-            ->where('consumer_zone_id', $consumer->id);
+            ->where(mr_col('consumer_zone_id'), $consumer->id);
 
         ConsumerLedgerController::applyVisibleLedgerScope($ledgersQuery);
         ConsumerLedgerController::applyAccountLedgerDisplayOrder($ledgersQuery);

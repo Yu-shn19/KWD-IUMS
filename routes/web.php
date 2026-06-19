@@ -85,7 +85,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
 
     // Test route to check data
     Route::get('/test-ledger', function() {
-    $consumer = \App\Models\ConsumerZoneOne::first();
+    $consumer = \App\Models\ConsumerZone::first();
     $ledgers = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumer->id)
         ->orderBy('id', 'desc')
         ->limit(5)
@@ -135,7 +135,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
         ], 400);
     }
     
-    $consumers = \App\Models\ConsumerZoneOne::where('zone_code', $zoneCode)
+    $consumers = \App\Models\ConsumerZone::where('zone_code', $zoneCode)
         ->orderBy('sequence', 'asc')
         ->limit($limit)
         ->get();
@@ -160,7 +160,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
         ], 400);
     }
     
-    $consumer = \App\Models\ConsumerZoneOne::find($consumerId);
+    $consumer = \App\Models\ConsumerZone::find($consumerId);
     
     if (!$consumer) {
         return response()->json([
@@ -169,7 +169,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
         ], 404);
     }
     
-    $consumer->update(\App\Models\ConsumerZoneOne::filterTableAttributes([
+    $consumer->update(\App\Models\ConsumerZone::filterTableAttributes([
         'latitude' => $latitude,
         'longitude' => $longitude,
     ]));
@@ -299,7 +299,9 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::post('/billing-adjustment', [BillingAdjustmentController::class, 'store'])->name('billing-adjustment.store');
     Route::get('/billing-adjustment/lro/{id}/edit', [BillingAdjustmentController::class, 'editLro'])->name('billing-adjustment.lro.edit');
     Route::put('/billing-adjustment/lro/{id}', [BillingAdjustmentController::class, 'updateLro'])->name('billing-adjustment.lro.update');
+    Route::delete('/billing-adjustment/lro/{id}', [BillingAdjustmentController::class, 'destroyLro'])->name('billing-adjustment.lro.destroy');
     Route::put('/billing-adjustment/ar/{id}', [BillingAdjustmentController::class, 'updateFromNewUi'])->name('billing-adjustment.ar.update');
+    Route::delete('/billing-adjustment/ar/{id}', [BillingAdjustmentController::class, 'destroyAr'])->name('billing-adjustment.ar.destroy');
     Route::get('/billing-adjustment/{id}/edit', [BillingAdjustmentController::class, 'edit'])->name('billing-adjustment.edit');
     Route::get('/billing-adjustment/{id}', [BillingAdjustmentController::class, 'show'])->name('billing-adjustment.show');
     Route::put('/billing-adjustment/{id}', [BillingAdjustmentController::class, 'update'])->name('billing-adjustment.update');

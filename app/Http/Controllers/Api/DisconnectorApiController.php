@@ -11,6 +11,16 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class DisconnectorApiController extends Controller
 {
     /**
@@ -28,11 +38,12 @@ class DisconnectorApiController extends Controller
 
         try {
             // Get all active assignments for this disconnector
-            $orders = DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                ->whereIn('status', ['assigned', 'in-progress'])
+            $orders = DisconnectionOrder::query()
+                ->where(mr_col('disconnector_id'), $disconnectorId)
+                ->whereIn(mr_col('status'), ['assigned', 'in-progress'])
                 ->with('consumer')
-                ->orderBy('disconnection_date', 'asc')
-                ->orderBy('created_at', 'desc')
+                ->orderBy(mr_col('disconnection_date'), 'asc')
+                ->orderBy(mr_col('created_at'), 'desc')
                 ->get();
 
             $consumerZoneColumn = DisconnectionOrder::consumerZoneIdColumn();
@@ -91,18 +102,18 @@ class DisconnectorApiController extends Controller
             $query = DisconnectionOrder::with(['consumer', 'disconnector']);
 
             if ($request->has('status')) {
-                $query->where('status', $request->input('status'));
+                $query->where(mr_col('status'), $request->input('status'));
             }
 
             if ($request->has('zone')) {
-                $query->where('zone_code', $request->input('zone'));
+                $query->where(mr_col('zone_code'), $request->input('zone'));
             }
 
             if ($request->has('disconnector_id')) {
-                $query->where('disconnector_id', $request->input('disconnector_id'));
+                $query->where(mr_col('disconnector_id'), $request->input('disconnector_id'));
             }
 
-            $orders = $query->orderBy('created_at', 'desc')->get();
+            $orders = $query->orderBy(mr_col('created_at'), 'desc')->get();
 
             return response()->json([
                 'success' => true,
@@ -222,8 +233,9 @@ class DisconnectorApiController extends Controller
         $disconnectorId = (int) $request->input('disconnector_id');
 
         try {
-            $affected = DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                ->whereIn('status', ['pending', 'assigned', 'in-progress'])
+            $affected = DisconnectionOrder::query()
+                ->where(mr_col('disconnector_id'), $disconnectorId)
+                ->whereIn(mr_col('status'), ['pending', 'assigned', 'in-progress'])
                 ->update([
                     'status' => 'cancelled',
                     'notes' => 'Cleared by disconnector from mobile app',
@@ -261,12 +273,13 @@ class DisconnectorApiController extends Controller
             : now()->subDays(30);
 
         try {
-            $orders = DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                ->where('status', 'cancelled')
-                ->where('notes', 'like', '%' . DisconnectionOrder::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX)
-                ->where('updated_at', '>=', $since)
+            $orders = DisconnectionOrder::query()
+                ->where(mr_col('disconnector_id'), $disconnectorId)
+                ->where(mr_col('status'), 'cancelled')
+                ->where(mr_col('notes'), 'like', '%' . DisconnectionOrder::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX)
+                ->where(mr_col('updated_at'), '>=', $since)
                 ->with('consumer')
-                ->orderBy('updated_at', 'desc')
+                ->orderBy(mr_col('updated_at'), 'desc')
                 ->get()
                 ->map(function ($order) {
                     return $this->formatAssignmentForMobile($order);
@@ -301,22 +314,22 @@ class DisconnectorApiController extends Controller
 
         try {
             $stats = [
-                'total_assigned' => DisconnectionOrder::where('disconnector_id', $disconnectorId)->count(),
-                'pending' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->where('status', 'pending')->count(),
-                'assigned' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->where('status', 'assigned')->count(),
-                'in_progress' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->where('status', 'in-progress')->count(),
-                'disconnected' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->where('status', 'disconnected')->count(),
-                'reconnected' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->where('status', 'reconnected')->count(),
-                'cancelled' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->where('status', 'cancelled')->count(),
-                'total_outstanding' => DisconnectionOrder::where('disconnector_id', $disconnectorId)
-                    ->whereIn('status', ['assigned', 'in-progress'])
-                    ->sum('total_outstanding'),
+                'total_assigned' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)->count(),
+                'pending' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->where(mr_col('status'), 'pending')->count(),
+                'assigned' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->where(mr_col('status'), 'assigned')->count(),
+                'in_progress' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->where(mr_col('status'), 'in-progress')->count(),
+                'disconnected' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->where(mr_col('status'), 'disconnected')->count(),
+                'reconnected' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->where(mr_col('status'), 'reconnected')->count(),
+                'cancelled' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->where(mr_col('status'), 'cancelled')->count(),
+                'total_outstanding' => DisconnectionOrder::query()->where(mr_col('disconnector_id'), $disconnectorId)
+                    ->whereIn(mr_col('status'), ['assigned', 'in-progress'])
+                    ->sum(mr_col('total_outstanding')),
             ];
 
             return response()->json([
@@ -659,9 +672,9 @@ class DisconnectorApiController extends Controller
 
             $ordersQuery = DisconnectionOrder::query();
             if ($disconnectorId) {
-                $ordersQuery->where('disconnector_id', $disconnectorId);
+                $ordersQuery->where(mr_col('disconnector_id'), $disconnectorId);
             } else {
-                $ordersQuery->whereIn('status', ['assigned', 'in-progress']);
+                $ordersQuery->whereIn(mr_col('status'), ['assigned', 'in-progress']);
             }
 
             $orders = $ordersQuery->get();
@@ -676,8 +689,8 @@ class DisconnectorApiController extends Controller
             $seen = [];
 
             if (! empty($consumerIds)) {
-                $zones = DB::table('consumer_zone')
-                    ->whereIn('id', $consumerIds)
+                $zones = DB::table(mr_col('consumer_zone'))
+                    ->whereIn(mr_col('id'), $consumerIds)
                     ->select('id', 'account_no', 'account_name', 'zone_code')
                     ->get();
 
@@ -693,7 +706,7 @@ class DisconnectorApiController extends Controller
             }
 
             foreach ($byAccount as $normAccount => $aging) {
-                $zone = DB::table('consumer_zone')
+                $zone = DB::table(mr_col('consumer_zone'))
                     ->whereRaw(
                         "REPLACE(REPLACE(REPLACE(UPPER(account_no), '-', ''), ' ', ''), '.', '') = ?",
                         [$normAccount]

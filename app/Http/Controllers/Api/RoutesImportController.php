@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
@@ -76,10 +76,10 @@ class RoutesImportController extends Controller
                 'zone_code' => $item['zone'] ?? $item['zoneCode'] ?? 'UN',
             ];
 
-            $existing = ConsumerZoneOne::where($lookup)->first();
+            $existing = ConsumerZone::where($lookup)->first();
 
             if ($existing) {
-                $existing->update(ConsumerZoneOne::filterTableAttributes(array_filter([
+                $existing->update(ConsumerZone::filterTableAttributes(array_filter([
                     'account_name' => $fullName,
                     'category_code' => $category,
                     'address' => $address,
@@ -89,7 +89,7 @@ class RoutesImportController extends Controller
                 ], fn ($v) => $v !== null && $v !== '')));
                 $updated++;
             } else {
-                ConsumerZoneOne::create(ConsumerZoneOne::filterTableAttributes($payload));
+                ConsumerZone::create(ConsumerZone::filterTableAttributes($payload));
                 $inserted++;
             }
         }

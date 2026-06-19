@@ -157,6 +157,14 @@
                 @include('partials.navbar')
 
                 <div class="container-fluid py-4 edit-billing-shell">
+                    @if(session('error'))
+                    <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                        {{ session('error') }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    @endif
                     <div class="bam-header d-flex align-items-center justify-content-between flex-wrap">
                         <h5 class="mb-0 font-weight-bold text-dark">Billing Adjustment</h5>
                         <div class="d-flex gap-2">
@@ -191,7 +199,7 @@
                                         <option value="AR">AR (Consumer ledger)</option>
                                         <option value="LRO">LRO</option>
                                     </select>
-                                    <small class="d-block mt-1 small text-muted">AR = consumer ledger adjustments; LRO = LRO ledger.</small>
+                                    <small class="d-block mt-1 small text-muted">AR = consumer ledger adjustments; LRO = LRO ledger. Sundry acct codes (19901xxx) use LRO + DM only.</small>
                                 </div>
                             </div>
                             <div class="row">
@@ -290,6 +298,7 @@
                                             <th>Trans</th>
                                             <th>Date</th>
                                             <th>Type</th>
+                                            <th>Acct Code</th>
                                             <th>Account No</th>
                                             <th>Account Name</th>
                                             <th class="text-right">Amount</th>
@@ -303,7 +312,8 @@
                                             $allEntries = collect();
                                             foreach($billingAdjustments as $ba) {
                                                 $allEntries->push([
-                                                    'source'   => 'AR',
+                                                    'source'   => 'BAM',
+                                                    'ledger'   => strtoupper($ba->ledger ?? 'AR'),
                                                     'data'     => $ba,
                                                     'sort_key' => ($ba->date ?? '0000-00-00') . str_pad($ba->id, 10, '0', STR_PAD_LEFT),
                                                 ]);
@@ -312,56 +322,93 @@
                                                 foreach($lroEntries as $entry) {
                                                     $allEntries->push([
                                                         'source'   => 'LRO',
+                                                        'ledger'   => 'LRO',
                                                         'data'     => $entry,
                                                         'sort_key' => ($entry->date ?? '0000-00-00') . str_pad($entry->id, 10, '0', STR_PAD_LEFT),
                                                     ]);
                                                 }
                                             }
-                                            $allEntries = $allEntries->sortByDesc('sort_key')->values();
+                                            $allEntries = $allEntries->sortByDesc(fn (array $row) => $row['sort_key'] ?? '')->values();
                                         @endphp
 
                                         @forelse($allEntries as $row)
-                                            @php $item = $row['data']; @endphp
-                                            @if($row['source'] === 'AR')
+                                            @php
+                                                $item = $row['data'];
+                                                $isOthers = ($item->type ?? '') === 'Others';
+                                                $typeBadgeClass = $item->type === 'CM'
+                                                    ? 'badge-success'
+                                                    : ($item->type === 'DM' ? 'badge-warning' : 'badge-info');
+                                            @endphp
+                                            @if($row['source'] === 'BAM')
                                             <tr>
-                                                <td>{{ $item->acct_code ?? '-' }}</td>
+                                                <td>{{ $row['ledger'] ?? 'AR' }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
-                                                <td><span class="badge {{ $item->type === 'CM' ? 'badge-success' : 'badge-warning' }}">{{ $item->type }}</span></td>
-                                                <td>{{ $item->consumerZone->account_no ?? $item->account_no ?? '-' }}</td>
-                                                <td>{{ $item->consumerZone->account_name ?? '-' }}</td>
+                                                <td><span class="badge {{ $typeBadgeClass }}">{{ $item->type }}</span></td>
+                                                <td>{{ $item->acct_code ?? '-' }}</td>
+                                                <td>{{ $isOthers ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '-') }}</td>
+                                                <td>{{ $isOthers ? '' : ($item->consumerZone->account_name ?? '-') }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
                                                 <td><span class="badge badge-{{ $item->status === 'Approved' ? 'success' : ($item->status === 'Posted' ? 'primary' : ($item->status === 'Cancelled' ? 'danger' : 'secondary')) }}">{{ $item->status === 'Posted' ? 'Paid' : $item->status }}</span></td>
                                                 <td class="text-center">
+                                                    @php
+                                                        $bamStatus = strtoupper(trim($item->status ?? ''));
+                                                        $isArCmPaid = ($row['ledger'] ?? 'AR') === 'AR'
+                                                            && ($item->type ?? '') === 'CM'
+                                                            && in_array($bamStatus, ['POSTED', 'PAID'], true);
+                                                    @endphp
+                                                    @if($isArCmPaid)
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            disabled
+                                                            title="Paid entries cannot be edited">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    @else
                                                     <a href="{{ route('billing-adjustment.edit', $item->id) }}" class="btn btn-sm btn-outline-primary" title="Edit">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
+                                                    @endif
                                                 </td>
                                             </tr>
                                             @else
                                             <tr>
-                                                <td>{{ $item->acct_code ?? '-' }}</td>
+                                                <td>{{ $row['ledger'] ?? 'LRO' }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
-                                                <td><span class="badge badge-info">{{ $item->type ?? 'CM' }}</span></td>
-                                                <td>{{ ($item->type ?? '') === 'Others' ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '') }}</td>
-                                                <td>{{ $item->consumerZone->account_name ?? $item->account_name ?? '-' }}</td>
+                                                <td><span class="badge {{ $typeBadgeClass }}">{{ $item->type ?? 'CM' }}</span></td>
+                                                <td>{{ $item->acct_code ?? '-' }}</td>
+                                                <td>{{ $isOthers ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '') }}</td>
+                                                <td>{{ $isOthers ? '' : ($item->consumerZone->account_name ?? $item->account_name ?? '-') }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount ?? 0, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
                                                 <td><span class="badge badge-{{ ($item->status ?? 'Pending') === 'Approved' ? 'success' : (($item->status ?? 'Pending') === 'Posted' ? 'primary' : (($item->status ?? 'Pending') === 'Cancelled' ? 'danger' : 'secondary')) }}">{{ ($item->status ?? 'Pending') === 'Posted' ? 'Paid' : ($item->status ?? 'Pending') }}</span></td>
                                                 <td class="text-center">
+                                                    @php
+                                                        $lroStatus = strtoupper(trim($item->status ?? ''));
+                                                        $isLroPaid = in_array($lroStatus, ['POSTED', 'PAID'], true);
+                                                    @endphp
+                                                    @if($isLroPaid)
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            disabled
+                                                            title="Paid entries cannot be edited">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    @else
                                                     <a href="{{ route('billing-adjustment.lro.edit', $item->id) }}" class="btn btn-sm btn-outline-primary" title="Edit">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
+                                                    @endif
                                                 </td>
                                             </tr>
                                             @endif
                                         @empty
                                             <tr>
-                                                <td colspan="9" class="text-center text-muted py-4">No billing adjustment transactions recorded yet.</td>
+                                                <td colspan="10" class="text-center text-muted py-4">No billing adjustment transactions recorded yet.</td>
                                             </tr>
                                         @endforelse
                                         <tr id="bamListNoMatchRow" class="d-none">
-                                            <td colspan="9" class="text-center text-muted py-4">No matching records found.</td>
+                                            <td colspan="10" class="text-center text-muted py-4">No matching records found.</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -504,6 +551,51 @@
                 bamNoEl.readOnly = true;
                 if ((nameEl.value || '').trim() && !accountEl.value) nameEl.value = '';
             }
+
+            bamApplySundryRules();
+            bamApplyStatusOptions();
+        }
+
+        function bamApplySundryRules() {
+            var acctHidden = document.getElementById('bamAcctCode');
+            var ledgerEl = document.getElementById('bamAr');
+            var typeEl = document.getElementById('bamType');
+            if (!acctHidden || !ledgerEl || !typeEl) return;
+
+            var code = (acctHidden.value || '').trim();
+            var sundryCodes = ['19901020', '19901030', '19901040'];
+            var isSundry = sundryCodes.indexOf(code) !== -1;
+            var isOthers = typeEl.value === 'Others';
+
+            if (isSundry && !isOthers) {
+                bamSetSelected('bamAr', 'LRO');
+                bamSetSelected('bamType', 'DM');
+                ledgerEl.disabled = true;
+            } else if (!isOthers) {
+                if (!code) {
+                    bamSetSelected('bamAr', 'AR');
+                }
+                ledgerEl.disabled = false;
+            }
+        }
+
+        function bamApplyStatusOptions() {
+            var typeEl = document.getElementById('bamType');
+            var ledgerEl = document.getElementById('bamAr');
+            var statusEl = document.getElementById('bamStatus');
+            if (!typeEl || !ledgerEl || !statusEl) return;
+
+            var paidOption = statusEl.querySelector('option[value="Posted"]');
+            if (!paidOption) return;
+
+            var showPaid = ledgerEl.value === 'LRO'
+                || (ledgerEl.value === 'AR' && typeEl.value === 'CM');
+            paidOption.hidden = !showPaid;
+            paidOption.disabled = !showPaid;
+
+            if (!showPaid && statusEl.value === 'Posted') {
+                statusEl.value = 'Approved';
+            }
         }
 
         // Populate all form fields from a data object
@@ -520,6 +612,9 @@
             bamSetVal('bamRemarks', entry.remarks || '');
             bamSetSelected('bamStatus', entry.status || 'Pending');
             bamSetVal('bamCorrectReading', entry.correct_reading !== null && entry.correct_reading !== undefined ? entry.correct_reading : '0');
+            bamApplyTypeRules();
+            bamApplySundryRules();
+            bamApplyStatusOptions();
         }
 
         // Reset the form to a blank new-entry state; pass nextBamNo from server response
@@ -585,12 +680,17 @@
                 rows.forEach(function(row) {
                     if (row.id === 'bamListNoMatchRow') return;
                     var cells = row.querySelectorAll('td');
-                    if (cells.length < 9) return;
+                    if (cells.length < 10) return;
 
-                    var accountNo = normalize(cells[3].textContent);
-                    var accountName = normalize(cells[4].textContent);
-                    var reference = normalize(cells[6].textContent);
-                    var matches = !query || accountNo.indexOf(query) !== -1 || accountName.indexOf(query) !== -1 || reference.indexOf(query) !== -1;
+                    var acctCode = normalize(cells[3].textContent);
+                    var accountNo = normalize(cells[4].textContent);
+                    var accountName = normalize(cells[5].textContent);
+                    var reference = normalize(cells[7].textContent);
+                    var matches = !query
+                        || accountNo.indexOf(query) !== -1
+                        || accountName.indexOf(query) !== -1
+                        || reference.indexOf(query) !== -1
+                        || acctCode.indexOf(query) !== -1;
 
                     row.style.display = matches ? '' : 'none';
                     if (matches) visibleCount++;
@@ -800,6 +900,8 @@
                         acctDisplay.placeholder = code ? '' : '— Select Acct Code —';
                         if (remarksInput) remarksInput.value = desc;
                         acctDropdown.style.display = 'none';
+                        bamApplySundryRules();
+                        bamApplyStatusOptions();
                     });
                 });
                 document.addEventListener('click', function(e) {
@@ -813,9 +915,11 @@
         // ─── Type change rules ──────────────────────────────────────────────────
         (function() {
             var typeEl = document.getElementById('bamType');
+            var ledgerEl = document.getElementById('bamAr');
             var amountEl = document.getElementById('bamAmount');
             if (!typeEl) return;
             typeEl.addEventListener('change', bamApplyTypeRules);
+            if (ledgerEl) ledgerEl.addEventListener('change', bamApplyStatusOptions);
             if (amountEl) {
                 amountEl.addEventListener('focus', function() {
                     amountEl.value = bamNormalizeAmountForEdit(amountEl.value);

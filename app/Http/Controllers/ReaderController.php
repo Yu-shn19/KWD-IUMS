@@ -2,9 +2,19 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\ConsumerZoneOne; // MAO NI AKOANG GI ADD
+use App\Models\ConsumerZone; // MAO NI AKOANG GI ADD
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 /**
  * Reader app: Retrieve Zone based on meter_reading_schedules (assigned to the reader).
@@ -26,9 +36,18 @@ class ReaderController extends Controller
         }
 
         try {
-            $zonesQuery = DB::table('meter_reading_schedules as mrs')
-                ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
-                ->where('mrs.assigned_reader_id', $readerId)
+            $mrsTable = mr_col('meter_reading_schedules as mrs');
+            $czTable = mr_col('consumer_zone as cz');
+            $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+            $czId = mr_col('cz.id');
+            $mrsAssignedReaderId = mr_col('mrs.assigned_reader_id');
+            $mrsReadingDate = mr_col('mrs.reading_date');
+            $mrsBillDate = mr_col('mrs.bill_date');
+            $czZoneCode = mr_col('cz.zone_code');
+
+            $zonesQuery = DB::table($mrsTable)
+                ->join($czTable, $mrsConsumerZoneId, '=', $czId)
+                ->where($mrsAssignedReaderId, $readerId)
                 ->select('cz.zone_code as zone')
                 ->distinct();
 
@@ -36,9 +55,9 @@ class ReaderController extends Controller
                 $dateNorm = $readingDate instanceof \DateTimeInterface
                     ? $readingDate->format('Y-m-d')
                     : date('Y-m-d', strtotime($readingDate));
-                $zonesQuery->where(function ($q) use ($dateNorm) {
-                    $q->whereDate('mrs.reading_date', $dateNorm)
-                      ->orWhereDate('mrs.bill_date', $dateNorm);
+                $zonesQuery->where(function ($q) use ($dateNorm, $mrsReadingDate, $mrsBillDate) {
+                    $q->whereDate($mrsReadingDate, $dateNorm)
+                      ->orWhereDate($mrsBillDate, $dateNorm);
                 });
             }
 
@@ -49,11 +68,11 @@ class ReaderController extends Controller
                 ->values()
                 ->toArray();
 
-            $readingDates = DB::table('meter_reading_schedules as mrs')
-                ->where('mrs.assigned_reader_id', $readerId)
+            $readingDates = DB::table($mrsTable)
+                ->where($mrsAssignedReaderId, $readerId)
                 ->selectRaw('DISTINCT COALESCE(reading_date, bill_date) as dt')
                 ->whereNotNull(DB::raw('COALESCE(reading_date, bill_date)'))
-                ->orderBy('dt', 'desc')
+                ->orderBy(mr_col('dt'), 'desc')
                 ->pluck('dt')
                 ->map(function ($d) {
                     return $d instanceof \DateTimeInterface ? $d->format('Y-m-d') : (string) $d;
@@ -90,9 +109,19 @@ class ReaderController extends Controller
         }
 
         try {
-            $query = DB::table('meter_reading_schedules as mrs')
-                ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
-                ->where('mrs.assigned_reader_id', $readerId)
+            $mrsTable = mr_col('meter_reading_schedules as mrs');
+            $czTable = mr_col('consumer_zone as cz');
+            $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+            $czId = mr_col('cz.id');
+            $mrsAssignedReaderId = mr_col('mrs.assigned_reader_id');
+            $mrsReadingDate = mr_col('mrs.reading_date');
+            $mrsBillDate = mr_col('mrs.bill_date');
+            $czZoneCode = mr_col('cz.zone_code');
+            $mrsSedrNumber = mr_col('mrs.sedr_number');
+
+            $query = DB::table($mrsTable)
+                ->join($czTable, $mrsConsumerZoneId, '=', $czId)
+                ->where($mrsAssignedReaderId, $readerId)
                 ->select(
                     'mrs.id',
                     'mrs.sedr_number',
@@ -114,20 +143,20 @@ class ReaderController extends Controller
                 );
 
             if ($zone !== null && $zone !== '') {
-                $query->where('cz.zone_code', $zone);
+                $query->where($czZoneCode, $zone);
             }
             if ($readingDate !== null && $readingDate !== '') {
                 $dateNorm = $readingDate instanceof \DateTimeInterface
                     ? $readingDate->format('Y-m-d')
                     : date('Y-m-d', strtotime($readingDate));
-                $query->where(function ($q) use ($dateNorm) {
-                    $q->whereDate('mrs.reading_date', $dateNorm)
-                      ->orWhereDate('mrs.bill_date', $dateNorm);
+                $query->where(function ($q) use ($dateNorm, $mrsReadingDate, $mrsBillDate) {
+                    $q->whereDate($mrsReadingDate, $dateNorm)
+                      ->orWhereDate($mrsBillDate, $dateNorm);
                 });
             }
 
             $rows = $query->orderByRaw('COALESCE(mrs.reading_date, mrs.bill_date) DESC')
-                ->orderBy('mrs.sedr_number')
+                ->orderBy($mrsSedrNumber)
                 ->get();
 
             $data = $rows->map(function ($row) {
@@ -189,9 +218,10 @@ class ReaderController extends Controller
         }
 
         $normalized = str_replace('-', '', $accountNo);
+        $accountNoColumn = mr_col('account_no');
 
-        $consumer = ConsumerZoneOne::where(function ($query) use ($accountNo, $normalized) {
-            $query->where('account_no', $accountNo)
+        $consumer = ConsumerZone::query()->where(function ($query) use ($accountNo, $normalized, $accountNoColumn) {
+            $query->where($accountNoColumn, $accountNo)
                 ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
                 ->orWhereRaw('UPPER(TRIM(account_no)) = ?', [strtoupper(trim($accountNo))]);
         })->first();
@@ -220,7 +250,7 @@ class ReaderController extends Controller
     
     /**
      * POST /api/consumer/coordinates
-     * Save latitude/longitude on consumer_zone (ConsumerZoneOne) for the given account_no.
+     * Save latitude/longitude on consumer_zone (ConsumerZone) for the given account_no.
      * Authenticated readers only (api.reader middleware). MAO NI AKOANG GI ADD 
      */
     public function saveConsumerCoordinates(Request $request)
@@ -246,9 +276,10 @@ class ReaderController extends Controller
         }
 
         $normalized = str_replace('-', '', $accountNo);
+        $accountNoColumn = mr_col('account_no');
 
-        $consumer = ConsumerZoneOne::where(function ($query) use ($accountNo, $normalized) {
-            $query->where('account_no', $accountNo)
+        $consumer = ConsumerZone::query()->where(function ($query) use ($accountNo, $normalized, $accountNoColumn) {
+            $query->where($accountNoColumn, $accountNo)
                 ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
                 ->orWhereRaw('UPPER(TRIM(account_no)) = ?', [strtoupper(trim($accountNo))]);
         })->first();
@@ -260,7 +291,7 @@ class ReaderController extends Controller
             ], 404);
         }
 
-        $consumer->update(ConsumerZoneOne::filterTableAttributes([
+        $consumer->update(ConsumerZone::filterTableAttributes([
             'latitude' => $lat,
             'longitude' => $lng,
         ]));

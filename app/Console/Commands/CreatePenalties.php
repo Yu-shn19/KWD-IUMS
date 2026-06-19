@@ -3,8 +3,8 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use App\Models\ConsumerZoneOne;
-use App\Models\Collection;
+use App\Models\ConsumerZone;
+use App\Models\ConsumerPayment;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
@@ -41,7 +41,7 @@ class CreatePenalties extends Command
 
         if ($accountNo) {
             $normalized = str_replace('-', '', trim($accountNo));
-            $consumer = ConsumerZoneOne::where('account_no', trim($accountNo))
+            $consumer = ConsumerZone::where('account_no', trim($accountNo))
                 ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
                 ->first();
             if (!$consumer) {
@@ -52,7 +52,7 @@ class CreatePenalties extends Command
             $consumers = collect([$consumer]);
             $this->info("Processing account: {$accountNo}");
         } else {
-            $consumers = ConsumerZoneOne::all();
+            $consumers = ConsumerZone::all();
             $this->info("Processing {$consumers->count()} consumers...");
         }
 
@@ -162,20 +162,13 @@ class CreatePenalties extends Command
             }
 
             if ($billMonth && $billMonth->year == 2025 && $billMonth->month == 12) {
-                $collectionExists = Collection::where('account_no', $accountNo)
-                    ->whereNotNull('coll_date')
-                    ->where('pay_amount', '>', 0)
-                    ->where(function ($query) {
-                        $query->whereNull('cancel')
-                            ->orWhere('cancel', '!=', 'Y')
-                            ->orWhere('cancel', '!=', 'YES');
-                    })
-                    ->where(function ($query) use ($dueDate, $billMonth) {
-                        $query->whereBetween('coll_date', [
-                            $billMonth->copy()->subDays(5)->format('Y-m-d'),
-                            $dueDate->copy()->addDays(30)->format('Y-m-d'),
-                        ]);
-                    })
+                $collectionExists = ConsumerPayment::query()
+                    ->forAccountNo($accountNo)
+                    ->importable()
+                    ->whereBetween('paid_at', [
+                        $billMonth->copy()->subDays(5)->format('Y-m-d 00:00:00'),
+                        $dueDate->copy()->addDays(30)->format('Y-m-d 23:59:59'),
+                    ])
                     ->exists();
 
                 if ($collectionExists) {

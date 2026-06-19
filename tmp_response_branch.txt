@@ -1,0 +1,447 @@
+        // Get reader information if available
+        $reader = null;
+        if ($reading->reader_id) {
+            $reader = User::find($reading->reader_id);
+        }
+        
+        // Always source address from consumer_zone.address when possible (single source of truth).
+        // meter_reading_schedules.address may be stale or missing.
+        $consumerForAddress = null;
+        $accForAddress = strtoupper(trim((string) ($reading->account_number ?? $accountNumber ?? '')));
+        if ($accForAddress !== '') {
+            $normForAddress = str_replace('-', '', $accForAddress);
+            $consumerForAddress = ConsumerZoneOne::where(function ($q) use ($accForAddress, $normForAddress) {
+                $q->where('account_no', $accForAddress)
+                    ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normForAddress])
+                    ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [$accForAddress]);
+            })->first();
+        }
+
+        // Prepare account data from downloaded_readings
+        $accountData = [
+            'number' => $reading->account_number ?? $accountNumber,
+            'name' => $reading->account_name ?? $reading->schedule_account_name ?? '',
+            'zone' => $reading->zone ?? '',
+            'category' => $reading->category ?? '',
+            'consumer_category' => $consumerForAddress?->category_code,
+            'address' => $consumerForAddress?->address ?? ($reading->address ?? ''),
+            'bill_disc_percent' => $consumerForAddress?->bill_disc_percent,
+            'osca_id_no' => $consumerForAddress?->osca_id_no,
+            'bill_disc_updated_at' => !empty($consumerForAddress?->bill_disc_updated_at)
+                ? Carbon::parse($consumerForAddress->bill_disc_updated_at)->format('Y-m-d')
+                : null,
+            'meter_number' => $reading->meter_number ?? null,
+            'reader_id' => $reading->reader_id,
+            'reader_name' => $reader ? $this->formatName($reader) : null,
+        ];
+
+        // Prepare billing data from downloaded_readings and schedule
+        $billMonthFromSchedule = $reading->bill_month ? Carbon::parse($reading->bill_month) : null;
+        $billMonthDate = $billMonthDate ?? ($billMonthFromSchedule ? $billMonthFromSchedule->copy()->startOfMonth() : null);
+
+        // Calculate current bill if not available
+        // Priority: downloaded_readings.current_bill > meter_reading_schedules.current_bill > calculated from consumption
+        $consumption = $reading->consumption ?? 0;
+        $downloadedCurrentBill = isset($reading->downloaded_current_bill) && $reading->downloaded_current_bill !== null 
+            ? (float) $reading->downloaded_current_bill 
+            : null;
+        $scheduleCurrentBill = isset($reading->schedule_current_bill) && $reading->schedule_current_bill !== null 
+            ? (float) $reading->schedule_current_bill 
+            : null;
+        
+        // Use downloaded_readings.current_bill if available, otherwise use schedule's current_bill
+        $storedCurrentBill = $downloadedCurrentBill ?? $scheduleCurrentBill ?? 0.0;
+        
+        // Get category from reading (from schedule) to determine calculation method
+        $category = $reading->category ?? '';
+        
+        // Meter maintenance charge (separate from current bill)
+        $meterMaintenanceCharge = 20.00;
+        
+        // If current_bill is 0 or null, calculate it from consumption using category
+        // Note: Current bill does NOT include meter maintenance charge (₱20) or penalty
+        $currentBill = $storedCurrentBill;
+        if ($currentBill <= 0 && $consumption > 0) {
+            // Calculate bill WITHOUT meter rental (meter rental shown separately)
+            $currentBill = $this->calculateWaterBill($consumption, $category);
+        }
+        
+        // Penalty from penalties table: scope by consumer_zone_id, match by schedule_id or downloaded_reading_id
+        $penalty = 0.0;
+        $consumerByAccount = ConsumerZoneOne::where(function ($q) use ($reading) {
+            $acc = $reading->account_number ?? '';
+            $norm = str_replace('-', '', $acc);
+            $q->where('account_no', $acc)
+              ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$norm])
+              ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper(trim($acc))]);
+        })->first();
+        // Fallback: resolve consumer from schedule's account_number if reading account didn't match
+        if (!$consumerByAccount && !empty($reading->schedule_id)) {
+            $czId = DB::table('meter_reading_schedules')->where('id', $reading->schedule_id)->value('consumer_zone_id');
+            if ($czId) {
+                $consumerByAccount = ConsumerZoneOne::find($czId);
+            }
+        }
+        if ($consumerByAccount && (!empty($reading->schedule_id) || !empty($reading->downloaded_id))) {
+            $penaltyQuery = Penalty::where('consumer_zone_id', $consumerByAccount->id)
+                ->where(function ($q) use ($reading) {
+                    if (!empty($reading->schedule_id)) {
+                        $q->where('schedule_id', $reading->schedule_id);
+                    }
+                    if (!empty($reading->downloaded_id)) {
+                        if (!empty($reading->schedule_id)) {
+                            $q->orWhere('downloaded_reading_id', $reading->downloaded_id);
+                        } else {
+                            $q->where('downloaded_reading_id', $reading->downloaded_id);
+                        }
+                    }
+                });
+            $penaltyRecords = $penaltyQuery->get();
+            foreach ($penaltyRecords as $rec) {
+                if ($rec->penalty_amount !== null) {
+                    $penalty += (float) $rec->penalty_amount;
+                }
+            }
+            $penalty = round($penalty, 2);
+        }
+        // Get penalty from consumer_ledgers (PENALTY trans) for this consumer and bill month (so breakdown shows ledger penalty e.g. 62.48)
+        $billMonthForPenalty = $billMonthDate ?? ($reading->bill_month ? Carbon::parse($reading->bill_month)->startOfMonth() : null);
+        if ($billMonthForPenalty && $consumerByAccount) {
+            $monthStart = $billMonthForPenalty->copy()->startOfMonth();
+            $monthEnd = $billMonthForPenalty->copy()->endOfMonth();
+            $ledgerPenaltyQuery = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumerByAccount->id)
+                ->where('trans', 'PENALTY')
+                ->whereBetween('date', [$monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d')]);
+            if (!empty($reading->schedule_id) || !empty($reading->downloaded_id)) {
+                $ledgerPenaltyQuery->where(function ($q) use ($reading) {
+                    if (!empty($reading->schedule_id)) {
+                        $q->where('schedule_id', $reading->schedule_id);
+                    }
+                    if (!empty($reading->downloaded_id)) {
+                        if (!empty($reading->schedule_id)) {
+                            $q->orWhere('downloaded_reading_id', $reading->downloaded_id);
+                        } else {
+                            $q->where('downloaded_reading_id', $reading->downloaded_id);
+                        }
+                    }
+                });
+            }
+            $ledgerPenaltySum = $ledgerPenaltyQuery->get()->sum(function ($row) {
+                $p = (float) ($row->penalty ?? 0);
+                $d = (float) ($row->debit ?? 0);
+                return $p > 0 ? $p : $d;
+            });
+            if ($ledgerPenaltySum > 0) {
+                $penalty = round($ledgerPenaltySum, 2);
+            } else {
+                // No match with schedule: get any PENALTY in this month for consumer (by date only)
+                $ledgerPenaltySum = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumerByAccount->id)
+                    ->where('trans', 'PENALTY')
+                    ->whereBetween('date', [$monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d')])
+                    ->get()
+                    ->sum(function ($row) {
+                        $p = (float) ($row->penalty ?? 0);
+                        $d = (float) ($row->debit ?? 0);
+                        return $p > 0 ? $p : $d;
+                    });
+                if ($ledgerPenaltySum > 0) {
+                    $penalty = round($ledgerPenaltySum, 2);
+                }
+            }
+        }
+
+        // For breakdown payment: get Current Bill and Water Maintenance from ledger BILLING/BILL entry for this month (so breakdown matches ledger)
+        $billMonthForLedger = $billMonthDate ?? ($reading->bill_month ? Carbon::parse($reading->bill_month)->startOfMonth() : null);
+        if ($consumerByAccount && $billMonthForLedger) {
+            $monthStart = $billMonthForLedger->copy()->startOfMonth();
+            $monthEnd = $billMonthForLedger->copy()->endOfMonth();
+            $billingEntry = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumerByAccount->id)
+                ->whereIn('trans', ['BILLING', 'BILL'])
+                ->whereBetween('date', [$monthStart->format('Y-m-d'), $monthEnd->format('Y-m-d')])
+                ->when(!empty($reading->schedule_id), function ($q) use ($reading) {
+                    $q->where('schedule_id', $reading->schedule_id);
+                })
+                ->orderBy('date', 'desc')
+                ->first();
+            if ($billingEntry) {
+                $ledgerBillAmount = (float) ($billingEntry->billamount ?? 0);
+                $ledgerOthers = (float) ($billingEntry->others ?? 0);
+                if ($ledgerBillAmount > 0) {
+                    $currentBill = round($ledgerBillAmount, 2);
+                }
+                if ($ledgerOthers >= 0) {
+                    $meterMaintenanceCharge = round($ledgerOthers, 2);
+                }
+            }
+        }
+
+        $billingData = [
+            'bill_month' => $billMonthDate?->format('Y-m'),
+            'bill_month_input' => $billMonthDate?->format('m-Y'),
+            'bill_month_display' => $billMonthDate?->format('F Y'),
+            'bill_date' => $reading->bill_date ? Carbon::parse($reading->bill_date)->format('Y-m-d') : null,
+            'due_date' => $reading->due_date ? Carbon::parse($reading->due_date)->format('Y-m-d') : null,
+            'disconnection_date' => $reading->disconnection_date ? Carbon::parse($reading->disconnection_date)->format('Y-m-d') : null,
+            'previous_reading' => $reading->previous_reading ?? 0,
+            'previous_reading_date' => $reading->previous_reading_date ? Carbon::parse($reading->previous_reading_date)->format('Y-m-d') : null,
+            'current_reading' => $reading->current_reading ?? null,
+            'reading_date' => $reading->reading_date ? Carbon::parse($reading->reading_date)->format('Y-m-d') : null,
+            'consumption' => $consumption,
+            'current_bill' => round($currentBill, 2),
+            'meter_maintenance_charge' => $meterMaintenanceCharge,
+            'penalty' => $penalty,
+            'arrears' => $reading->arrears !== null ? (float) $reading->arrears : 0.0,
+            'total_amount' => $reading->total_amount !== null ? (float) $reading->total_amount : 0.0,
+            'sedr_number' => $reading->sedr_number ?? null,
+        ];
+
+        // Prepare payment data from downloaded_readings
+        $paymentAmount = $reading->payment_amount !== null
+            ? (float) $reading->payment_amount
+            : ($reading->total_amount !== null ? (float) $reading->total_amount : ($billingData['current_bill'] + $billingData['arrears']));
+
+        // Payment status: use paid_at from consumer_payments and consumer_ledgers so user can tell if consumer is already paid
+        // Consider paid when either table has paid_at set for this reading/schedule (do not remove or add function once paid)
+        $paymentRow = ConsumerPayment::where('reading_id', $reading->downloaded_id ?? null)
+            ->whereNotNull('paid_at')
+            ->orderBy('paid_at', 'desc')
+            ->first();
+
+        $ledgerPaymentRow = null;
+        if (!$paymentRow || !$paymentRow->paid_at) {
+            // 1) Match by downloaded_reading_id (exact reading)
+            $ledgerPaymentRow = \App\Models\ConsumerLedger::where('downloaded_reading_id', $reading->downloaded_id ?? 0)
+                ->where('trans', 'PAYMENT')
+                ->whereNotNull('paid_at')
+                ->orderBy('paid_at', 'desc')
+                ->first();
+            // 2) Fallback: match by consumer_zone_id + schedule_id so ledger PAYMENT for this bill shows as paid even if downloaded_reading_id differs
+            if (!$ledgerPaymentRow && $consumerByAccount && !empty($reading->schedule_id)) {
+                $ledgerPaymentRow = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumerByAccount->id)
+                    ->where('schedule_id', $reading->schedule_id)
+                    ->where('trans', 'PAYMENT')
+                    ->whereNotNull('paid_at')
+                    ->where(function ($q) {
+                        $q->whereNull('reference')->orWhereRaw("reference NOT LIKE '%-SC'");
+                    })
+                    ->orderBy('paid_at', 'desc')
+                    ->first();
+                if (!$ledgerPaymentRow) {
+                    $ledgerPaymentRow = \App\Models\ConsumerLedger::where('consumer_zone_id', $consumerByAccount->id)
+                        ->where('schedule_id', $reading->schedule_id)
+                        ->where('trans', 'PAYMENT')
+                        ->whereNotNull('paid_at')
+                        ->orderBy('paid_at', 'desc')
+                        ->first();
+                }
+            }
+            // Do not use "any PAYMENT with date in bill month" — paid only when payment is for THIS reading/schedule and paid_at is set (matches ledger)
+        }
+
+        $isPaid = ($paymentRow && $paymentRow->paid_at) || ($ledgerPaymentRow && $ledgerPaymentRow->paid_at);
+        $paidAtSource = $paymentRow && $paymentRow->paid_at
+            ? $paymentRow->paid_at
+            : ($ledgerPaymentRow && $ledgerPaymentRow->paid_at ? $ledgerPaymentRow->paid_at : null);
+
+        if ($isPaid && $paidAtSource) {
+            $paymentData = [
+                'amount' => $paymentRow ? round((float)($paymentRow->payment_amount ?? 0), 2) : (isset($ledgerPaymentRow) ? round((float)($ledgerPaymentRow->credit ?? 0), 2) : round($paymentAmount, 2)),
+                'tendered' => $paymentRow ? (float)($paymentRow->amount_tendered ?? 0) : 0.0,
+                'change' => $paymentRow ? (float)($paymentRow->change_amount ?? 0) : 0.0,
+                'method' => $paymentRow->payment_method ?? $reading->payment_method ?? null,
+                'remarks' => $paymentRow->remarks ?? $reading->payment_remarks ?? $reading->reader_notes ?? null,
+                'reference' => $paymentRow->or_number ?? (isset($ledgerPaymentRow) ? $ledgerPaymentRow->reference : null) ?? $reading->payment_reference ?? null,
+                'status' => 'paid',
+                'paid_at' => Carbon::parse($paidAtSource)->format('Y-m-d H:i:s'),
+            ];
+            if ($paymentRow) {
+                $paymentData['current_bill'] = round((float)($paymentRow->current_bill ?? 0), 2);
+                $paymentData['penalty'] = round((float)($paymentRow->penalty ?? 0), 2);
+                $paymentData['meter_maintenance'] = round((float)($paymentRow->meter_maintenance ?? 0), 2);
+                $paymentData['arrears_cy'] = round((float)($paymentRow->arrears_cy ?? 0), 2);
+                $paymentData['arrears_py'] = round((float)($paymentRow->arrears_py ?? 0), 2);
+                $paymentData['advances'] = round((float)($paymentRow->advances ?? 0), 2);
+                $paymentData['senior_citizen_discount'] = round((float)($paymentRow->senior_citizen_discount ?? 0), 2);
+                $paymentData['others'] = round((float)($paymentRow->others ?? 0), 2);
+            }
+        } else {
+            $paymentData = [
+                'amount' => round($paymentAmount, 2),
+                'tendered' => $reading->amount_tendered !== null ? (float) $reading->amount_tendered : 0.0,
+                'change' => $reading->change_amount !== null ? (float) $reading->change_amount : 0.0,
+                'method' => $reading->payment_method ?? null,
+                'remarks' => $reading->payment_remarks ?? $reading->reader_notes ?? null,
+                'reference' => $reading->payment_reference ?? null,
+                'status' => 'unpaid',
+                'paid_at' => null,
+            ];
+        }
+
+        // OR lookup rule: if OR exists in consumer_payments, treat it as a paid reference and
+        // return that exact OR breakdown so the UI status and amounts match the searched OR.
+        if ($orNumberInput !== '' && $orLookupPayment) {
+            $paymentData['status'] = 'paid';
+            $paymentData['reference'] = $orLookupPayment->or_number ?? $orNumberInput;
+            $paymentData['amount'] = round((float) ($orLookupPayment->payment_amount ?? $paymentData['amount'] ?? 0), 2);
+            $paymentData['tendered'] = (float) ($orLookupPayment->amount_tendered ?? $paymentData['tendered'] ?? 0);
+            $paymentData['change'] = (float) ($orLookupPayment->change_amount ?? $paymentData['change'] ?? 0);
+            $paymentData['method'] = $orLookupPayment->payment_method ?? ($paymentData['method'] ?? null);
+            $paymentData['remarks'] = $orLookupPayment->remarks ?? ($paymentData['remarks'] ?? null);
+            $paymentData['paid_at'] = $orLookupPayment->paid_at
+                ? Carbon::parse($orLookupPayment->paid_at)->format('Y-m-d H:i:s')
+                : ($paymentData['paid_at'] ?? null);
+
+            $paymentData['current_bill'] = round((float) ($orLookupPayment->current_bill ?? 0), 2);
+            $paymentData['penalty'] = round((float) ($orLookupPayment->penalty ?? 0), 2);
+            $paymentData['meter_maintenance'] = round((float) ($orLookupPayment->meter_maintenance ?? 0), 2);
+            $paymentData['arrears_cy'] = round((float) ($orLookupPayment->arrears_cy ?? 0), 2);
+            $paymentData['arrears_py'] = round((float) ($orLookupPayment->arrears_py ?? 0), 2);
+            $paymentData['advances'] = round((float) ($orLookupPayment->advances ?? 0), 2);
+            $paymentData['senior_citizen_discount'] = round((float) ($orLookupPayment->senior_citizen_discount ?? 0), 2);
+            $paymentData['others'] = round((float) ($orLookupPayment->others ?? 0), 2);
+        }
+
+        // Prepare downloaded reading details
+        $downloadedReadingData = [
+            'id' => $reading->downloaded_id,
+            'schedule_id' => $reading->schedule_id,
+            'reader_id' => $reading->reader_id,
+            'reader_notes' => $reading->reader_notes ?? null,
+            'completed_at' => (is_object($reading) && property_exists($reading, 'completed_at') && $reading->completed_at)
+                ? Carbon::parse($reading->completed_at)->format('Y-m-d H:i:s')
+                : null,
+            'created_at' => $reading->downloaded_created_at ? Carbon::parse($reading->downloaded_created_at)->format('Y-m-d H:i:s') : null,
+            'updated_at' => $reading->downloaded_updated_at ? Carbon::parse($reading->downloaded_updated_at)->format('Y-m-d H:i:s') : null,
+        ];
+
+        // Get consumer's current balance - use the same calculation as ledger (consumer_zone_id already resolved above for penalty)
+        $currentBalance = 0.00;
+        $accountNumberForBalance = $accountData['number'] ?? $accountNumber;
+        $consumerForBalance = $consumerByAccount ?? ($accountNumberForBalance ? ConsumerZoneOne::where(function ($q) use ($accountNumberForBalance) {
+            $norm = str_replace('-', '', $accountNumberForBalance);
+            $q->where('account_no', $accountNumberForBalance)
+              ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$norm])
+              ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper(trim($accountNumberForBalance))]);
+        })->first() : null);
+        if ($consumerForBalance) {
+                // Call the ledger's getLedger method directly to get the exact same balance
+                try {
+                    $ledgerRequest = new Request();
+                    $ledgerRequest->merge([
+                        'account_no' => $accountNumberForBalance,
+                        'year' => '' // Empty year to get all records for balance calculation
+                    ]);
+                    
+                    $ledgerController = new \App\Http\Controllers\ConsumerLedgerController();
+                    $ledgerResponse = $ledgerController->getLedger($ledgerRequest);
+                    $ledgerData = json_decode($ledgerResponse->getContent(), true);
+                    
+                    if (isset($ledgerData['summary']['balance'])) {
+                        $currentBalance = (float)$ledgerData['summary']['balance'];
+                    }
+                } catch (Exception $e) {
+                    // Fallback to direct calculation if ledger call fails
+                    Log::error('Error getting balance from ledger: ' . $e->getMessage());
+                    $currentBalance = 0.00; // Default to 0 if ledger call fails
+            }
+        }
+
+        // Add current balance to account data
+        $accountData['current_balance'] = round($currentBalance, 2);
+
+        // When record was loaded by OR number, fetch LRO payment entries linked to that OR.
+        // This is used by Billing Payment to repopulate SUNDRIES for already-paid records.
+        $lroEntriesByOr = [];
+        if ($orNumberInput !== '') {
+            $orRemarks = 'Payment OR#' . trim($orNumberInput);
+            $consumerZoneId = $consumerForBalance?->id;
+
+            $baseLroQuery = LROLedger::with('consumerZone')
+                ->where('remarks', $orRemarks)
+                ->orderBy('date', 'asc')
+                ->orderBy('id', 'asc');
+
+            $candidateRows = $consumerZoneId
+                ? (clone $baseLroQuery)->forConsumerZone($consumerZoneId)->get()
+                : (clone $baseLroQuery)->get();
+
+            $lroEntriesByOr = $candidateRows->map(function ($row) {
+                return [
+                    'id' => $row->id,
+                    'type' => $row->type,
+                    'date' => $row->date,
+                    'account' => $row->account_no,
+                    'name' => $row->account_name,
+                    'bam_no' => $row->bam_no,
+                    'amount' => (float) ($row->amount ?? 0),
+                    'ar_type' => $row->ar_type,
+                    'acct_code' => $row->acct_code,
+                    'reference' => $row->reference,
+                    'remarks' => $row->remarks,
+                    'status' => $row->status,
+                ];
+            })->values()->toArray();
+        }
+
+        // Fetch SUNDRIES (LRO Ledger) entries for this account.
+        // Only DM (charge) rows are shown. For each DM row, sum all matching CM (credit) rows
+        // to determine the remaining unpaid balance. Skip fully-paid entries.
+        $sundries = [];
+        $consumerZoneIdForSundries = $consumerForBalance?->id;
+        if ($consumerZoneIdForSundries) {
+            try {
+                $dmRows = LROLedger::forConsumerZone($consumerZoneIdForSundries)
+                    ->where('type', 'DM')
+                    ->where('status', 'Approved')
+                    ->orderBy('date', 'asc')
+                    ->orderBy('id', 'asc')
+                    ->get(['id', 'acct_code', 'bam_no', 'amount', 'status']);
+
+                foreach ($dmRows as $row) {
+                    $dmAmount   = (float)($row->amount ?? 0);
+                    $bamRef     = $row->bam_no;
+
+                    // Sum all CM credits that offset this specific DM entry
+                    $paidAmount = (float) LROLedger::forConsumerZone($consumerZoneIdForSundries)
+                        ->where('type', 'CM')
+                        ->where('acct_code', $row->acct_code)
+                        ->where('bam_no', $bamRef)
+                        ->sum('amount');
+
+                    $remaining = round($dmAmount - $paidAmount, 2);
+
+                    if ($remaining <= 0) {
+                        continue; // Fully paid — do not show
+                    }
+
+                    $sundries[] = [
+                        'id'        => $row->id,
+                        'acct_code' => $row->acct_code,
+                        'bam_no'    => $bamRef,
+                        'reference' => $bamRef,
+                        'amount'    => $remaining,   // remaining unpaid balance
+                        'name'      => $consumerForBalance->account_name ?? '',
+                    ];
+
+                    if (count($sundries) >= 4) {
+                        break; // cap at 4 rows (matches the 4 sundry slots on the form)
+                    }
+                }
+            } catch (Throwable $e) {
+                Log::warning('lookupBillingRecord: LRO ledger sundries fetch failed', ['message' => $e->getMessage()]);
+                $sundries = [];
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $lookupSuccessMessage ?? 'Downloaded reading record loaded successfully from downloaded_readings table.',
+            'data' => [
+                'account' => $accountData,
+                'billing' => $billingData,
+                'payment' => $paymentData,
+                'downloaded_reading' => $downloadedReadingData,
+                'sundries' => $sundries,
+                'lro_entries_by_or' => $lroEntriesByOr,
+            ],
+        ]);

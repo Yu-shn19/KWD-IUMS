@@ -3,9 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Imports\CollectionImport;
-use App\Models\Collection;
+use App\Models\ConsumerPayment;
 use App\Models\ConsumerLedger;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use App\Models\Penalty;
 use Illuminate\Http\Request;
 use Maatwebsite\Excel\Facades\Excel;
@@ -13,8 +13,30 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class CollectionController extends Controller
 {
+    /**
+     * Consumer payments imported/synced from legacy collection spreadsheets.
+     */
+    private function paymentsForSync()
+    {
+        return ConsumerPayment::query()
+            ->importable()
+            ->with('consumerZone')
+            ->orderBy(mr_col('paid_at'))
+            ->orderBy(mr_col('id'));
+    }
+
     /**
      * Display the collection import page
      */
@@ -101,7 +123,7 @@ class CollectionController extends Controller
             $import = new CollectionImport();
             
             // Count existing records before import
-            $beforeCount = Collection::count();
+            $beforeCount = ConsumerPayment::count();
             
             // Ensure the file is actually readable
             $filePath = $uploadedFile->getRealPath();
@@ -132,7 +154,7 @@ class CollectionController extends Controller
             }
             
             // Count records after import
-            $afterCount = Collection::count();
+            $afterCount = ConsumerPayment::count();
             $importedCount = $afterCount - $beforeCount;
             
             // Get import statistics
@@ -236,17 +258,15 @@ class CollectionController extends Controller
         try {
             Log::info('Starting collection to ledger sync');
 
-            $collections = Collection::whereNotNull('account_no')
-                ->whereNotNull('coll_date')
-                ->where('pay_amount', '>', 0)
-                ->where(function($query) {
-                    $query->whereNull('cancel')
-                          ->orWhere('cancel', '!=', 'Y')
-                          ->orWhere('cancel', '!=', 'YES');
-                })
-                ->orderBy('coll_date')
-                ->orderBy('account_no')
-                ->get();
+            $accountNoColumn = mr_col('account_no');
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clTxtime = mr_col('txtime');
+            $clTrans = mr_col('trans');
+            $clCredit = mr_col('credit');
+            $clId = mr_col('id');
+            $clReference = mr_col('reference');
+
+            $collections = $this->paymentsForSync()->get();
 
             $syncedCount = 0;
             $skippedCount = 0;
@@ -255,7 +275,7 @@ class CollectionController extends Controller
             foreach ($collections as $collection) {
                 try {
                     // Find consumer zone by account_no
-                    $consumerZone = ConsumerZoneOne::where('account_no', $collection->account_no)->first();
+                    $consumerZone = ConsumerZone::query()->where($accountNoColumn, $collection->account_no)->first();
 
                     if (!$consumerZone) {
                         $skippedCount++;
@@ -264,10 +284,11 @@ class CollectionController extends Controller
                     }
 
                     // Check if main payment already exists in ledger for this date and account
-                    $existingPayment = ConsumerLedger::where('consumer_zone_id', $consumerZone->id)
-                        ->where('trans', 'PAYMENT')
-                        ->whereDate('txtime', $collection->coll_date->format('Y-m-d'))
-                        ->where('credit', $collection->pay_amount)
+                    $existingPayment = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZone->id)
+                        ->where($clTrans, 'PAYMENT')
+                        ->whereDate($clTxtime, $collection->coll_date->format('Y-m-d'))
+                        ->where($clCredit, $collection->pay_amount)
                         ->first();
 
                     // Flag: main payment already exists (from previous sync run)
@@ -294,12 +315,13 @@ class CollectionController extends Controller
                     // We need to check this FIRST because the penalty balance should be used for payment calculation
                     // IMPORTANT: Find ANY penalty on the same date, regardless of amount or reference
                     // This ensures we use the correct balance even if penalty was created separately
-                    $existingPenalty = ConsumerLedger::where('consumer_zone_id', $consumerZone->id)
-                        ->where('trans', 'PENALTY')
-                        ->whereDate('txtime', $collection->coll_date->format('Y-m-d'))
-                        ->where('txtime', '<', $paymentDateTime) // Must be before the payment time
-                        ->orderBy('txtime', 'desc')
-                        ->orderBy('id', 'desc')
+                    $existingPenalty = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZone->id)
+                        ->where($clTrans, 'PENALTY')
+                        ->whereDate($clTxtime, $collection->coll_date->format('Y-m-d'))
+                        ->where($clTxtime, '<', $paymentDateTime)
+                        ->orderBy($clTxtime, 'desc')
+                        ->orderBy($clId, 'desc')
                         ->first();
                     
                     if ($existingPenalty && $penaltyAmount > 0) {
@@ -331,10 +353,11 @@ class CollectionController extends Controller
                         ]);
                     } else {
                         // No penalty exists yet, get the latest balance before the payment datetime
-                        $latestLedger = ConsumerLedger::where('consumer_zone_id', $consumerZone->id)
-                            ->where('txtime', '<', $paymentDateTime)
-                            ->orderBy('txtime', 'desc')
-                            ->orderBy('id', 'desc')
+                        $latestLedger = ConsumerLedger::query()
+                            ->where($clConsumerZoneId, $consumerZone->id)
+                            ->where($clTxtime, '<', $paymentDateTime)
+                            ->orderBy($clTxtime, 'desc')
+                            ->orderBy($clId, 'desc')
                             ->first();
 
                         $previousBalance = $latestLedger ? (float)($latestLedger->balance ?? 0) : (float)($consumerZone->balance ?? 0);
@@ -400,11 +423,12 @@ class CollectionController extends Controller
                     // e.g. "324463-SC", and reduces the balance by the discount amount.
                     if ($scDiscount > 0) {
                         // Avoid creating duplicate SC discount payments
-                        $existingScPayment = ConsumerLedger::where('consumer_zone_id', $consumerZone->id)
-                            ->where('trans', 'PAYMENT')
-                            ->whereDate('txtime', $collection->coll_date->format('Y-m-d'))
-                            ->where('credit', $scDiscount)
-                            ->where('reference', ($collection->or_number ? $collection->or_number . '-SC' : 'SC Discount'))
+                        $existingScPayment = ConsumerLedger::query()
+                            ->where($clConsumerZoneId, $consumerZone->id)
+                            ->where($clTrans, 'PAYMENT')
+                            ->whereDate($clTxtime, $collection->coll_date->format('Y-m-d'))
+                            ->where($clCredit, $scDiscount)
+                            ->where($clReference, ($collection->or_number ? $collection->or_number . '-SC' : 'SC Discount'))
                             ->first();
 
                         if (!$existingScPayment) {
@@ -567,12 +591,26 @@ class CollectionController extends Controller
         try {
             Log::info('Starting SC discount only sync from collection to ledger');
 
-            // Get all rows that have an SC discount (can be stored as negative); ignore cancel flag so we don't miss any
-            $collections = Collection::whereNotNull('account_no')
-                ->whereNotNull('coll_date')
-                ->where('sc_discount', '!=', 0)
-                ->orderBy('coll_date')
-                ->orderBy('account_no')
+            $accountNoColumn = mr_col('account_no');
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clTxtime = mr_col('txtime');
+            $clTrans = mr_col('trans');
+            $clCredit = mr_col('credit');
+            $clId = mr_col('id');
+            $clReference = mr_col('reference');
+            $cpConsumerZoneId = mr_col('consumer_zone_id');
+            $cpPaidAt = mr_col('paid_at');
+            $cpSeniorCitizenDiscount = mr_col('senior_citizen_discount');
+            $cpId = mr_col('id');
+
+            // Get all rows that have an SC discount (can be stored as negative)
+            $collections = ConsumerPayment::query()
+                ->whereNotNull($cpConsumerZoneId)
+                ->whereNotNull($cpPaidAt)
+                ->where($cpSeniorCitizenDiscount, '!=', 0)
+                ->with('consumerZone')
+                ->orderBy($cpPaidAt)
+                ->orderBy($cpId)
                 ->get();
 
             $syncedCount = 0;
@@ -581,7 +619,7 @@ class CollectionController extends Controller
 
             foreach ($collections as $collection) {
                 try {
-                    $consumerZone = ConsumerZoneOne::where('account_no', $collection->account_no)->first();
+                    $consumerZone = ConsumerZone::query()->where($accountNoColumn, $collection->account_no)->first();
 
                     if (!$consumerZone) {
                         $skippedCount++;
@@ -611,11 +649,12 @@ class CollectionController extends Controller
                         ? $collection->or_number . '-SC'
                         : 'SC Discount';
 
-                    $existingScPayment = ConsumerLedger::where('consumer_zone_id', $consumerZone->id)
-                        ->where('trans', 'PAYMENT')
-                        ->whereDate('txtime', $collection->coll_date->format('Y-m-d'))
-                        ->where('credit', $scDiscount)
-                        ->where('reference', $scReference)
+                    $existingScPayment = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZone->id)
+                        ->where($clTrans, 'PAYMENT')
+                        ->whereDate($clTxtime, $collection->coll_date->format('Y-m-d'))
+                        ->where($clCredit, $scDiscount)
+                        ->where($clReference, $scReference)
                         ->first();
 
                     if ($existingScPayment) {
@@ -624,10 +663,11 @@ class CollectionController extends Controller
                     }
 
                     // Get latest balance BEFORE this SC entry
-                    $latestLedger = ConsumerLedger::where('consumer_zone_id', $consumerZone->id)
-                        ->where('txtime', '<=', $paymentDateTime)
-                        ->orderBy('txtime', 'desc')
-                        ->orderBy('id', 'desc')
+                    $latestLedger = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZone->id)
+                        ->where($clTxtime, '<=', $paymentDateTime)
+                        ->orderBy($clTxtime, 'desc')
+                        ->orderBy($clId, 'desc')
                         ->first();
 
                     $previousBalance = $latestLedger
@@ -735,6 +775,15 @@ class CollectionController extends Controller
         try {
             Log::info('Starting penalty generation for late payments');
 
+            $cpPaidAt = mr_col('paid_at');
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clTxtime = mr_col('txtime');
+            $clTrans = mr_col('trans');
+            $clDueDate = mr_col('due_date');
+            $clPenalty = mr_col('penalty');
+            $clId = mr_col('id');
+            $clDate = mr_col('date');
+
             // Find all BILL entries with due_date in December 2025 or future
             // Due date is 15 days after bill date, so bills dated 12/01, 12/02, 12/03 have due dates around 12/16, 12/17, 12/18
             $today = Carbon::today();
@@ -832,16 +881,12 @@ class CollectionController extends Controller
 
                     // Find collection records for this account that were paid AFTER the due date
                     // We need to get the penalty amount from the collection table
-                    $lateCollections = Collection::where('account_no', $accountNo)
-                        ->whereNotNull('coll_date')
-                        ->where('pay_amount', '>', 0)
-                        ->where(function($query) {
-                            $query->whereNull('cancel')
-                                  ->orWhere('cancel', '!=', 'Y')
-                                  ->orWhere('cancel', '!=', 'YES');
-                        })
-                        ->whereDate('coll_date', '>', $dueDateStr)
-                        ->orderBy('coll_date')
+                    $lateCollections = ConsumerPayment::query()
+                        ->forAccountNo($accountNo)
+                        ->importable()
+                        ->whereDate($cpPaidAt, '>', $dueDateStr)
+                        ->with('consumerZone')
+                        ->orderBy($cpPaidAt)
                         ->get();
                     
                     Log::info('Checking for late collections', [
@@ -865,8 +910,10 @@ class CollectionController extends Controller
                         $processedBills[$billKey] = true;
                         
                         // Also check all collections for this account to see what we have
-                        $allCollections = Collection::where('account_no', $accountNo)
-                            ->whereNotNull('coll_date')
+                        $allCollections = ConsumerPayment::query()
+                            ->forAccountNo($accountNo)
+                            ->whereNotNull($cpPaidAt)
+                            ->with('consumerZone')
                             ->get();
                         
                         Log::info('No late collections found - checking all collections', [
@@ -939,11 +986,12 @@ class CollectionController extends Controller
                     ]);
                     
                     // Check if penalty already exists for this billing and collection
-                    $existingPenalty = ConsumerLedger::where('consumer_zone_id', $billEntry->consumer_zone_id)
-                        ->where('trans', 'PENALTY')
-                        ->where('due_date', $dueDateStr)
-                        ->where('penalty', $penaltyAmount)
-                        ->whereDate('txtime', $collectionPenalty->coll_date->format('Y-m-d'))
+                    $existingPenalty = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $billEntry->consumer_zone_id)
+                        ->where($clTrans, 'PENALTY')
+                        ->where($clDueDate, $dueDateStr)
+                        ->where($clPenalty, $penaltyAmount)
+                        ->whereDate($clTxtime, $collectionPenalty->coll_date->format('Y-m-d'))
                         ->first();
 
                     if ($existingPenalty) {
@@ -962,30 +1010,32 @@ class CollectionController extends Controller
                     $penaltyDateStr = $penaltyDate->format('Y-m-d');
                     
                     // Get the latest entry before or on the penalty date (but before the penalty time)
-                    $previousBalanceEntry = ConsumerLedger::where('consumer_zone_id', $billEntry->consumer_zone_id)
-                        ->where(function($query) use ($penaltyDateStr) {
-                            $query->whereDate('txtime', '<', $penaltyDateStr)
-                                  ->orWhere(function($q) use ($penaltyDateStr) {
-                                      $q->whereDate('txtime', '=', $penaltyDateStr)
-                                        ->where('txtime', '<', $penaltyDateStr . ' 00:00:00');
+                    $previousBalanceEntry = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $billEntry->consumer_zone_id)
+                        ->where(function($query) use ($penaltyDateStr, $clTxtime) {
+                            $query->whereDate($clTxtime, '<', $penaltyDateStr)
+                                  ->orWhere(function($q) use ($penaltyDateStr, $clTxtime) {
+                                      $q->whereDate($clTxtime, '=', $penaltyDateStr)
+                                        ->where($clTxtime, '<', $penaltyDateStr . ' 00:00:00');
                                   });
                         })
-                        ->orderBy('txtime', 'desc')
-                        ->orderBy('id', 'desc')
+                        ->orderBy($clTxtime, 'desc')
+                        ->orderBy($clId, 'desc')
                         ->first();
                     
                     // If no entry found, try getting by date
                     if (!$previousBalanceEntry) {
-                        $previousBalanceEntry = ConsumerLedger::where('consumer_zone_id', $billEntry->consumer_zone_id)
-                            ->where(function($query) use ($penaltyDate) {
-                                $query->where('date', '<', $penaltyDate->format('Y-m-d'))
-                                      ->orWhere(function($q) use ($penaltyDate) {
-                                          $q->where('date', '=', $penaltyDate->format('Y-m-d'))
-                                            ->where('txtime', '<', $penaltyDate->format('Y-m-d') . ' 00:00:00');
+                        $previousBalanceEntry = ConsumerLedger::query()
+                            ->where($clConsumerZoneId, $billEntry->consumer_zone_id)
+                            ->where(function($query) use ($penaltyDate, $clDate, $clTxtime) {
+                                $query->where($clDate, '<', $penaltyDate->format('Y-m-d'))
+                                      ->orWhere(function($q) use ($penaltyDate, $clDate, $clTxtime) {
+                                          $q->where($clDate, '=', $penaltyDate->format('Y-m-d'))
+                                            ->where($clTxtime, '<', $penaltyDate->format('Y-m-d') . ' 00:00:00');
                                       });
                             })
-                            ->orderBy('date', 'desc')
-                            ->orderBy('id', 'desc')
+                            ->orderBy($clDate, 'desc')
+                            ->orderBy($clId, 'desc')
                             ->first();
                     }
                     
@@ -1020,7 +1070,7 @@ class CollectionController extends Controller
                     
                     Log::info('Calculating penalty balance', [
                         'account_no' => $accountNo,
-                        'bill_balance' => $billBalance,
+                        'bill_balance' => $billEntry->balance ?? 0,
                         'penalty_amount' => $penaltyAmount,
                         'new_balance' => $newBalance,
                         'bill_id' => $billEntry->id
@@ -1182,7 +1232,13 @@ class CollectionController extends Controller
                 ], 400);
             }
 
-            $consumerZone = ConsumerZoneOne::where('account_no', $accountNo)->first();
+            $accountNoColumn = mr_col('account_no');
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clTxtime = mr_col('txtime');
+            $clId = mr_col('id');
+            $cpPaidAt = mr_col('paid_at');
+
+            $consumerZone = ConsumerZone::query()->where($accountNoColumn, $accountNo)->first();
 
             if (!$consumerZone) {
                 return response()->json([
@@ -1192,24 +1248,26 @@ class CollectionController extends Controller
             }
 
             // Get ledger entries
-            $ledgerQuery = ConsumerLedger::where('consumer_zone_id', $consumerZone->id);
+            $ledgerQuery = ConsumerLedger::query()->where($clConsumerZoneId, $consumerZone->id);
             if ($startDate) {
-                $ledgerQuery->whereDate('txtime', '>=', $startDate);
+                $ledgerQuery->whereDate($clTxtime, '>=', $startDate);
             }
             if ($endDate) {
-                $ledgerQuery->whereDate('txtime', '<=', $endDate);
+                $ledgerQuery->whereDate($clTxtime, '<=', $endDate);
             }
-            $ledgers = $ledgerQuery->orderBy('txtime')->orderBy('id')->get();
+            $ledgers = $ledgerQuery->orderBy($clTxtime)->orderBy($clId)->get();
 
             // Get collection entries
-            $collectionQuery = Collection::where('account_no', $accountNo);
+            $collectionQuery = ConsumerPayment::query()
+                ->forAccountNo($accountNo)
+                ->with('consumerZone');
             if ($startDate) {
-                $collectionQuery->whereDate('coll_date', '>=', $startDate);
+                $collectionQuery->whereDate($cpPaidAt, '>=', $startDate);
             }
             if ($endDate) {
-                $collectionQuery->whereDate('coll_date', '<=', $endDate);
+                $collectionQuery->whereDate($cpPaidAt, '<=', $endDate);
             }
-            $collections = $collectionQuery->orderBy('coll_date')->orderBy('id')->get();
+            $collections = $collectionQuery->orderBy($cpPaidAt)->orderBy($clId)->get();
 
             // Merge and sort by date
             $merged = collect();
@@ -1290,6 +1348,21 @@ class CollectionController extends Controller
         try {
             Log::info('Starting automatic penalty generation for December 2025 billing');
 
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clScheduleId = mr_col('schedule_id');
+            $clTrans = mr_col('trans');
+            $clDueDate = mr_col('due_date');
+            $clDate = mr_col('date');
+            $clId = (new ConsumerLedger)->getKeyName();
+            $cpPaidAt = mr_col('paid_at');
+            $mrsTable = mr_col('meter_reading_schedules as mrs');
+            $czTable = mr_col('consumer_zone as cz');
+            $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+            $czId = mr_col('cz.id');
+            $mrsBillMonth = mr_col('mrs.bill_month');
+            $mrsDueDate = mr_col('mrs.due_date');
+            $mrsBillDate = mr_col('mrs.bill_date');
+
             $today = Carbon::today();
             $december2025Start = Carbon::create(2025, 12, 1)->startOfMonth();
             $december2025End = Carbon::create(2025, 12, 31)->endOfMonth();
@@ -1297,8 +1370,8 @@ class CollectionController extends Controller
             $january2026End = Carbon::create(2026, 1, 31)->endOfMonth();
 
             // Find all meter_reading_schedules for December 2025
-            $decemberSchedules = DB::table('meter_reading_schedules as mrs')
-                ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+            $decemberSchedules = DB::table($mrsTable)
+                ->leftJoin($czTable, $mrsConsumerZoneId, '=', $czId)
                 ->select(
                     'mrs.id as schedule_id',
                     'cz.account_no as account_number',
@@ -1311,10 +1384,10 @@ class CollectionController extends Controller
                     'cz.account_no',
                     'cz.account_name'
                 )
-                ->whereBetween('mrs.bill_month', [$december2025Start->format('Y-m-d'), $december2025End->format('Y-m-d')])
-                ->whereNotNull('mrs.due_date')
-                ->where('mrs.due_date', '<=', $today->format('Y-m-d')) // Due date has passed
-                ->whereNotNull('cz.id')
+                ->whereBetween($mrsBillMonth, [$december2025Start->format('Y-m-d'), $december2025End->format('Y-m-d')])
+                ->whereNotNull($mrsDueDate)
+                ->where($mrsDueDate, '<=', $today->format('Y-m-d'))
+                ->whereNotNull($czId)
                 ->get();
 
             Log::info('Found December 2025 schedules with passed due dates', [
@@ -1339,10 +1412,11 @@ class CollectionController extends Controller
                     }
 
                     // Check if penalty already exists for this schedule
-                    $existingPenalty = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                        ->where('schedule_id', $schedule->schedule_id)
-                        ->where('trans', 'PENALTY')
-                        ->where('due_date', $dueDate->format('Y-m-d'))
+                    $existingPenalty = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZoneId)
+                        ->where($clScheduleId, $schedule->schedule_id)
+                        ->where($clTrans, 'PENALTY')
+                        ->where($clDueDate, $dueDate->format('Y-m-d'))
                         ->first();
 
                     if ($existingPenalty) {
@@ -1356,21 +1430,13 @@ class CollectionController extends Controller
 
                     // Check if there's a collection record for this billing period
                     // Look for collections around the due_date (within reasonable range)
-                    $collectionExists = Collection::where('account_no', $accountNo)
-                        ->whereNotNull('coll_date')
-                        ->where('pay_amount', '>', 0)
-                        ->where(function($query) {
-                            $query->whereNull('cancel')
-                                  ->orWhere('cancel', '!=', 'Y')
-                                  ->orWhere('cancel', '!=', 'YES');
-                        })
-                        ->where(function($query) use ($dueDate, $billMonth) {
-                            // Check if collection date is around the due date or bill month
-                            $query->whereBetween('coll_date', [
-                                $billMonth->copy()->subDays(5)->format('Y-m-d'),
-                                $dueDate->copy()->addDays(30)->format('Y-m-d')
-                            ]);
-                        })
+                    $collectionExists = ConsumerPayment::query()
+                        ->forAccountNo($accountNo)
+                        ->importable()
+                        ->whereBetween('paid_at', [
+                            $billMonth->copy()->subDays(5)->format('Y-m-d 00:00:00'),
+                            $dueDate->copy()->addDays(30)->format('Y-m-d 23:59:59'),
+                        ])
                         ->exists();
 
                     if ($collectionExists) {
@@ -1383,10 +1449,10 @@ class CollectionController extends Controller
                     }
 
                     // Check if there's a January 2026 bill (if exists, it means they paid December, so exclude)
-                    $hasJanuary2026Bill = DB::table('meter_reading_schedules as mrs')
-                        ->where('mrs.consumer_zone_id', $schedule->consumer_zone_id)
-                        ->whereBetween('mrs.bill_month', [$january2026Start->format('Y-m-d'), $january2026End->format('Y-m-d')])
-                        ->whereNotNull('mrs.bill_date')
+                    $hasJanuary2026Bill = DB::table($mrsTable)
+                        ->where($mrsConsumerZoneId, $schedule->consumer_zone_id)
+                        ->whereBetween($mrsBillMonth, [$january2026Start->format('Y-m-d'), $january2026End->format('Y-m-d')])
+                        ->whereNotNull($mrsBillDate)
                         ->exists();
 
                     if ($hasJanuary2026Bill) {
@@ -1399,17 +1465,18 @@ class CollectionController extends Controller
                     }
 
                     // Get consumer balance to check if they have outstanding balance
-                    $consumerZone = ConsumerZoneOne::find($consumerZoneId);
+                    $consumerZone = ConsumerZone::find($consumerZoneId);
                     if (!$consumerZone) {
                         $skippedCount++;
                         continue;
                     }
 
                     // Get latest balance from ledger
-                    $latestLedgerEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                        ->whereNotNull('balance')
-                        ->orderBy('date', 'desc')
-                        ->orderBy('id', 'desc')
+                    $latestLedgerEntry = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZoneId)
+                        ->whereNotNull(mr_col('balance'))
+                        ->orderBy($clDate, 'desc')
+                        ->orderBy($clId, 'desc')
                         ->first();
 
                     $previousBalance = $latestLedgerEntry 

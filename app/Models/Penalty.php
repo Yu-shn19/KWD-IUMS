@@ -36,7 +36,7 @@ class Penalty extends Model
      */
     public function consumerZone()
     {
-        return $this->belongsTo(ConsumerZoneOne::class, 'consumer_zone_id');
+        return $this->belongsTo(ConsumerZone::class, 'consumer_zone_id');
     }
 
     /**

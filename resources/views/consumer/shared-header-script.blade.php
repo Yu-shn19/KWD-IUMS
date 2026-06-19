@@ -216,7 +216,7 @@
         if (headerStatus) {
             headerStatus.textContent = (statusCode || 'N/A') + ' Consumer';
             
-            // Badge colors: Active / Pending / Disconnected (matches ConsumerZoneOne::status_label)
+            // Badge colors: Active / Pending / Disconnected (matches ConsumerZone::status_label)
             headerStatus.className = 'badge';
             if (statusUpper === 'ACTIVE' || statusUpper === 'A') {
                 headerStatus.classList.add('bg-success');

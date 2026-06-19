@@ -259,7 +259,7 @@
                                                             @endif
                                                         </td>
                                                         <td class="py-1 px-2">
-                                                            {{ trim(($consumer->address1 ?? '') . ' ' . ($consumer->address2 ?? $consumer->address_2 ?? '')) ?: '--' }}
+                                                            {{ trim($consumer->address ?? '') ?: '--' }}
                                                         </td>
                                                         <td class="text-center py-1 font-weight-bold">{{ $consumer->zone_code ?? '--' }}</td>
                                                         <td class="text-center py-1">{{ $consumer->route ?? '-' }}</td>

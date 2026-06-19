@@ -97,7 +97,7 @@ export default function Routes({ onBack }) {
     console.log('🚀 handleCustomerPress called with customer:', customer);
     
     try {
-      const address = customer.address || customer.customer_address || customer.address1 || '';
+      const address = customer.address || customer.customer_address || '';
       const name = formatCustomerName(customer, 'Customer');
       
       // Get account number - try multiple field names

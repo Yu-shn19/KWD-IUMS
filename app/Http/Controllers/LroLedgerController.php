@@ -2,9 +2,20 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\ConsumerZoneOne;
+use App\Models\BillingAdjustment;
+use App\Models\ConsumerZone;
 use App\Models\LROLedger;
 use Illuminate\Http\Request;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 class LroLedgerController extends Controller
 {
@@ -39,17 +50,18 @@ class LroLedgerController extends Controller
         $accountNo = trim((string) ($validated['account'] ?? $validated['account_no'] ?? ''));
         $consumerZoneId = null;
         if ($accountNo !== '') {
-            $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+            $accountNoColumn = mr_col('account_no');
+            $consumer = ConsumerZone::query()->where($accountNoColumn, $accountNo)->first();
             if (!$consumer) {
                 $normalized = str_replace('-', '', $accountNo);
-                $consumer = ConsumerZoneOne::whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])->first();
+                $consumer = ConsumerZone::whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])->first();
             }
             $consumerZoneId = $consumer?->id;
         }
 
         $arType = $validated['ar_type'] ?? $validated['ar'] ?? $validated['ledger'] ?? 'LRO';
-
-        $entry = LROLedger::create(LROLedger::filterTableAttributes([
+        $statusRaw = $validated['status'] ?? 'Pending';
+        $payload = [
             'consumer_zone_id' => $consumerZoneId,
             'type' => $validated['type'] ?? 'CM',
             'date' => !empty($validated['date']) ? $validated['date'] : null,
@@ -58,14 +70,49 @@ class LroLedgerController extends Controller
             'ledger' => $arType,
             'acct_code' => $validated['acct_code'] ?? null,
             'remarks' => $validated['remarks'] ?? null,
-            'status' => $validated['status'] ?? 'Pending',
             'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : 0,
-        ]));
+        ];
+
+        if ($this->shouldPostToLroLedger($statusRaw)) {
+            $normalized = strtoupper(trim((string) $statusRaw));
+            $lroStatus = in_array($normalized, ['POSTED', 'PAID'], true)
+                ? ['status' => 'Posted', 'paid_at' => now()]
+                : ['status' => 'Approved', 'paid_at' => null];
+
+            $entry = LROLedger::create(LROLedger::filterTableAttributes(array_merge($payload, $lroStatus)));
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Billing adjustment saved to LRO ledger.',
+                'data' => ['id' => $entry->id],
+            ]);
+        }
+
+        $billingAdjustment = BillingAdjustment::create([
+            'type' => $validated['type'] ?? 'CM',
+            'ledger' => 'LRO',
+            'date' => !empty($validated['date']) ? $validated['date'] : null,
+            'bam_no' => $validated['bam_no'] ?? $validated['reference'] ?? null,
+            'consumer_zone_id' => $consumerZoneId,
+            'amount' => (float) ($validated['amount'] ?? 0),
+            'acct_code' => $validated['acct_code'] ?? null,
+            'remarks' => $validated['remarks'] ?? null,
+            'status' => strcasecmp(trim($statusRaw), 'Cancelled') === 0 ? 'Cancelled' : 'Pending',
+            'connect_reading' => isset($validated['correct_reading']) ? (int) $validated['correct_reading'] : 0,
+            'username' => auth()->user()?->name ?? 'SYSTEM',
+        ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Billing adjustment saved.',
-            'data' => ['id' => $entry->id],
+            'message' => 'Billing adjustment saved (pending — not posted to ledger yet).',
+            'data' => ['id' => $billingAdjustment->id],
         ]);
+    }
+
+    private function shouldPostToLroLedger(?string $status): bool
+    {
+        $normalized = strtoupper(trim((string) ($status ?? '')));
+
+        return in_array($normalized, ['APPROVED', 'POSTED', 'PAID'], true);
     }
 }

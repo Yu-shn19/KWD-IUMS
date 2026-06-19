@@ -1,0 +1,350 @@
+        if ($reading === null) {
+        // Query downloaded_readings table with LEFT JOIN to handle cases where schedule might not exist
+        $readingQuery = DB::table('downloaded_readings as dr')
+            ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
+            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+            ->leftJoin('consumer_zone as cz', function ($join) {
+                $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+            })
+            ->select(array_merge($this->downloadedReadingBaseSelectColumns(), [
+                'mrs.sedr_number',
+                'cz.account_name as schedule_account_name',
+                'cz.address',
+                'cz.category_code as category',
+                'cz.meter_number',
+                'mrs.bill_month',
+                'mrs.bill_date',
+                'mrs.due_date',
+                'mrs.disconnection_date',
+                'mrs.previous_reading_date',
+                'mrs.current_bill as schedule_current_bill',
+                'mrs.arrears',
+                'mrs.total_amount',
+                'mrs.status as schedule_status',
+            ]))
+            ->where(function ($query) use ($accountNumber, $accountName, $normalizedAccount) {
+                if ($accountNumber) {
+                    $query->where('cz.account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                }
+                if ($accountName) {
+                    $query->orWhereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%']);
+                }
+            });
+
+        // Filter by bill month if provided - check both schedule bill_month and reading_date
+        if ($billMonthDate) {
+            $readingQuery->where(function ($query) use ($billMonthDate) {
+                $query->whereDate('mrs.bill_month', $billMonthDate->format('Y-m-d'))
+                      ->orWhere(function ($q) use ($billMonthDate) {
+                          // Also match by reading_date if bill_month doesn't match
+                          $q->whereNull('mrs.bill_month')
+                            ->whereYear('dr.reading_date', $billMonthDate->year)
+                            ->whereMonth('dr.reading_date', $billMonthDate->month);
+                      });
+            });
+        }
+
+        // Order by most recent reading first
+        $reading = $this->applyDownloadedReadingRecencyOrder(Builder::query())->first();
+
+        // If no result with schedule join, try querying downloaded_readings directly
+        if (!$reading) {
+            $directQuery = DB::table('downloaded_readings as dr')
+                ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
+                ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
+                ->leftJoin('consumer_zone as cz', function ($join) {
+                    $join->on('cz.id', '=', 'dr.consumer_zone_id')
+                        ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+                })
+                ->select($this->downloadedReadingBaseSelectColumns())
+                ->where(function ($query) use ($accountNumber, $accountName, $normalizedAccount) {
+                    if ($accountNumber) {
+                        $query->where('cz.account_no', $accountNumber)
+                              ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                              ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                    }
+                    if ($accountName) {
+                        $query->orWhereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%']);
+                    }
+                });
+
+            // Filter by reading_date if bill month provided
+            if ($billMonthDate) {
+                $directQuery->where(function ($query) use ($billMonthDate) {
+                    $query->whereYear('dr.reading_date', $billMonthDate->year)
+                          ->whereMonth('dr.reading_date', $billMonthDate->month);
+                });
+            }
+
+            $reading = $this->applyDownloadedReadingRecencyOrder(Builder::query())->first();
+
+            // If still no result, try to get schedule data separately
+            if ($reading && $reading->schedule_id) {
+                $schedule = DB::table('meter_reading_schedules')
+                    ->where('id', $reading->schedule_id)
+                    ->first();
+                
+                if ($schedule) {
+                    $consumer = null;
+                    if (!empty($schedule->consumer_zone_id)) {
+                        $consumer = ConsumerZoneOne::find($schedule->consumer_zone_id);
+                    }
+                    $readingArray = (array) $reading;
+                    $readingArray['sedr_number'] = $schedule->sedr_number ?? null;
+                    $readingArray['schedule_account_name'] = $consumer?->account_name;
+                    $readingArray['address'] = $consumer?->address;
+                    $readingArray['category'] = $consumer?->category_code;
+                    $readingArray['meter_number'] = $consumer?->meter_number;
+                    $readingArray['bill_month'] = $schedule->bill_month ?? null;
+                    $readingArray['bill_date'] = $schedule->bill_date ?? null;
+                    $readingArray['due_date'] = $schedule->due_date ?? null;
+                    $readingArray['disconnection_date'] = $schedule->disconnection_date ?? null;
+                    $readingArray['previous_reading_date'] = $schedule->previous_reading_date ?? null;
+                    // Keep downloaded_current_bill if exists, otherwise use schedule's current_bill
+                    $readingArray['schedule_current_bill'] = $schedule->current_bill ?? null;
+                    $readingArray['arrears'] = $schedule->arrears ?? null;
+                    $readingArray['total_amount'] = $schedule->total_amount ?? null;
+                    $readingArray['schedule_status'] = $schedule->status ?? null;
+                    $reading = (object) $readingArray;
+                }
+            }
+        }
+
+        if (!$reading) {
+            $searchTerm = $accountNumber ?: $accountName;
+            $searchType = $accountNumber ? 'account number' : 'account name';
+
+            // Check if account exists in consumer_zone table
+            $consumerExists = false;
+            if ($accountNumber) {
+                $normalizedAccount = str_replace('-', '', $accountNumber);
+                $consumerExists = ConsumerZoneOne::where(function($query) use ($accountNumber, $normalizedAccount) {
+                    $query->where('account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                })->exists();
+            } elseif ($accountName) {
+                $consumerExists = ConsumerZoneOne::whereRaw("UPPER(TRIM(account_name)) LIKE ?", ['%' . $accountName . '%'])->exists();
+            }
+
+            // Check if schedule exists for this account (any month)
+            $scheduleExists = false;
+            if ($accountNumber) {
+                $normalizedAccount = str_replace('-', '', $accountNumber);
+                $scheduleExists = DB::table('meter_reading_schedules as mrs')
+                    ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                    ->where(function ($query) use ($accountNumber, $normalizedAccount) {
+                        $query->where('cz.account_no', $accountNumber)
+                              ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                              ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                    })
+                    ->exists();
+            } elseif ($accountName) {
+                $scheduleExists = DB::table('meter_reading_schedules as mrs')
+                    ->join('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                    ->whereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%'])
+                    ->exists();
+            }
+
+            if (!$consumerExists) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Account ' . $searchType . ' "' . $searchTerm . '" not found in the system. Please verify the account number.',
+                ], 404);
+            }
+            if (!$scheduleExists) {
+                // Allow form to load so user can record payment; breakdown/arrears (e.g. Arrears — Previous Year) will come from ledger via bill-month-details.
+                $consumer = null;
+                if ($accountNumber) {
+                    $normalizedAccount = str_replace('-', '', $accountNumber);
+                    $consumer = ConsumerZoneOne::where(function ($q) use ($accountNumber, $normalizedAccount) {
+                        $q->where('account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                    })->first();
+                } elseif ($accountName) {
+                    $consumer = ConsumerZoneOne::whereRaw("UPPER(TRIM(account_name)) LIKE ?", ['%' . $accountName . '%'])->first();
+                }
+                if ($consumer) {
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'zone' => $consumer->zone_code,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                        'downloaded_current_bill' => 0.0,
+                        'reading_date' => null,
+                        'status' => 'Prepared',
+                        'reader_notes' => null,
+                        'completed_at' => null,
+                        'payment_method' => null,
+                        'payment_amount' => null,
+                        'amount_tendered' => null,
+                        'change_amount' => null,
+                        'official_receipt_number' => null,
+                        'payment_remarks' => null,
+                        'paid_at' => null,
+                        'schedule_account_name' => $consumer->account_name,
+                        'address' => $consumer->address1 ?? '',
+                        'category' => $consumer->category_code ?? '',
+                        'meter_number' => $consumer->meter_number ?? '',
+                        'bill_month' => $billMonthDate ? $billMonthDate->format('Y-m-d') : null,
+                        'bill_date' => null,
+                        'due_date' => null,
+                        'disconnection_date' => null,
+                        'previous_reading_date' => null,
+                        'schedule_current_bill' => 0.0,
+                        'arrears' => null,
+                        'total_amount' => null,
+                        'schedule_status' => null,
+                        'sedr_number' => null,
+                        'downloaded_created_at' => null,
+                        'downloaded_updated_at' => null,
+                        'payment_reference' => null,
+                    ];
+                    $lookupSuccessMessage = 'Account "' . $searchTerm . '" exists but has no billing schedule. The account may need to be added to a billing cycle first. Unpaid amounts from previous years can be entered in Arrears — Previous Year.';
+                }
+            } else {
+            // No completed meter reading yet – use schedule for this bill month so payment form can open (breakdown from ledger)
+            if ($billMonthDate && ($accountNumber || $accountName)) {
+                $scheduleQuery = DB::table('meter_reading_schedules as mrs')
+                    ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+                    ->whereDate('mrs.bill_month', $billMonthDate->format('Y-m-d'));
+                if ($accountNumber) {
+                    $normalizedAccount = str_replace('-', '', $accountNumber);
+                    $scheduleQuery->where(function ($q) use ($accountNumber, $normalizedAccount) {
+                        $q->where('cz.account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                    });
+                } else {
+                    $scheduleQuery->whereRaw("UPPER(TRIM(cz.account_name)) LIKE ?", ['%' . $accountName . '%']);
+                }
+                $scheduleRow = $scheduleQuery->select('mrs.*', 'cz.account_no', 'cz.account_name', 'cz.zone_code', 'cz.address', 'cz.category_code', 'cz.meter_number')->first();
+                if ($scheduleRow) {
+                    $scheduleId = $scheduleRow->id;
+                    $dr = DownloadedReading::where('schedule_id', $scheduleId)->first();
+                    if (!$dr) {
+                        $dr = DownloadedReading::create([
+                            'consumer_zone_id' => $scheduleRow->consumer_zone_id,
+                            'schedule_id' => $scheduleId,
+                            'previous_reading' => $scheduleRow->previous_reading ?? 0,
+                            'current_reading' => $scheduleRow->current_reading ?? null,
+                            'consumption' => $scheduleRow->consumption ?? 0,
+                            'current_bill' => $scheduleRow->current_bill ?? 0,
+                            'reading_date' => $scheduleRow->bill_date ?? $billMonthDate->format('Y-m-d'),
+                            'status' => 'Prepared',
+                        ]);
+                    }
+                    $base = (array) $dr->toArray();
+                    $reading = (object) array_merge($base, [
+                        'downloaded_id' => $dr->id,
+                        'downloaded_current_bill' => $dr->current_bill ?? $scheduleRow->current_bill ?? null,
+                        'schedule_id' => $dr->schedule_id,
+                        'account_number' => $scheduleRow->account_no ?? $accountNumber,
+                        'account_name' => $scheduleRow->account_name ?? '',
+                        'zone' => $scheduleRow->zone_code ?? '',
+                        'bill_month' => $scheduleRow->bill_month ?? null,
+                        'bill_date' => $scheduleRow->bill_date ?? null,
+                        'due_date' => $scheduleRow->due_date ?? null,
+                        'disconnection_date' => $scheduleRow->disconnection_date ?? null,
+                        'previous_reading_date' => $scheduleRow->previous_reading_date ?? null,
+                        'schedule_current_bill' => $scheduleRow->current_bill ?? null,
+                        'arrears' => $scheduleRow->arrears ?? null,
+                        'total_amount' => $scheduleRow->total_amount ?? null,
+                        'schedule_status' => $scheduleRow->status ?? null,
+                        'sedr_number' => $scheduleRow->sedr_number ?? null,
+                        'schedule_account_name' => $scheduleRow->account_name ?? null,
+                        'address' => $scheduleRow->address ?? null,
+                        'category' => $scheduleRow->category_code ?? null,
+                        'meter_number' => $scheduleRow->meter_number ?? null,
+                    ]);
+                    $paymentRow = DB::table('consumer_payments')->where('reading_id', $dr->id)->first();
+                    if ($paymentRow) {
+                        $reading->payment_method = $paymentRow->payment_method ?? null;
+                        $reading->payment_amount = $paymentRow->payment_amount ?? null;
+                        $reading->amount_tendered = $paymentRow->amount_tendered ?? null;
+                        $reading->change_amount = $paymentRow->change_amount ?? null;
+                        $reading->official_receipt_number = $paymentRow->or_number ?? null;
+                        $reading->payment_remarks = $paymentRow->remarks ?? null;
+                        $reading->paid_at = $paymentRow->paid_at ?? null;
+                    }
+                }
+            }
+
+            if (!$reading) {
+                // Still no downloaded/schedule reading for this bill month, but account + schedules exist.
+                // Build a minimal virtual "reading" from the consumer record so payment can still proceed
+                // and the breakdown will come purely from the ledger (paid_at-only logic).
+                // Use same normalized matching as consumerExists so we find consumer when account_no format differs (e.g. 011-12-250 vs 11-12-250).
+                $consumer = null;
+                if ($accountNumber) {
+                    $normalizedAccount = str_replace('-', '', $accountNumber);
+                    $consumer = ConsumerZoneOne::where(function ($q) use ($accountNumber, $normalizedAccount) {
+                        $q->where('account_no', $accountNumber)
+                          ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
+                          ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper(trim($accountNumber))]);
+                    })->first();
+                } elseif ($accountName) {
+                    $consumer = ConsumerZoneOne::whereRaw("UPPER(TRIM(account_name)) LIKE ?", ['%' . $accountName . '%'])->first();
+                }
+                if ($consumer) {
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'zone' => $consumer->zone_code,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                        'downloaded_current_bill' => 0.0,
+                        'reading_date' => null,
+                        'status' => 'Prepared',
+                        'reader_notes' => null,
+                        'completed_at' => null,
+                        'payment_method' => null,
+                        'payment_amount' => null,
+                        'amount_tendered' => null,
+                        'change_amount' => null,
+                        'official_receipt_number' => null,
+                        'payment_remarks' => null,
+                        'paid_at' => null,
+                        'schedule_account_name' => $consumer->account_name,
+                        'address' => $consumer->address1 ?? '',
+                        'category' => $consumer->category_code ?? '',
+                        'meter_number' => $consumer->meter_number ?? '',
+                        'bill_month' => $billMonthDate ? $billMonthDate->format('Y-m-d') : null,
+                        'bill_date' => null,
+                        'due_date' => null,
+                        'disconnection_date' => null,
+                        'previous_reading_date' => null,
+                        'schedule_current_bill' => 0.0,
+                        'arrears' => null,
+                        'total_amount' => null,
+                        'schedule_status' => null,
+                        'sedr_number' => null,
+                        'downloaded_created_at' => null,
+                        'downloaded_updated_at' => null,
+                        'payment_reference' => null,
+                    ];
+                }
+            }
+            }
+        }
+
+        if (!$reading) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Billing record could not be loaded for this account. Please try again or select a bill month.',
+            ], 200);
+        }
+        }

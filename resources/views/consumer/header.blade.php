@@ -72,7 +72,7 @@
                         };
                     @endphp
                     <h4 class="mb-1 text-break {{ $headerNameClass }} consumer-header-title" id="consumerHeaderName">{{ $consumer->account_no ?? '' }} {{ $consumer->account_name ?? '' }}</h4>
-                    <p class="mb-1 small text-break" id="consumerHeaderAddress" style="color: #000 !important;">{{ trim(($consumer->address1 ?? '') . ' ' . ($consumer->address2 ?? $consumer->address_2 ?? '')) ?: '—' }}</p>
+                    <p class="mb-1 small text-break" id="consumerHeaderAddress" style="color: #000 !important;">{{ trim($consumer->address ?? '') ?: '—' }}</p>
                     <span class="badge bg-{{ $headerStatusBadge }}" id="consumerHeaderStatus">{{ $consumer->status_label ?? $consumer->status_code ?? 'N/A' }} Consumer</span>
                       @if($consumer->isDisconnectedStatus())
                         @php

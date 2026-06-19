@@ -2,7 +2,7 @@
 
 namespace App\Exports;
 
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use App\Services\ConsumerLedgerCardBuilder;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\FromArray;
@@ -26,7 +26,7 @@ class ConsumerLedgerSheetExport implements FromArray, ShouldAutoSize, WithEvents
     private const DATA_START_ROW = 7;
 
     public function __construct(
-        protected ConsumerZoneOne $consumer,
+        protected ConsumerZone $consumer,
         protected Collection $ledgerRows,
         protected string $sheetTitle,
         protected string $asOf = '',

@@ -1,0 +1,253 @@
+        // Lookup by OR # from consumer_payments table
+        if ($orNumberInput !== '') {
+            $payment = ConsumerPayment::where('or_number', $orNumberInput)->first();
+            if (!$payment) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'OR number not found.',
+                ], 404);
+            }
+            $orLookupPayment = $payment;
+            if ($payment->reading_id) {
+                $dr = DB::table('downloaded_readings')->where('id', $payment->reading_id)->first();
+                if (!$dr) {
+                    // Linked reading missing: fall back to consumer_payment + consumer so the form can still load and be updated
+                    $consumer = $this->resolvePaymentConsumer($payment);
+                    if (!$consumer) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Payment record found but linked reading and consumer not found. Cannot load form.',
+                    ], 404);
+                }
+                $accountNumber = $consumer->account_no ? strtoupper(trim($consumer->account_no)) : null;
+                    $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                    $billMonthDateObj = $billMonthDate ? $billMonthDate->format('Y-m-d') : null;
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'zone' => $consumer->zone_code ?? null,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'reading_date' => null,
+                        'status' => 'Prepared',
+                        'reader_notes' => null,
+                        'completed_at' => null,
+                        'payment_method' => $payment->payment_method ?? null,
+                        'payment_amount' => $payment->payment_amount ?? null,
+                        'amount_tendered' => $payment->amount_tendered ?? null,
+                        'change_amount' => $payment->change_amount ?? null,
+                        'official_receipt_number' => $payment->or_number,
+                        'payment_remarks' => $payment->remarks ?? null,
+                        'paid_at' => $payment->paid_at ?? null,
+                        'schedule_account_name' => $consumer->account_name,
+                        'address' => $consumer->address1 ?? '',
+                        'category' => $consumer->category_code ?? '',
+                        'meter_number' => $consumer->meter_number ?? null,
+                        'bill_month' => $billMonthDateObj,
+                        'bill_date' => null,
+                        'due_date' => null,
+                        'disconnection_date' => null,
+                        'previous_reading_date' => null,
+                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'arrears' => null,
+                        'total_amount' => null,
+                        'schedule_status' => null,
+                        'sedr_number' => null,
+                        'downloaded_created_at' => null,
+                        'downloaded_updated_at' => null,
+                        'payment_reference' => null,
+                    ];
+                } else {
+                    $drQuery = DB::table('downloaded_readings as dr');
+                    $this->applyDownloadedReadingConsumerJoin(Builder::query(), 'dr');
+                    $drRow = $drQuery
+                        ->where('dr.id', $payment->reading_id)
+                        ->select(
+                            'dr.id as downloaded_id',
+                            'dr.schedule_id',
+                            'dr.reader_id',
+                            'cz.account_no as account_number',
+                            'cz.account_name',
+                            'cz.zone_code as zone',
+                            'cz.address',
+                            'cz.category_code as category',
+                            'cz.meter_number',
+                            'dr.previous_reading',
+                            'dr.current_reading',
+                            'dr.consumption',
+                            'dr.current_bill as downloaded_current_bill',
+                            'dr.reading_date',
+                            'dr.status',
+                            'dr.reader_notes',
+                            'dr.created_at as downloaded_created_at',
+                            'dr.updated_at as downloaded_updated_at',
+                            'mrs.sedr_number',
+                            'mrs.bill_month',
+                            'mrs.bill_date',
+                            'mrs.due_date',
+                            'mrs.disconnection_date',
+                            'mrs.previous_reading_date',
+                            'mrs.current_bill as schedule_current_bill',
+                            'mrs.arrears',
+                            'mrs.total_amount',
+                            'mrs.status as schedule_status'
+                        )
+                        ->first();
+
+                    $consumerForDr = null;
+                    if ($drRow && !empty($dr->consumer_zone_id)) {
+                        $consumerForDr = ConsumerZoneOne::find($dr->consumer_zone_id);
+                    } elseif ($drRow && $drRow->schedule_id) {
+                        $czId = DB::table('meter_reading_schedules')->where('id', $drRow->schedule_id)->value('consumer_zone_id');
+                        if ($czId) {
+                            $consumerForDr = ConsumerZoneOne::find($czId);
+                        }
+                    }
+
+                    $reading = (object) [
+                        'downloaded_id' => $drRow->downloaded_id ?? $dr->id,
+                        'schedule_id' => $drRow->schedule_id ?? $dr->schedule_id,
+                        'reader_id' => $drRow->reader_id ?? $dr->reader_id ?? null,
+                        'account_number' => $drRow->account_number ?? $consumerForDr?->account_no,
+                        'account_name' => $drRow->account_name ?? $consumerForDr?->account_name,
+                        'zone' => $drRow->zone ?? $consumerForDr?->zone_code,
+                        'previous_reading' => $drRow->previous_reading ?? $dr->previous_reading ?? 0,
+                        'current_reading' => $drRow->current_reading ?? $dr->current_reading ?? null,
+                        'consumption' => $drRow->consumption ?? $dr->consumption ?? 0,
+                        'downloaded_current_bill' => $drRow->downloaded_current_bill ?? $dr->current_bill ?? ($drRow->schedule_current_bill ?? 0),
+                        'reading_date' => $drRow->reading_date ?? $dr->reading_date ?? null,
+                        'status' => $drRow->status ?? $dr->status ?? 'Prepared',
+                        'reader_notes' => $drRow->reader_notes ?? $dr->reader_notes ?? null,
+                        'completed_at' => $this->downloadedReadingsHasCompletedAt() ? ($dr->completed_at ?? null) : null,
+                        'payment_method' => $payment->payment_method ?? null,
+                        'payment_amount' => $payment->payment_amount ?? null,
+                        'amount_tendered' => $payment->amount_tendered ?? null,
+                        'change_amount' => $payment->change_amount ?? null,
+                        'official_receipt_number' => $payment->or_number,
+                        'payment_remarks' => $payment->remarks ?? null,
+                        'paid_at' => $payment->paid_at ?? null,
+                        'downloaded_created_at' => $drRow->downloaded_created_at ?? $dr->created_at ?? null,
+                        'downloaded_updated_at' => $drRow->downloaded_updated_at ?? $dr->updated_at ?? null,
+                        'sedr_number' => $drRow->sedr_number ?? null,
+                        'schedule_account_name' => $drRow->account_name ?? $consumerForDr?->account_name,
+                        'address' => $drRow->address ?? $consumerForDr?->address,
+                        'category' => $drRow->category ?? $consumerForDr?->category_code,
+                        'meter_number' => $drRow->meter_number ?? $consumerForDr?->meter_number,
+                        'bill_month' => $drRow->bill_month ?? null,
+                        'bill_date' => $drRow->bill_date ?? null,
+                        'due_date' => $drRow->due_date ?? null,
+                        'disconnection_date' => $drRow->disconnection_date ?? null,
+                        'previous_reading_date' => $drRow->previous_reading_date ?? null,
+                        'schedule_current_bill' => $drRow->schedule_current_bill ?? null,
+                        'arrears' => $drRow->arrears ?? null,
+                        'total_amount' => $drRow->total_amount ?? null,
+                        'schedule_status' => $drRow->schedule_status ?? null,
+                    ];
+                    $accountNumber = $reading->account_number ? strtoupper(trim($reading->account_number)) : null;
+                    $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                }
+            } else {
+                $consumer = $this->resolvePaymentConsumer($payment);
+                if (!$consumer) {
+                    // Support "Others" payments where consumer_id is null and only account_name is stored.
+                    $paidAt = $payment->paid_at ? Carbon::parse($payment->paid_at) : null;
+                    $billMonthDateObj = $billMonthDate
+                        ? $billMonthDate->format('Y-m-d')
+                        : ($paidAt ? $paidAt->copy()->startOfMonth()->format('Y-m-d') : null);
+
+                    $accountNumber = null;
+                    $normalizedAccount = null;
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => null,
+                        'account_name' => $payment->account_name ?? '',
+                        'zone' => null,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'reading_date' => null,
+                        'status' => 'Prepared',
+                        'reader_notes' => null,
+                        'completed_at' => null,
+                        'payment_method' => $payment->payment_method ?? null,
+                        'payment_amount' => $payment->payment_amount ?? null,
+                        'amount_tendered' => $payment->amount_tendered ?? null,
+                        'change_amount' => $payment->change_amount ?? null,
+                        'official_receipt_number' => $payment->or_number,
+                        'payment_remarks' => $payment->remarks ?? null,
+                        'paid_at' => $payment->paid_at ?? null,
+                        'schedule_account_name' => $payment->account_name ?? '',
+                        'address' => '',
+                        'category' => '',
+                        'meter_number' => null,
+                        'bill_month' => $billMonthDateObj,
+                        'bill_date' => null,
+                        'due_date' => null,
+                        'disconnection_date' => null,
+                        'previous_reading_date' => null,
+                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'arrears' => null,
+                        'total_amount' => null,
+                        'schedule_status' => null,
+                        'sedr_number' => null,
+                        'downloaded_created_at' => null,
+                        'downloaded_updated_at' => null,
+                        'payment_reference' => null,
+                    ];
+                } else {
+                    $accountNumber = $consumer->account_no ? strtoupper(trim($consumer->account_no)) : null;
+                    $normalizedAccount = $accountNumber ? str_replace('-', '', $accountNumber) : null;
+                    $billMonthDateObj = $billMonthDate ? $billMonthDate->format('Y-m-d') : null;
+                    $reading = (object) [
+                        'downloaded_id' => null,
+                        'schedule_id' => null,
+                        'reader_id' => null,
+                        'account_number' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'zone' => $consumer->zone_code ?? null,
+                        'previous_reading' => 0,
+                        'current_reading' => null,
+                        'consumption' => 0,
+                    'downloaded_current_bill' => 0.0,
+                    'reading_date' => null,
+                    'status' => 'Prepared',
+                    'reader_notes' => null,
+                    'completed_at' => null,
+                    'payment_method' => $payment->payment_method ?? null,
+                    'payment_amount' => $payment->payment_amount ?? null,
+                    'amount_tendered' => $payment->amount_tendered ?? null,
+                    'change_amount' => $payment->change_amount ?? null,
+                    'official_receipt_number' => $payment->or_number,
+                    'payment_remarks' => $payment->remarks ?? null,
+                    'paid_at' => $payment->paid_at ?? null,
+                    'schedule_account_name' => $consumer->account_name,
+                    'address' => $consumer->address1 ?? '',
+                    'category' => $consumer->category_code ?? '',
+                    'meter_number' => $consumer->meter_number ?? null,
+                    'bill_month' => $billMonthDateObj,
+                    'bill_date' => null,
+                    'due_date' => null,
+                    'disconnection_date' => null,
+                    'previous_reading_date' => null,
+                    'schedule_current_bill' => 0.0,
+                    'arrears' => null,
+                    'total_amount' => null,
+                    'schedule_status' => null,
+                    'sedr_number' => null,
+                    'downloaded_created_at' => null,
+                    'downloaded_updated_at' => null,
+                    'payment_reference' => null,
+                ];
+                    
+                }
+            }
+            $lookupSuccessMessage = 'Billing record loaded by OR number.';
+        }

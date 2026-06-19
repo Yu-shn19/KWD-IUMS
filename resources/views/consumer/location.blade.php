@@ -169,7 +169,7 @@
             console.log('Parsed consumer data:', consumer);
             
             // Display consumer details
-            const address = consumer.address1 || consumer.address || 'Address not available';
+            const address = consumer.address || 'Address not available';
             const accountNo = consumer.account_no || consumer.account_number || '';
             const accountName = consumer.account_name || consumer.full_name || '';
             const zoneCode = consumer.zone_code || consumer.zone || '';
@@ -619,7 +619,7 @@
                             const consumer = JSON.parse(storedConsumer);
                             const accountNo = consumer.account_no || consumer.account_number || '';
                             const accountName = consumer.account_name || consumer.full_name || '';
-                            const address = consumer.address1 || consumer.address || '';
+                            const address = consumer.address || '';
                             const zoneCode = consumer.zone_code || consumer.zone || '';
                             
                             // Update marker position

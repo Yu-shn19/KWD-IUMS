@@ -3,10 +3,10 @@
 namespace App\Http\Controllers;
 use App\Imports\ConsumerLedgerImport;
 use App\Models\ConsumerLedger;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use App\Models\OutstandingPayment;
 use App\Models\Penalty;
-use App\Models\Collection;
+use App\Models\ConsumerPayment;
 use App\Models\DisconnectionOrder;
 use Maatwebsite\Excel\Facades\Excel;
 use Illuminate\Http\Request;
@@ -14,6 +14,17 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 class ConsumerLedgerController extends Controller
 {
@@ -105,7 +116,20 @@ class ConsumerLedgerController extends Controller
                 COALESCE(consumer_ledgers.txtime, consumer_ledgers.created_at)
         END ASC
     ")
-            ->orderBy('id', 'asc');
+            ->orderBy(mr_col('id'), 'asc');
+    }
+
+    private static function ledgerIdColumn(): string
+    {
+        return (new ConsumerLedger)->getKeyName();
+    }
+
+    /**
+     * Base ledger query scoped to a consumer zone.
+     */
+    private static function ledgerQueryForConsumer(int $consumerZoneId)
+    {
+        return ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerZoneId);
     }
 
     /**
@@ -113,11 +137,12 @@ class ConsumerLedgerController extends Controller
      */
     public static function computeAccountLedgerFooterBalance(int $consumerZoneId, ?string $cutoffDateYmd = null): float
     {
-        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+        $dateColumn = mr_col('date');
+        $ledgersQuery = self::ledgerQueryForConsumer($consumerZoneId);
         self::applyVisibleLedgerScope($ledgersQuery);
 
         if ($cutoffDateYmd !== null && $cutoffDateYmd !== '') {
-            $ledgersQuery->whereDate('date', '<=', $cutoffDateYmd);
+            $ledgersQuery->whereDate($dateColumn, '<=', $cutoffDateYmd);
         }
 
         self::applyAccountLedgerDisplayOrder($ledgersQuery);
@@ -152,9 +177,9 @@ class ConsumerLedgerController extends Controller
     public static function computeLedgerFooterBalance(int $consumerZoneId, $year = null): float
     {
         if ($year !== null && $year !== '') {
-            $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+            $ledgersQuery = self::ledgerQueryForConsumer($consumerZoneId);
             self::applyVisibleLedgerScope($ledgersQuery);
-            $ledgersQuery->whereYear('date', $year);
+            $ledgersQuery->whereYear(mr_col('date'), $year);
             self::applyAccountLedgerDisplayOrder($ledgersQuery);
             $ledgers = $ledgersQuery->get(['debit', 'credit', 'trans']);
 
@@ -175,11 +200,11 @@ class ConsumerLedgerController extends Controller
      */
     public static function computeRunningBalanceBeforeLedgerEntry(int $consumerZoneId, int $beforeThisLedgerId, $year = null): float
     {
-        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumerZoneId);
+        $ledgersQuery = self::ledgerQueryForConsumer($consumerZoneId);
         self::applyVisibleLedgerScope($ledgersQuery);
 
         if ($year !== null && $year !== '') {
-            $ledgersQuery->whereYear('date', $year);
+            $ledgersQuery->whereYear(mr_col('date'), $year);
         }
 
         self::applyAccountLedgerDisplayOrder($ledgersQuery);
@@ -205,7 +230,7 @@ class ConsumerLedgerController extends Controller
         $accountNo = $request->input('account_no');
         $year = $request->input('year', date('Y'));
 
-        \Log::info('Ledger request received', [
+        Log::info('Ledger request received', [
             'account_no' => $accountNo,
             'year' => $year
         ]);
@@ -218,9 +243,9 @@ class ConsumerLedgerController extends Controller
         }
 
         // Find consumer by account_no (exact + normalized)
-        $consumer = ConsumerZoneOne::findByAccountNo($accountNo);
+        $consumer = ConsumerZone::findByAccountNo($accountNo);
 
-        \Log::info('Consumer lookup result', [
+        Log::info('Consumer lookup result', [
             'found' => $consumer ? true : false,
             'consumer_id' => $consumer ? $consumer->id : null
         ]);
@@ -232,17 +257,17 @@ class ConsumerLedgerController extends Controller
             ], 404);
         }
 
-        $ledgersQuery = ConsumerLedger::where('consumer_zone_id', $consumer->id);
+        $ledgersQuery = self::ledgerQueryForConsumer($consumer->id);
         self::applyVisibleLedgerScope($ledgersQuery);
 
         if ($year && $year != '') {
-            $ledgersQuery->whereYear('date', $year);
+            $ledgersQuery->whereYear(mr_col('date'), $year);
         }
 
         self::applyAccountLedgerDisplayOrder($ledgersQuery);
         $ledgers = $ledgersQuery->get();
         
-        \Log::info('Ledgers fetched from database', [
+        Log::info('Ledgers fetched from database', [
             'consumer_zone_id' => $consumer->id,
             'year' => $year,
             'count' => $ledgers->count(),
@@ -287,7 +312,7 @@ class ConsumerLedgerController extends Controller
         //     // Update running balance for next iteration
         //     $runningBalance = $newBalance;
         
-             $ledgersWithBalance = $ledgers->map(function ($ledger) use (&$runningBalance) {
+             $ledgersWithBalance = $ledgers->map(function (ConsumerLedger $ledger) use (&$runningBalance) {
             $runningBalance = self::nextRunningBalance($runningBalance, $ledger);
             $newBalance = $runningBalance;
             
@@ -310,8 +335,12 @@ class ConsumerLedgerController extends Controller
             ];
         });
 
+        $billamountColumn = mr_col('billamount');
+        $transColumn = mr_col('trans');
+        $dateColumn = mr_col('date');
+
         // Calculate totals from the fetched ledgers
-        $totalBill = $ledgers->sum('billamount');
+        $totalBill = $ledgers->sum($billamountColumn);
         $totalLoans = 0;
         
         // Get the current balance from the last calculated entry
@@ -319,12 +348,12 @@ class ConsumerLedgerController extends Controller
         $currentBalance = $lastEntry ? (float)($lastEntry['balance'] ?? 0) : 0.00;
         
         // Get latest bill amount from the ledgers
-        $latestBillEntry = $ledgers->where('trans', 'BILLING')
-            ->sortByDesc('date')
+        $latestBillEntry = $ledgers->where($transColumn, 'BILLING')
+            ->sortByDesc($dateColumn)
             ->first();
         $latestBillAmount = $latestBillEntry ? (float)($latestBillEntry->billamount ?? 0) : 0.00;
 
-        \Log::info('Ledger data prepared with calculated balances (exact payment matching)', [
+        Log::info('Ledger data prepared with calculated balances (exact payment matching)', [
             'ledgers_count' => $ledgers->count(),
             'total_bill' => $totalBill,
             'current_balance' => $currentBalance,
@@ -337,7 +366,7 @@ class ConsumerLedgerController extends Controller
                 'account_no' => $consumer->account_no,
                 'account_name' => $consumer->account_name,
                 'zone_code' => $consumer->zone_code,
-                'address1' => $consumer->address1,
+                'address' => $consumer->address,
                 'meter_number' => $consumer->meter_number,
                 'cons_ctrl' => $consumer->cons_ctrl,
                 'status_code' => $consumer->status_code,
@@ -377,9 +406,8 @@ class ConsumerLedgerController extends Controller
                 ], 400);
             }
 
-            // Find consumer by account_no (only select needed columns)
-            $consumer = ConsumerZoneOne::where('account_no', $accountNo)
-                ->first(['id', 'account_no', 'account_name']);
+            // Find consumer by account_no (exact + normalized)
+            $consumer = ConsumerZone::findByAccountNo($accountNo);
 
             if (!$consumer) {
                 return response()->json([
@@ -394,18 +422,24 @@ class ConsumerLedgerController extends Controller
             // Limit date range to only what we need
             $startDate = "{$previousYear}-01-01";
             $endDate = ($year + 1) . "-01-01";
+
+            $clTable = mr_col('consumer_ledgers');
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clTrans = mr_col('trans');
+            $clDate = mr_col('date');
+            $clVolume = mr_col('volume');
             
             // Try optimized query - also check for 'BILL' transaction type
             try {
-                $consumptionData = DB::table('consumer_ledgers')
-                    ->where('consumer_zone_id', $consumer->id)
-                    ->whereIn('trans', ['BILLING', 'BILL']) // Accept both formats
-                    ->where('date', '>=', $startDate)
-                    ->where('date', '<', $endDate)
-                    ->where(function($query) {
-                        $query->whereNotNull('volume')
-                              ->where('volume', '!=', '')
-                              ->where('volume', '!=', '0');
+                $consumptionData = DB::table($clTable)
+                    ->where($clConsumerZoneId, $consumer->id)
+                    ->whereIn($clTrans, ['BILLING', 'BILL'])
+                    ->where($clDate, '>=', $startDate)
+                    ->where($clDate, '<', $endDate)
+                    ->where(function($query) use ($clVolume) {
+                        $query->whereNotNull($clVolume)
+                              ->where($clVolume, '!=', '')
+                              ->where($clVolume, '!=', '0');
                     })
                     ->select(
                         DB::raw('LEFT(date, 4) as year'),
@@ -413,12 +447,12 @@ class ConsumerLedgerController extends Controller
                         DB::raw('SUM(CAST(COALESCE(volume, 0) AS DECIMAL(10,2))) as total_consumption')
                     )
                     ->groupBy(DB::raw('LEFT(date, 4)'), DB::raw('SUBSTRING(date, 6, 2)'))
-                    ->orderBy('year')
-                    ->orderBy('month')
+                    ->orderBy(mr_col('year'))
+                    ->orderBy(mr_col('month'))
                     ->get();
             } catch (\Exception $e) {
                 // Fallback to raw SQL if query builder fails
-                \Log::warning('Query builder failed, using raw SQL: ' . $e->getMessage());
+                Log::warning('Query builder failed, using raw SQL: ' . $e->getMessage());
                 $consumptionData = DB::select("
                     SELECT 
                         LEFT(date, 4) as year,
@@ -440,7 +474,7 @@ class ConsumerLedgerController extends Controller
             }
             
             // Debug: Log what we found
-            \Log::info('Consumption query results', [
+            Log::info('Consumption query results', [
                 'account_no' => $accountNo,
                 'year' => $year,
                 'consumer_id' => $consumer->id,
@@ -450,16 +484,16 @@ class ConsumerLedgerController extends Controller
             ]);
 
             // Also check raw data to see what's in the database
-            $rawData = DB::table('consumer_ledgers')
-                ->where('consumer_zone_id', $consumer->id)
-                ->whereIn('trans', ['BILLING', 'BILL'])
-                ->where('date', '>=', $startDate)
-                ->where('date', '<', $endDate)
-                ->select('date', 'trans', 'volume', 'billamount')
-                ->orderBy('date')
+            $rawData = DB::table($clTable)
+                ->where($clConsumerZoneId, $consumer->id)
+                ->whereIn($clTrans, ['BILLING', 'BILL'])
+                ->where($clDate, '>=', $startDate)
+                ->where($clDate, '<', $endDate)
+                ->select($clDate, $clTrans, $clVolume, mr_col('billamount'))
+                ->orderBy($clDate)
                 ->get();
             
-            \Log::info('Raw billing entries found', [
+            Log::info('Raw billing entries found', [
                 'account_no' => $accountNo,
                 'year' => $year,
                 'raw_count' => count($rawData),
@@ -510,7 +544,7 @@ class ConsumerLedgerController extends Controller
                 ],
             ]);
         } catch (\Exception $e) {
-            \Log::error('Error in getConsumption: ' . $e->getMessage(), [
+            Log::error('Error in getConsumption: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString()
             ]);
             
@@ -522,21 +556,60 @@ class ConsumerLedgerController extends Controller
     }
 
     /**
+     * Resolve consumer from consumer_zone using account_no (exact + normalized).
+     */
+    private function resolveConsumerByAccountNo(?string $accountNo): ?ConsumerZone
+    {
+        return ConsumerZone::findByAccountNo($accountNo);
+    }
+
+    /**
+     * Filter queries by account_no on consumer_zone (exact + normalized).
+     */
+    private function applyConsumerAccountNoFilter($query, string $accountNo, string $accountColumn = 'cz.account_no'): void
+    {
+        $normalizedAccount = str_replace('-', '', $accountNo);
+
+        $query->where(function ($q) use ($accountNo, $normalizedAccount, $accountColumn) {
+            $q->where($accountColumn, $accountNo)
+                ->orWhereRaw("REPLACE({$accountColumn}, '-', '') = ?", [$normalizedAccount])
+                ->orWhereRaw("UPPER(TRIM({$accountColumn})) = ?", [strtoupper(trim($accountNo))]);
+        });
+    }
+
+    /**
      * Get BILL entries from meter_reading_schedules table
      * These are the latest billing records
      */
-    private function getBillEntriesFromSchedules($accountNo, $consumerZoneId, $year = null)
+    private function getBillEntriesFromSchedules($accountNo, $year = null)
     {
-        $normalizedAccount = str_replace('-', '', $accountNo);
+        $consumer = $this->resolveConsumerByAccountNo($accountNo);
+        if (!$consumer) {
+            return [];
+        }
+
         $ledgerEntries = [];
 
+        $mrsTable = mr_col('meter_reading_schedules as mrs');
+        $drTable = mr_col('downloaded_readings as dr');
+        $czTable = mr_col('consumer_zone as cz');
+        $mrsId = mr_col('mrs.id');
+        $drScheduleId = mr_col('dr.schedule_id');
+        $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+        $czId = mr_col('cz.id');
+        $mrsBillDate = mr_col('mrs.bill_date');
+        $mrsCreatedAt = mr_col('mrs.created_at');
+        $clScheduleId = mr_col('schedule_id');
+        $clTrans = mr_col('trans');
+
         // Query meter_reading_schedules for BILL entries
-        $schedulesQuery = DB::table('meter_reading_schedules as mrs')
-            ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
-            ->leftJoin('consumer_zone as cz', 'mrs.consumer_zone_id', '=', 'cz.id')
+        $schedulesQuery = DB::table($mrsTable)
+            ->leftJoin($drTable, $mrsId, '=', $drScheduleId)
+            ->leftJoin($czTable, $mrsConsumerZoneId, '=', $czId)
             ->select(
                 'mrs.id as schedule_id',
                 'cz.account_no as account_number',
+                'cz.account_name',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
@@ -553,27 +626,27 @@ class ConsumerLedgerController extends Controller
                 'dr.current_bill as downloaded_current_bill',
                 'dr.current_reading as downloaded_current_reading',
                 'dr.consumption as downloaded_consumption'
-            )
-            ->where('mrs.consumer_zone_id', $consumerZoneId)
-            ->whereNotNull('mrs.bill_date');
+            );
+        $this->applyConsumerAccountNoFilter($schedulesQuery, $accountNo);
+        $schedulesQuery->whereNotNull($mrsBillDate);
 
         // Apply year filter if provided
         if ($year && $year != '') {
-            $schedulesQuery->where(function($query) use ($year) {
-                $query->whereYear('mrs.bill_date', $year)
-                      ->orWhereYear('mrs.bill_month', $year);
+            $schedulesQuery->where(function($query) use ($year, $mrsBillDate) {
+                $query->whereYear($mrsBillDate, $year)
+                      ->orWhereYear(mr_col('mrs.bill_month'), $year);
             });
         }
 
-        $schedules = $schedulesQuery->orderBy('mrs.bill_date', 'desc')
-                                   ->orderBy('mrs.created_at', 'desc')
+        $schedules = $schedulesQuery->orderBy($mrsBillDate, 'desc')
+                                   ->orderBy($mrsCreatedAt, 'desc')
                                    ->get();
 
         foreach ($schedules as $schedule) {
             // Check if this schedule already has a ConsumerLedger entry
-            $existingLedger = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                ->where('schedule_id', $schedule->schedule_id)
-                ->whereIn('trans', ['BILL', 'BILLING']) // Accept both formats
+            $existingLedger = self::ledgerQueryForConsumer($consumer->id)
+                ->where($clScheduleId, $schedule->schedule_id)
+                ->whereIn($clTrans, ['BILL', 'BILLING'])
                 ->first();
 
             // Skip if already exists in ConsumerLedger (to avoid duplicates)
@@ -626,12 +699,13 @@ class ConsumerLedgerController extends Controller
                 'txtime' => $schedule->created_at ? Carbon::parse($schedule->created_at)->format('Y-m-d H:i:s') : '',
                 'schedule_id' => $schedule->schedule_id, // Link to meter_reading_schedules
                 'downloaded_reading_id' => $schedule->downloaded_id, // Link to downloaded_readings if exists
-                'consumer_zone_id' => $consumerZoneId, // Link to consumer_ledgers
+                'consumer_zone_id' => $consumer->id, // Link to consumer_ledgers
             ];
         }
 
-        \Log::info('BILL entries from schedules', [
+        Log::info('BILL entries from schedules', [
             'account_no' => $accountNo,
+            'account_name' => $consumer->account_name,
             'total_schedules' => $schedules->count(),
             'bill_entries' => count($ledgerEntries)
         ]);
@@ -643,19 +717,40 @@ class ConsumerLedgerController extends Controller
      * Get PAYMENT entries from consumer_payments table (preferred) or downloaded_readings (fallback)
      * These are the latest payment records
      */
-    private function getPaymentEntriesFromDownloadedReadings($accountNo, $consumerZoneId, $year = null)
+    private function getPaymentEntriesFromDownloadedReadings($accountNo, $year = null)
     {
-        $normalizedAccount = str_replace('-', '', $accountNo);
+        $consumer = $this->resolveConsumerByAccountNo($accountNo);
+        if (!$consumer) {
+            return [];
+        }
+
         $ledgerEntries = [];
 
+        $drTable = mr_col('downloaded_readings as dr');
+        $cpTable = mr_col('consumer_payments as cp');
+        $mrsTable = mr_col('meter_reading_schedules as mrs');
+        $czTable = mr_col('consumer_zone as cz');
+        $cpReadingId = mr_col('cp.reading_id');
+        $drId = mr_col('dr.id');
+        $drScheduleId = mr_col('dr.schedule_id');
+        $mrsId = mr_col('mrs.id');
+        $drConsumerZoneId = mr_col('dr.consumer_zone_id');
+        $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+        $czId = mr_col('cz.id');
+        $drStatus = mr_col('dr.status');
+        $cpPaidAt = mr_col('cp.paid_at');
+        $cpPaymentAmount = mr_col('cp.payment_amount');
+        $cpCreatedAt = mr_col('cp.created_at');
+        $clDownloadedReadingId = mr_col('downloaded_reading_id');
+        $clTrans = mr_col('trans');
+
         // Query consumer_payments joined with downloaded_readings and meter_reading_schedules
-        // Match the working implementation from MeterReadingController
-        $paymentsQuery = DB::table('downloaded_readings as dr')
-            ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
-            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->leftJoin('consumer_zone as cz', function ($join) {
-                $join->on('cz.id', '=', 'dr.consumer_zone_id')
-                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+        $paymentsQuery = DB::table($drTable)
+            ->leftJoin($cpTable, $cpReadingId, '=', $drId)
+            ->leftJoin($mrsTable, $drScheduleId, '=', $mrsId)
+            ->leftJoin($czTable, function ($join) use ($czId, $drConsumerZoneId, $mrsConsumerZoneId) {
+                $join->on($czId, '=', $drConsumerZoneId)
+                    ->orOn($czId, '=', $mrsConsumerZoneId);
             })
             ->select(
                 'dr.id as downloaded_id',
@@ -666,43 +761,34 @@ class ConsumerLedgerController extends Controller
                 'cp.or_number',
                 'cp.created_by',
                 'mrs.bill_date as related_bill_date'
-            )
-            ->where(function ($query) use ($accountNo, $normalizedAccount, $consumerZoneId) {
-                if ($consumerZoneId) {
-                    $query->where('dr.consumer_zone_id', $consumerZoneId)
-                        ->orWhere('mrs.consumer_zone_id', $consumerZoneId);
-                } else {
-                    $query->where('cz.account_no', $accountNo)
-                        ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
-                        ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNo))]);
-                }
-            })
-            ->where(function($query) {
-                $query->where('dr.status', 'paid')
-                      ->orWhereNotNull('cp.paid_at')
-                      ->orWhere(function($q) {
-                          $q->whereNotNull('cp.payment_amount')
-                            ->where('cp.payment_amount', '>', 0);
+            );
+        $this->applyConsumerAccountNoFilter($paymentsQuery, $accountNo);
+        $paymentsQuery->where(function($query) use ($drStatus, $cpPaidAt, $cpPaymentAmount) {
+                $query->where($drStatus, 'paid')
+                      ->orWhereNotNull($cpPaidAt)
+                      ->orWhere(function($q) use ($cpPaymentAmount) {
+                          $q->whereNotNull($cpPaymentAmount)
+                            ->where($cpPaymentAmount, '>', 0);
                       });
             });
 
         // Apply year filter if provided
         if ($year && $year != '') {
-            $paymentsQuery->where(function($query) use ($year) {
-                $query->whereYear('cp.paid_at', $year)
-                      ->orWhereYear('cp.created_at', $year);
+            $paymentsQuery->where(function($query) use ($year, $cpPaidAt, $cpCreatedAt) {
+                $query->whereYear($cpPaidAt, $year)
+                      ->orWhereYear($cpCreatedAt, $year);
             });
         }
 
-        $payments = $paymentsQuery->orderBy('cp.paid_at', 'desc')
-                                  ->orderBy('cp.created_at', 'desc')
+        $payments = $paymentsQuery->orderBy($cpPaidAt, 'desc')
+                                  ->orderBy($cpCreatedAt, 'desc')
                                   ->get();
 
         foreach ($payments as $payment) {
             // Check if this payment already has a ConsumerLedger entry
-            $existingLedger = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                ->where('downloaded_reading_id', $payment->downloaded_id)
-                ->where('trans', 'PAYMENT')
+            $existingLedger = self::ledgerQueryForConsumer($consumer->id)
+                ->where($clDownloadedReadingId, $payment->downloaded_id)
+                ->where($clTrans, 'PAYMENT')
                 ->first();
 
             // Skip if already exists in ConsumerLedger (to avoid duplicates)
@@ -772,12 +858,13 @@ class ConsumerLedgerController extends Controller
                 'txtime' => $paidDate->format('Y-m-d H:i:s'),
                 'schedule_id' => $scheduleId, // Link to meter_reading_schedules
                 'downloaded_reading_id' => $payment->downloaded_id, // Link to downloaded_readings
-                'consumer_zone_id' => $consumerZoneId, // Link to consumer_ledgers
+                'consumer_zone_id' => $consumer->id, // Link to consumer_ledgers
             ];
         }
 
-        \Log::info('PAYMENT entries from downloaded_readings', [
+        Log::info('PAYMENT entries from downloaded_readings', [
             'account_no' => $accountNo,
+            'account_name' => $consumer->account_name,
             'total_payments' => $payments->count(),
             'payment_entries' => count($ledgerEntries)
         ]);
@@ -789,57 +876,60 @@ class ConsumerLedgerController extends Controller
      * Get collection entries from collection table
      * These represent PAYMENT transactions from the collection table
      */
-    private function getCollectionEntries($accountNo, $consumerZoneId, $year = null)
+    private function getCollectionEntries($accountNo, $year = null)
     {
+        $consumer = $this->resolveConsumerByAccountNo($accountNo);
+        if (!$consumer) {
+            return [];
+        }
+
         $ledgerEntries = [];
 
-        // Check if collection table exists
-        if (!Schema::hasTable('collection')) {
-            \Log::info('Collection table does not exist, skipping collection entries');
+        // Check if consumer_payments table exists
+        if (!Schema::hasTable('consumer_payments')) {
+            Log::info('consumer_payments table does not exist, skipping payment entries');
             return $ledgerEntries;
         }
 
         try {
-            $normalizedAccount = str_replace('-', '', $accountNo);
+            $cpPaidAt = mr_col('paid_at');
+            $cpId = (new ConsumerPayment)->getKeyName();
+            $clConsumerZoneId = mr_col('consumer_zone_id');
+            $clTrans = mr_col('trans');
+            $clReference = mr_col('reference');
 
-            // Query collection table for this account
-            $collectionsQuery = Collection::where('account_no', $accountNo)
-                ->where(function($query) {
-                    $query->whereNull('cancel')
-                          ->orWhere('cancel', '')
-                          ->orWhere('cancel', '0');
-                });
+            $collectionsQuery = ConsumerPayment::query()
+                ->forAccountNo($accountNo)
+                ->importable()
+                ->with('consumerZone');
 
-            // Apply year filter if provided
             if ($year && $year != '') {
-                $collectionsQuery->where(function($query) use ($year) {
-                    $query->whereYear('coll_date', $year)
-                          ->orWhereRaw("YEAR(coll_date) = ?", [$year]);
-                });
+                $collectionsQuery->whereYear($cpPaidAt, $year);
             }
 
             $collections = $collectionsQuery
-                ->orderBy('coll_date', 'asc')
-                ->orderByRaw('COALESCE(coll_time, "00:00:00") ASC')
+                ->orderBy($cpPaidAt)
+                ->orderBy($cpId)
                 ->get();
 
-            \Log::info('Collection entries fetched', [
+            Log::info('Collection entries fetched', [
                 'account_no' => $accountNo,
+                'account_name' => $consumer->account_name,
                 'year' => $year,
                 'total_collections' => $collections->count()
             ]);
 
             // Get existing PAYMENT entries from consumer_ledgers to avoid duplicates
-            $existingPaymentReferences = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                ->where('trans', 'PAYMENT')
-                ->whereNotNull('reference')
-                ->pluck('reference')
+            $existingPaymentReferences = self::ledgerQueryForConsumer($consumer->id)
+                ->where($clTrans, 'PAYMENT')
+                ->whereNotNull($clReference)
+                ->pluck($clReference)
                 ->toArray();
 
             foreach ($collections as $collection) {
                 // Skip if this collection's or_number already exists as a PAYMENT reference
                 if (!empty($collection->or_number) && in_array($collection->or_number, $existingPaymentReferences)) {
-                    \Log::info('Skipping duplicate collection entry', [
+                    Log::info('Skipping duplicate collection entry', [
                         'or_number' => $collection->or_number,
                         'coll_date' => $collection->coll_date
                     ]);
@@ -861,7 +951,7 @@ class ConsumerLedgerController extends Controller
                 try {
                     $collDateObj = Carbon::parse($collDate);
                 } catch (\Exception $e) {
-                    \Log::warning('Invalid coll_date in collection', [
+                    Log::warning('Invalid coll_date in collection', [
                         'collection_id' => $collection->id ?? null,
                         'coll_date' => $collDate,
                         'error' => $e->getMessage()
@@ -882,7 +972,7 @@ class ConsumerLedgerController extends Controller
                     $txtime = $collDateObj->format('Y-m-d') . ' ' . $collTime;
                     $txtimeObj = Carbon::parse($txtime);
                 } catch (\Exception $e) {
-                    \Log::warning('Invalid txtime in collection', [
+                    Log::warning('Invalid txtime in collection', [
                         'collection_id' => $collection->id ?? null,
                         'coll_date' => $collDate,
                         'coll_time' => $collTime,
@@ -907,18 +997,19 @@ class ConsumerLedgerController extends Controller
                     'balance' => 0, // Will be calculated in balance computation
                     'username' => $this->extractFirstName($collection->username ?? ''),
                     'txtime' => $txtime,
-                    'consumer_zone_id' => $consumerZoneId,
+                    'consumer_zone_id' => $consumer->id,
                 ];
             }
 
-            \Log::info('Collection entries processed', [
+            Log::info('Collection entries processed', [
                 'account_no' => $accountNo,
+                'account_name' => $consumer->account_name,
                 'total_collections' => $collections->count(),
                 'collection_entries' => count($ledgerEntries)
             ]);
 
         } catch (\Exception $e) {
-            \Log::error('Error fetching collection entries', [
+            Log::error('Error fetching collection entries', [
                 'account_no' => $accountNo,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -932,22 +1023,42 @@ class ConsumerLedgerController extends Controller
      * Create penalty entries for bills with passed due dates
      * This automatically records penalties in consumer_ledgers when due dates are reached
      */
-    private function createPenaltyEntries($accountNo, $consumerZoneId, $year = null)
+    private function createPenaltyEntries($accountNo, $year = null)
     {
-        $normalizedAccount = str_replace('-', '', $accountNo);
+        $consumer = $this->resolveConsumerByAccountNo($accountNo);
+        if (!$consumer) {
+            return [];
+        }
+
         $penaltyEntries = [];
         $today = Carbon::today();
 
+        $pConsumerZoneId = mr_col('consumer_zone_id');
+        $pDate = mr_col('date');
+        $pDueDate = mr_col('due_date');
+        $mrsTable = mr_col('meter_reading_schedules as mrs');
+        $drTable = mr_col('downloaded_readings as dr');
+        $czTable = mr_col('consumer_zone as cz');
+        $mrsId = mr_col('mrs.id');
+        $drScheduleId = mr_col('dr.schedule_id');
+        $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+        $czId = mr_col('cz.id');
+        $mrsDueDate = mr_col('mrs.due_date');
+        $mrsBillDate = mr_col('mrs.bill_date');
+        $clScheduleId = mr_col('schedule_id');
+        $clTrans = mr_col('trans');
+        $clDueDate = mr_col('due_date');
+        $clDate = mr_col('date');
+        $clId = self::ledgerIdColumn();
+
         // First, get existing penalties from penalties table
-        // NOTE: Penalties from consumer_ledgers are already included in $existingLedgers in getLedger()
-        // So we only need to fetch from penalties table here to avoid duplication
-        $existingPenaltiesQuery = Penalty::where('consumer_zone_id', $consumerZoneId);
+        $existingPenaltiesQuery = Penalty::query()->where($pConsumerZoneId, $consumer->id);
         
         // Apply year filter if provided
         if ($year && $year != '') {
-            $existingPenaltiesQuery->where(function($query) use ($year) {
-                $query->whereYear('date', $year)
-                      ->orWhereYear('due_date', $year);
+            $existingPenaltiesQuery->where(function($query) use ($year, $pDate, $pDueDate) {
+                $query->whereYear($pDate, $year)
+                      ->orWhereYear($pDueDate, $year);
             });
         }
         
@@ -977,8 +1088,9 @@ class ConsumerLedgerController extends Controller
             ->toArray();
 
         // Query for bills with passed due dates that don't have penalty entries yet
-        $schedulesQuery = DB::table('meter_reading_schedules as mrs')
-            ->leftJoin('downloaded_readings as dr', 'mrs.id', '=', 'dr.schedule_id')
+        $schedulesQuery = DB::table($mrsTable)
+            ->leftJoin($drTable, $mrsId, '=', $drScheduleId)
+            ->leftJoin($czTable, $mrsConsumerZoneId, '=', $czId)
             ->select(
                 'mrs.id as schedule_id',
                 'mrs.bill_date',
@@ -990,26 +1102,26 @@ class ConsumerLedgerController extends Controller
                 'dr.current_bill as downloaded_current_bill',
                 'dr.status',
                 'dr.paid_at'
-            )
-            ->where('mrs.consumer_zone_id', $consumerZoneId)
-            ->whereNotNull('mrs.due_date')
-            ->whereNotNull('mrs.bill_date')
-            ->where('mrs.due_date', '<=', $today); // Due date has passed
+            );
+        $this->applyConsumerAccountNoFilter($schedulesQuery, $accountNo);
+        $schedulesQuery->whereNotNull($mrsDueDate)
+            ->whereNotNull($mrsBillDate)
+            ->where($mrsDueDate, '<=', $today);
 
         // Apply year filter if provided
         if ($year && $year != '') {
-            $schedulesQuery->where(function($query) use ($year) {
-                $query->whereYear('mrs.bill_date', $year)
-                      ->orWhereYear('mrs.due_date', $year);
+            $schedulesQuery->where(function($query) use ($year, $mrsBillDate, $mrsDueDate) {
+                $query->whereYear($mrsBillDate, $year)
+                      ->orWhereYear($mrsDueDate, $year);
             });
         }
 
-        $schedules = $schedulesQuery->orderBy('mrs.due_date', 'desc')
+        $schedules = $schedulesQuery->orderBy($mrsDueDate, 'desc')
                                    ->get();
 
-        \Log::info('Penalty creation - schedules found', [
+        Log::info('Penalty creation - schedules found', [
             'account_no' => $accountNo,
-            'consumer_zone_id' => $consumerZoneId,
+            'account_name' => $consumer->account_name,
             'schedules_count' => $schedules->count(),
             'today' => $today->format('Y-m-d')
         ]);
@@ -1020,7 +1132,7 @@ class ConsumerLedgerController extends Controller
 
             // Skip if no current bill or invalid due date
             if ($currentBill <= 0 || !$dueDate) {
-                \Log::info('Penalty skipped - no bill or invalid date', [
+                Log::info('Penalty skipped - no bill or invalid date', [
                     'schedule_id' => $schedule->schedule_id,
                     'current_bill' => $currentBill,
                     'due_date' => $dueDate ? $dueDate->format('Y-m-d') : 'null'
@@ -1032,7 +1144,7 @@ class ConsumerLedgerController extends Controller
             // Penalty is created when the due date is reached or has passed
             // Check if today is greater than or equal to due date
             if ($today->lessThan($dueDate)) {
-                \Log::info('Penalty skipped - too early', [
+                Log::info('Penalty skipped - too early', [
                     'schedule_id' => $schedule->schedule_id,
                     'due_date' => $dueDate->format('Y-m-d'),
                     'today' => $today->format('Y-m-d')
@@ -1043,7 +1155,7 @@ class ConsumerLedgerController extends Controller
             // Penalty date for display is one day after due date (matching past records)
             $penaltyDate = $dueDate->copy()->addDay();
             
-            \Log::info('Processing penalty for schedule', [
+            Log::info('Processing penalty for schedule', [
                 'schedule_id' => $schedule->schedule_id,
                 'due_date' => $dueDate->format('Y-m-d'),
                 'penalty_date' => $penaltyDate->format('Y-m-d'),
@@ -1052,13 +1164,14 @@ class ConsumerLedgerController extends Controller
             ]);
 
             // Check if penalty entry already exists in penalties table
-            $existingPenalty = Penalty::where('consumer_zone_id', $consumerZoneId)
-                ->where('schedule_id', $schedule->schedule_id)
+            $existingPenalty = Penalty::query()
+                ->where($pConsumerZoneId, $consumer->id)
+                ->where($clScheduleId, $schedule->schedule_id)
                 ->first();
 
             // Skip if penalty entry already exists in penalties table
             if ($existingPenalty) {
-                \Log::info('Penalty skipped - already exists in penalties table', [
+                Log::info('Penalty skipped - already exists in penalties table', [
                     'schedule_id' => $schedule->schedule_id,
                     'due_date' => $dueDate->format('Y-m-d')
                 ]);
@@ -1067,14 +1180,14 @@ class ConsumerLedgerController extends Controller
             
             // Also check if penalty entry already exists in consumer_ledgers table
             // This prevents duplicates when penalties are created by generatePenalties() method
-            $existingLedgerPenalty = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                ->where('trans', 'PENALTY')
-                ->where('due_date', $dueDate->format('Y-m-d'))
+            $existingLedgerPenalty = self::ledgerQueryForConsumer($consumer->id)
+                ->where($clTrans, 'PENALTY')
+                ->where($clDueDate, $dueDate->format('Y-m-d'))
                 ->first();
             
             // Skip if penalty entry already exists in consumer_ledgers
             if ($existingLedgerPenalty) {
-                \Log::info('Penalty skipped - already exists in consumer_ledgers table', [
+                Log::info('Penalty skipped - already exists in consumer_ledgers table', [
                     'schedule_id' => $schedule->schedule_id,
                     'due_date' => $dueDate->format('Y-m-d'),
                     'ledger_id' => $existingLedgerPenalty->id
@@ -1085,9 +1198,9 @@ class ConsumerLedgerController extends Controller
             // Get the BILL entry for this schedule to get the Bill Amount
             // Penalty is 10% of the Bill Amount from the BILLING entry (matching past records)
             // First check in database, then check in schedules table
-            $billEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                ->where('schedule_id', $schedule->schedule_id)
-                ->where('trans', 'BILL')
+            $billEntry = self::ledgerQueryForConsumer($consumer->id)
+                ->where($clScheduleId, $schedule->schedule_id)
+                ->where($clTrans, 'BILL')
                 ->first();
             
             // If no BILL entry in database, also check if there's a BILL entry from schedules
@@ -1102,7 +1215,7 @@ class ConsumerLedgerController extends Controller
             
             // Ensure we have a valid bill amount
             if ($billAmount <= 0) {
-                \Log::info('Penalty skipped - invalid bill amount', [
+                Log::info('Penalty skipped - invalid bill amount', [
                     'schedule_id' => $schedule->schedule_id,
                     'bill_amount' => $billAmount,
                     'has_bill_entry' => $billEntry ? 'yes' : 'no'
@@ -1112,29 +1225,29 @@ class ConsumerLedgerController extends Controller
             
             // Get the latest balance before this penalty (from entries on or before the due date)
             // This ensures we get the balance after the BILL entry but before the penalty
-            $previousBalanceEntry = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-                ->where(function($query) use ($dueDate) {
-                    $query->where('date', '<=', $dueDate->format('Y-m-d'))
-                          ->orWhere('due_date', '<=', $dueDate->format('Y-m-d'));
+            $previousBalanceEntry = self::ledgerQueryForConsumer($consumer->id)
+                ->where(function($query) use ($dueDate, $clDate, $clDueDate) {
+                    $query->where($clDate, '<=', $dueDate->format('Y-m-d'))
+                          ->orWhere($clDueDate, '<=', $dueDate->format('Y-m-d'));
                 })
-                ->where('trans', '!=', 'PENALTY') // Exclude existing penalties
-                ->orderBy('date', 'desc')
-                ->orderBy('id', 'desc')
+                ->where($clTrans, '!=', 'PENALTY')
+                ->orderBy($clDate, 'desc')
+                ->orderBy($clId, 'desc')
                 ->first();
 
             $previousBalance = $previousBalanceEntry ? (float)($previousBalanceEntry->balance ?? 0) : 0;
             
             // If no previous balance found, try to get from consumer
             if ($previousBalance == 0) {
-                $consumer = ConsumerZoneOne::find($consumerZoneId);
-                $previousBalance = $consumer ? (float)($consumer->balance ?? 0) : 0;
+                $previousBalance = (float)($consumer->balance ?? 0);
             }
 
             // CRITICAL: Only create penalty if consumer has an outstanding balance (arrears)
             // If balance is 0 or negative (fully paid), do NOT create penalty
             if ($previousBalance <= 0) {
-                \Log::info('Penalty skipped - consumer has no outstanding balance', [
+                Log::info('Penalty skipped - consumer has no outstanding balance', [
                     'account_no' => $accountNo,
+                    'account_name' => $consumer->account_name,
                     'schedule_id' => $schedule->schedule_id,
                     'due_date' => $dueDate->format('Y-m-d'),
                     'previous_balance' => $previousBalance,
@@ -1160,7 +1273,7 @@ class ConsumerLedgerController extends Controller
                 // Create penalty entry in penalties table
                 try {
                     $penaltyRecord = Penalty::create([
-                        'consumer_zone_id' => $consumerZoneId,
+                        'consumer_zone_id' => $consumer->id,
                         'schedule_id' => $schedule->schedule_id,
                         'downloaded_reading_id' => $schedule->downloaded_id,
                         'date' => $penaltyDate->format('Y-m-d'), // One day after due date
@@ -1192,18 +1305,19 @@ class ConsumerLedgerController extends Controller
                         'txtime' => Carbon::now()->format('Y-m-d H:i:s'),
                         'schedule_id' => $schedule->schedule_id,
                         'downloaded_reading_id' => $schedule->downloaded_id,
-                        'consumer_zone_id' => $consumerZoneId,
+                        'consumer_zone_id' => $consumer->id,
                     ];
 
-                    \Log::info('Penalty entry created in penalties table', [
+                    Log::info('Penalty entry created in penalties table', [
                         'account_no' => $accountNo,
+                        'account_name' => $consumer->account_name,
                         'schedule_id' => $schedule->schedule_id,
                         'due_date' => $dueDate->format('Y-m-d'),
                         'penalty' => $penalty,
                         'balance' => $newBalance
                     ]);
                 } catch (\Exception $e) {
-                    \Log::error('Error creating penalty entry in penalties table', [
+                    Log::error('Error creating penalty entry in penalties table', [
                         'account_no' => $accountNo,
                         'schedule_id' => $schedule->schedule_id,
                         'error' => $e->getMessage()
@@ -1215,7 +1329,7 @@ class ConsumerLedgerController extends Controller
         // Merge existing penalties with newly created ones
         $allPenaltyEntries = array_merge($existingPenalties, $penaltyEntries);
 
-        \Log::info('Penalty entries processed', [
+        Log::info('Penalty entries processed', [
             'account_no' => $accountNo,
             'existing_penalties_count' => count($existingPenalties),
             'new_penalties_count' => count($penaltyEntries),
@@ -1232,22 +1346,43 @@ class ConsumerLedgerController extends Controller
      */
     private function getLedgerFromDownloadedReadings($accountNo, $year = null)
     {
-        $normalizedAccount = str_replace('-', '', $accountNo);
+        $consumer = $this->resolveConsumerByAccountNo($accountNo);
+        if (!$consumer) {
+            return [];
+        }
+
         $ledgerEntries = [];
 
+        $drTable = mr_col('downloaded_readings as dr');
+        $mrsTable = mr_col('meter_reading_schedules as mrs');
+        $czTable = mr_col('consumer_zone as cz');
+        $cpTable = mr_col('consumer_payments as cp');
+        $drScheduleId = mr_col('dr.schedule_id');
+        $mrsId = mr_col('mrs.id');
+        $drConsumerZoneId = mr_col('dr.consumer_zone_id');
+        $mrsConsumerZoneId = mr_col('mrs.consumer_zone_id');
+        $czId = mr_col('cz.id');
+        $cpReadingId = mr_col('cp.reading_id');
+        $drId = mr_col('dr.id');
+        $drReadingDate = mr_col('dr.reading_date');
+        $cpPaidAt = mr_col('cp.paid_at');
+        $drCreatedAt = mr_col('dr.created_at');
+        $mrsBillDate = mr_col('mrs.bill_date');
+        $mrsBillMonth = mr_col('mrs.bill_month');
+
         // Query downloaded_readings joined with meter_reading_schedules and consumer_payments
-        // Use LEFT JOIN to include all downloaded_readings even without schedules
-        $readingsQuery = DB::table('downloaded_readings as dr')
-            ->leftJoin('meter_reading_schedules as mrs', 'dr.schedule_id', '=', 'mrs.id')
-            ->leftJoin('consumer_zone as cz', function ($join) {
-                $join->on('cz.id', '=', 'dr.consumer_zone_id')
-                    ->orOn('cz.id', '=', 'mrs.consumer_zone_id');
+        $readingsQuery = DB::table($drTable)
+            ->leftJoin($mrsTable, $drScheduleId, '=', $mrsId)
+            ->leftJoin($czTable, function ($join) use ($czId, $drConsumerZoneId, $mrsConsumerZoneId) {
+                $join->on($czId, '=', $drConsumerZoneId)
+                    ->orOn($czId, '=', $mrsConsumerZoneId);
             })
-            ->leftJoin('consumer_payments as cp', 'cp.reading_id', '=', 'dr.id')
+            ->leftJoin($cpTable, $cpReadingId, '=', $drId)
             ->select(
                 'dr.id as downloaded_id',
                 'dr.schedule_id',
                 'cz.account_no as account_number',
+                'cz.account_name',
                 'dr.consumption',
                 'dr.current_reading',
                 'dr.current_bill as downloaded_current_bill',
@@ -1271,35 +1406,27 @@ class ConsumerLedgerController extends Controller
                 'mrs.total_amount',
                 'mrs.previous_reading',
                 'mrs.prepared_by'
-            )
-            ->where(function ($query) use ($accountNo, $normalizedAccount, $consumerZoneId) {
-                if ($consumerZoneId) {
-                    $query->where('dr.consumer_zone_id', $consumerZoneId)
-                        ->orWhere('mrs.consumer_zone_id', $consumerZoneId);
-                } else {
-                    $query->where('cz.account_no', $accountNo)
-                        ->orWhereRaw("REPLACE(cz.account_no, '-', '') = ?", [$normalizedAccount])
-                        ->orWhereRaw("UPPER(TRIM(cz.account_no)) = ?", [strtoupper(trim($accountNo))]);
-                }
-            });
+            );
+        $this->applyConsumerAccountNoFilter($readingsQuery, $accountNo);
 
         // Apply year filter if provided
         if ($year && $year != '') {
-            $readingsQuery->where(function($query) use ($year) {
-                $query->whereYear('dr.reading_date', $year)
-                      ->orWhereYear('cp.paid_at', $year)
-                      ->orWhereYear('dr.created_at', $year)
-                      ->orWhereYear('mrs.bill_date', $year)
-                      ->orWhereYear('mrs.bill_month', $year);
+            $readingsQuery->where(function($query) use ($year, $drReadingDate, $cpPaidAt, $drCreatedAt, $mrsBillDate, $mrsBillMonth) {
+                $query->whereYear($drReadingDate, $year)
+                      ->orWhereYear($cpPaidAt, $year)
+                      ->orWhereYear($drCreatedAt, $year)
+                      ->orWhereYear($mrsBillDate, $year)
+                      ->orWhereYear($mrsBillMonth, $year);
             });
         }
 
         $readings = $readingsQuery->orderBy(DB::raw('COALESCE(cp.paid_at, dr.reading_date, dr.created_at)'), 'desc')
-                                  ->orderBy('dr.created_at', 'desc')
+                                  ->orderBy($drCreatedAt, 'desc')
                                   ->get();
 
-        \Log::info('Ledger query results', [
+        Log::info('Ledger query results', [
             'account_no' => $accountNo,
+            'account_name' => $consumer->account_name,
             'total_readings' => $readings->count(),
             'paid_count' => $readings->filter(function($r) {
                 $status = strtolower(trim($r->status ?? ''));
@@ -1374,7 +1501,7 @@ class ConsumerLedgerController extends Controller
                     try {
                         $paidDate = Carbon::parse($reading->paid_at);
                     } catch (\Exception $e) {
-                        \Log::warning('Error parsing paid_at', ['paid_at' => $reading->paid_at, 'error' => $e->getMessage()]);
+                        Log::warning('Error parsing paid_at', ['paid_at' => $reading->paid_at, 'error' => $e->getMessage()]);
                     }
                 }
                 
@@ -1382,7 +1509,7 @@ class ConsumerLedgerController extends Controller
                     try {
                         $paidDate = Carbon::parse($reading->created_at);
                     } catch (\Exception $e) {
-                        \Log::warning('Error parsing created_at', ['created_at' => $reading->created_at, 'error' => $e->getMessage()]);
+                        Log::warning('Error parsing created_at', ['created_at' => $reading->created_at, 'error' => $e->getMessage()]);
                     }
                 }
                 
@@ -1390,7 +1517,7 @@ class ConsumerLedgerController extends Controller
                     try {
                         $paidDate = Carbon::parse($reading->reading_date);
                     } catch (\Exception $e) {
-                        \Log::warning('Error parsing reading_date', ['reading_date' => $reading->reading_date, 'error' => $e->getMessage()]);
+                        Log::warning('Error parsing reading_date', ['reading_date' => $reading->reading_date, 'error' => $e->getMessage()]);
                     }
                 }
                 
@@ -1415,7 +1542,7 @@ class ConsumerLedgerController extends Controller
                 // Create payment entry regardless of amount (even if 0, for record keeping)
                 // But log if amount is 0
                 if ($paymentAmount == 0) {
-                    \Log::warning('Payment entry with zero amount', [
+                    Log::warning('Payment entry with zero amount', [
                         'account_no' => $accountNo,
                         'downloaded_id' => $reading->downloaded_id,
                         'status' => $reading->status,
@@ -1451,7 +1578,7 @@ class ConsumerLedgerController extends Controller
                 
                 $ledgerEntries[] = $paymentEntry;
                 
-                \Log::info('Payment entry created for ledger', [
+                Log::info('Payment entry created for ledger', [
                     'account_no' => $accountNo,
                     'downloaded_id' => $reading->downloaded_id,
                     'payment_amount' => $paymentAmount,
@@ -1463,7 +1590,7 @@ class ConsumerLedgerController extends Controller
             }
         }
 
-        \Log::info('Ledger entries created', [
+        Log::info('Ledger entries created', [
             'account_no' => $accountNo,
             'total_entries' => count($ledgerEntries),
             'bill_entries' => count(array_filter($ledgerEntries, function($e) { return $e['trans'] === 'BILL'; })),
@@ -1535,16 +1662,17 @@ class ConsumerLedgerController extends Controller
      * Calculate current balance from existing ledger entries (without generating new entries)
      * This matches the running-balance logic for outstanding payments.
      */
-    private function calculateCurrentBalanceFromLedger(ConsumerZoneOne $consumer): float
+    private function calculateCurrentBalanceFromLedger(ConsumerZone $consumer): float
     {
+        $clDate = mr_col('date');
+        $clId = self::ledgerIdColumn();
+
         // Recompute running balance safely:
-        // 1) Prefer debit/credit math when present.
-        // 2) If debit/credit both zero but a stored balance exists, treat it as a reset.
         $running = 0.0;
 
-        $ledgers = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-            ->orderBy('date', 'asc')
-            ->orderBy('id', 'asc')
+        $ledgers = self::ledgerQueryForConsumer($consumer->id)
+            ->orderBy($clDate, 'asc')
+            ->orderBy($clId, 'asc')
             ->get();
 
         foreach ($ledgers as $ledger) {
@@ -1569,15 +1697,16 @@ class ConsumerLedgerController extends Controller
      */
     public function getLedgerBalanceOnly($accountNo): float
     {
-        $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+        $consumer = ConsumerZone::findByAccountNo($accountNo);
         if (!$consumer) {
             return 0.00;
         }
 
         // Get ledger entries directly from database - NO calculations, NO unpaid bills
-        $ledgers = ConsumerLedger::where('consumer_zone_id', $consumer->id)
+        $clId = self::ledgerIdColumn();
+        $ledgers = self::ledgerQueryForConsumer($consumer->id)
             ->orderByRaw('CAST(date AS DATE) ASC')
-            ->orderBy('id', 'asc')
+            ->orderBy($clId, 'asc')
             ->get();
 
         if ($ledgers->isEmpty()) {
@@ -1638,25 +1767,29 @@ class ConsumerLedgerController extends Controller
      */
     public function getCurrentBalance($accountNo): float
     {
-        $consumer = ConsumerZoneOne::where('account_no', $accountNo)->first();
+        $consumer = ConsumerZone::findByAccountNo($accountNo);
         if (!$consumer) {
             return 0.00;
         }
 
         // Get existing ledger entries
-        $existingLedgers = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-            ->orderBy('date', 'asc')
-            ->orderBy('id', 'asc')
+        $clDate = mr_col('date');
+        $clId = self::ledgerIdColumn();
+        $clBalance = mr_col('balance');
+
+        $existingLedgers = self::ledgerQueryForConsumer($consumer->id)
+            ->orderBy($clDate, 'asc')
+            ->orderBy($clId, 'asc')
             ->get();
 
         // Get bill entries from schedules
-        $billEntries = $this->getBillEntriesFromSchedules($consumer->account_no, $consumer->id, '');
+        $billEntries = $this->getBillEntriesFromSchedules($consumer->account_no, '');
 
         // Get payment entries
-        $paymentEntries = $this->getPaymentEntriesFromDownloadedReadings($consumer->account_no, $consumer->id, '');
+        $paymentEntries = $this->getPaymentEntriesFromDownloadedReadings($consumer->account_no, '');
 
         // Get collection entries
-        $collectionEntries = $this->getCollectionEntries($consumer->account_no, $consumer->id, '');
+        $collectionEntries = $this->getCollectionEntries($consumer->account_no, '');
 
         // Get penalty entries.
         // IMPORTANT:
@@ -1667,7 +1800,7 @@ class ConsumerLedgerController extends Controller
         //
         // From now on we ONLY read existing entries from the penalties table,
         // using createPenaltyEntries() strictly as a formatter (no side effects).
-        $penaltyEntries = $this->createPenaltyEntries($consumer->account_no, $consumer->id, '');
+        $penaltyEntries = $this->createPenaltyEntries($consumer->account_no, '');
 
         // Merge all entries
         $allLedgers = collect($existingLedgers)
@@ -1704,10 +1837,10 @@ class ConsumerLedgerController extends Controller
         })->values();
 
         // Calculate running balance
-        $earliestOldLedger = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-            ->whereNotNull('balance')
-            ->orderBy('date', 'asc')
-            ->orderBy('id', 'asc')
+        $earliestOldLedger = self::ledgerQueryForConsumer($consumer->id)
+            ->whereNotNull($clBalance)
+            ->orderBy($clDate, 'asc')
+            ->orderBy($clId, 'asc')
             ->first();
 
         $previousBalance = 0.00;
@@ -1766,10 +1899,10 @@ class ConsumerLedgerController extends Controller
                 ? (float)($lastEntry->balance ?? 0) 
                 : (float)($lastEntry['balance'] ?? 0);
         } else {
-            $latestLedgerEntry = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-                ->whereNotNull('balance')
-                ->orderBy('date', 'desc')
-                ->orderBy('id', 'desc')
+            $latestLedgerEntry = self::ledgerQueryForConsumer($consumer->id)
+                ->whereNotNull($clBalance)
+                ->orderBy($clDate, 'desc')
+                ->orderBy($clId, 'desc')
                 ->first();
             $currentBalance = $latestLedgerEntry ? (float)($latestLedgerEntry->balance ?? 0) : $previousBalance;
         }
@@ -1781,13 +1914,29 @@ class ConsumerLedgerController extends Controller
             return strtoupper(trim($trans)) === 'BILLING' && $billamount > 0;
         });
 
+        $drTable = mr_col('downloaded_readings as dr');
+        $czTable = mr_col('consumer_zone as cz');
+        $drConsumerZoneId = mr_col('dr.consumer_zone_id');
+        $czId = mr_col('cz.id');
+        $drCurrentBill = mr_col('dr.current_bill');
+        $drReadingDate = mr_col('dr.reading_date');
+        $drCreatedAt = mr_col('dr.created_at');
+        $cpTable = mr_col('consumer_payments as cp');
+        $cpReadingId = mr_col('cp.reading_id');
+        $cpPaymentAmount = mr_col('cp.payment_amount');
+        $drTablePlain = mr_col('downloaded_readings');
+        $drId = mr_col('id');
+        $drStatus = mr_col('status');
+
         // Get latest unpaid bill
-        $normalizedAccount = str_replace('-', '', $consumer->account_no);
-        $latestBillFromDownloaded = DB::table('downloaded_readings as dr')
-            ->where('dr.consumer_zone_id', $consumer->id)
-            ->whereNotNull('dr.current_bill')
-            ->orderBy('dr.reading_date', 'desc')
-            ->orderBy('dr.created_at', 'desc')
+        $latestBillFromDownloaded = DB::table($drTable)
+            ->leftJoin($czTable, $drConsumerZoneId, '=', $czId);
+        $this->applyConsumerAccountNoFilter($latestBillFromDownloaded, $consumer->account_no);
+        $latestBillFromDownloaded = $latestBillFromDownloaded
+            ->whereNotNull($drCurrentBill)
+            ->orderBy($drReadingDate, 'desc')
+            ->orderBy($drCreatedAt, 'desc')
+            ->select('dr.*')
             ->first();
 
         $latestBillAmount = 0;
@@ -1795,17 +1944,17 @@ class ConsumerLedgerController extends Controller
 
         if ($latestBillFromDownloaded) {
             $latestBillAmount = (float)($latestBillFromDownloaded->current_bill ?? 0);
-            $latestBillPaid = DB::table('consumer_payments as cp')
-                ->where('cp.reading_id', $latestBillFromDownloaded->id ?? null)
-                ->whereNotNull('cp.payment_amount')
-                ->where('cp.payment_amount', '>', 0)
+            $latestBillPaid = DB::table($cpTable)
+                ->where($cpReadingId, $latestBillFromDownloaded->id ?? null)
+                ->whereNotNull($cpPaymentAmount)
+                ->where($cpPaymentAmount, '>', 0)
                 ->exists();
 
             if (!$latestBillPaid) {
-                $drStatus = DB::table('downloaded_readings')
-                    ->where('id', $latestBillFromDownloaded->id ?? null)
-                    ->value('status');
-                $latestBillPaid = (strtolower(trim($drStatus ?? '')) === 'paid');
+                $drStatusValue = DB::table($drTablePlain)
+                    ->where($drId, $latestBillFromDownloaded->id ?? null)
+                    ->value($drStatus);
+                $latestBillPaid = (strtolower(trim($drStatusValue ?? '')) === 'paid');
             }
         }
 
@@ -1833,12 +1982,16 @@ class ConsumerLedgerController extends Controller
     /**
      * Get current balance preferring latest stored balance; fallback to recomputed running balance
      */
-    private function getAuthoritativeBalance(ConsumerZoneOne $consumer): float
+    private function getAuthoritativeBalance(ConsumerZone $consumer): float
     {
-        $latest = ConsumerLedger::where('consumer_zone_id', $consumer->id)
-            ->whereNotNull('balance')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+        $clDate = mr_col('date');
+        $clId = self::ledgerIdColumn();
+        $clBalance = mr_col('balance');
+
+        $latest = self::ledgerQueryForConsumer($consumer->id)
+            ->whereNotNull($clBalance)
+            ->orderBy($clDate, 'desc')
+            ->orderBy($clId, 'desc')
             ->first();
 
         if ($latest) {
@@ -1854,7 +2007,7 @@ class ConsumerLedgerController extends Controller
         set_time_limit(0); // 0 = unlimited, or use a specific value like 300 for 5 minutes
         ini_set('max_execution_time', 0);
         
-        \Illuminate\Support\Facades\Log::info('Ledger import request received', [
+        Log::info('Ledger import request received', [
             'has_file' => $request->hasFile('file'),
             'file_name' => $request->file('file') ? $request->file('file')->getClientOriginalName() : 'no file',
             'method' => $request->method(),
@@ -1863,7 +2016,7 @@ class ConsumerLedgerController extends Controller
         
         $uploadedFile = $request->file('file');
         if ($uploadedFile) {
-            \Illuminate\Support\Facades\Log::info('Uploaded file details', [
+            Log::info('Uploaded file details', [
                 'original_name' => $uploadedFile->getClientOriginalName(),
                 'extension' => $uploadedFile->getClientOriginalExtension(),
                 'mime_type' => $uploadedFile->getClientMimeType(),
@@ -1892,7 +2045,7 @@ class ConsumerLedgerController extends Controller
             
             // Validate by extension OR MIME type (not both - more flexible)
             if (!in_array($extension, $allowedExtensions) && !in_array($mimeType, $allowedMimeTypes)) {
-                \Illuminate\Support\Facades\Log::error('File validation failed - not in allowed lists', [
+                Log::error('File validation failed - not in allowed lists', [
                     'extension' => $extension,
                     'mime_type' => $mimeType,
                     'original_name' => $uploadedFile->getClientOriginalName()
@@ -1905,13 +2058,13 @@ class ConsumerLedgerController extends Controller
             
             // If we get here, validation passed
             $validated = ['file' => $uploadedFile];
-            \Illuminate\Support\Facades\Log::info('File validation passed', [
+            Log::info('File validation passed', [
                 'extension' => $extension,
                 'mime_type' => $mimeType,
                 'original_name' => $uploadedFile->getClientOriginalName()
             ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
-            \Illuminate\Support\Facades\Log::error('Validation failed', [
+            Log::error('Validation failed', [
                 'errors' => $e->errors(),
                 'message' => $e->getMessage()
             ]);
@@ -1928,7 +2081,7 @@ class ConsumerLedgerController extends Controller
         }
 
         try {
-            \Illuminate\Support\Facades\Log::info('Starting ledger import');
+            Log::info('Starting ledger import');
             
             $uploadedFile = $request->file('file');
             $extension = strtolower($uploadedFile->getClientOriginalExtension());
@@ -1949,7 +2102,7 @@ class ConsumerLedgerController extends Controller
                 throw new \Exception('The uploaded file cannot be read. Please ensure the file is not corrupted.');
             }
             
-            \Illuminate\Support\Facades\Log::info('File path before import', [
+            Log::info('File path before import', [
                 'file_path' => $filePath,
                 'exists' => file_exists($filePath),
                 'readable' => is_readable($filePath),
@@ -1963,7 +2116,7 @@ class ConsumerLedgerController extends Controller
             } catch (\PhpOffice\PhpSpreadsheet\Reader\Exception $e) {
                 // If it's an OLE file error, try to provide more helpful message
                 if (strpos($e->getMessage(), 'OLE') !== false || strpos($e->getMessage(), 'not recognised') !== false) {
-                    \Illuminate\Support\Facades\Log::error('OLE file read error', [
+                    Log::error('OLE file read error', [
                         'message' => $e->getMessage(),
                         'file_path' => $filePath,
                         'extension' => $extension
@@ -1982,7 +2135,7 @@ class ConsumerLedgerController extends Controller
             $skipped = $import->skippedCount ?? 0;
             $errors = $import->errors ?? [];
             
-            \Illuminate\Support\Facades\Log::info('Import completed', [
+            Log::info('Import completed', [
                 'imported' => $imported,
                 'skipped' => $skipped,
                 'errors' => $errors,
@@ -1996,7 +2149,7 @@ class ConsumerLedgerController extends Controller
                     $message .= " {$skipped} row(s) skipped.";
                 }
                 
-                \Illuminate\Support\Facades\Log::info('Returning success response', ['message' => $message]);
+                Log::info('Returning success response', ['message' => $message]);
                 
                 // Set flash messages for both AJAX and regular requests
                 session()->flash('success', $message);
@@ -2028,13 +2181,13 @@ class ConsumerLedgerController extends Controller
                         $message .= ' Issues: ' . implode(' | ', $sampleErrors);
                     }
                     
-                    \Illuminate\Support\Facades\Log::warning('Import failed', [
+                    Log::warning('Import failed', [
                         'errors' => $errors,
                         'debug_info' => !empty($import->debugFirstRows) ? $import->debugFirstRows[0] : []
                     ]);
                 } else {
                     $message .= ' Please verify the account numbers in your file match records in the system.';
-                    \Illuminate\Support\Facades\Log::warning('No records imported', ['message' => $message]);
+                    Log::warning('No records imported', ['message' => $message]);
                 }
                 
                 // Set flash message
@@ -2063,7 +2216,7 @@ class ConsumerLedgerController extends Controller
             return back()->with('error', 'Import failed: ' . implode(' | ', $errorMessages));
         } catch (\Exception $e) {
             // Log the full error for debugging
-            \Illuminate\Support\Facades\Log::error('Ledger import error: ' . $e->getMessage(), [
+            Log::error('Ledger import error: ' . $e->getMessage(), [
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString()

@@ -3,7 +3,7 @@
 namespace App\Imports;
 
 use App\Models\LROLedger;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use Carbon\Carbon;
 use Maatwebsite\Excel\Concerns\ToModel;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
@@ -11,6 +11,16 @@ use Maatwebsite\Excel\Concerns\SkipsOnFailure;
 use Maatwebsite\Excel\Concerns\SkipsFailures;
 use Maatwebsite\Excel\Concerns\WithChunkReading;
 use Illuminate\Support\Facades\Log;
+
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
 
 class LROLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithChunkReading
 {
@@ -182,11 +192,11 @@ class LROLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithCh
             $consumerZoneId = null;
             
             if (!empty($accountNo)) {
-                $query = ConsumerZoneOne::where('account_no', $accountNo);
+                $query = ConsumerZone::query()->where(mr_col('account_no'), $accountNo);
                 
                 // If account_name is provided, also match by name for better accuracy
                 if (!empty($accountName)) {
-                    $query->where('account_name', $accountName);
+                    $query->where(mr_col('account_name'), $accountName);
                 }
                 
                 $consumerZone = $query->first();

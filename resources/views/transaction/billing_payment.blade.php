@@ -389,11 +389,12 @@
                                                 </label>
                                                 <div class="position-relative">
                                                     <input type="text" class="form-control text font-weight-bold" id="accountNumber" placeholder="Type account number or account name (e.g., 011)" autocomplete="off">
+                                                    <input type="hidden" id="accountName" value="">
                                                     <i class="fas fa-user-circle position-absolute" style="right: 1rem; top: 50%; transform: translateY(-50%); color: #9ca3af; pointer-events: none;"></i>
                                                 </div>
                                                 <div id="accountSuggestions" class="list-group" style="position: absolute; z-index: 1000; width: 100%; max-height: 300px; overflow-y: auto; display: none;">
                                                 </div>
-                                                <small id="accountLookupStatus" class="d-block mt-2 small text-muted d-none" aria-hidden="true">
+                                                <small id="accountLookupStatus" class="d-block mt-2 small text-muted" aria-hidden="false">
                                                     <i class="fas fa-info-circle mr-1"></i>
                                                     Enter account number or account name to load billing data.
                                                 </small>
@@ -500,6 +501,8 @@
                                                         <td style="padding: 0.5rem;">
                                                             <div style="position: relative;">
                                                                 <input type="hidden" name="sundry_acct_code_1" id="sundryAcctCode1" value="">
+                                                                <input type="hidden" id="sundryLroLedgerId1" value="">
+                                                                <input type="hidden" id="sundryLedger1" value="">
                                                                 <input type="hidden" id="sundryBamNo1" value="">
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay1" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown1" class="bam-acct-dropdown" style="display: none;">
@@ -520,6 +523,8 @@
                                                         <td style="padding: 0.5rem;">
                                                             <div style="position: relative;">
                                                                 <input type="hidden" name="sundry_acct_code_2" id="sundryAcctCode2" value="">
+                                                                <input type="hidden" id="sundryLroLedgerId2" value="">
+                                                                <input type="hidden" id="sundryLedger2" value="">
                                                                 <input type="hidden" id="sundryBamNo2" value="">
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay2" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown2" class="bam-acct-dropdown" style="display: none;">
@@ -540,6 +545,8 @@
                                                         <td style="padding: 0.5rem;">
                                                             <div style="position: relative;">
                                                                 <input type="hidden" name="sundry_acct_code_3" id="sundryAcctCode3" value="">
+                                                                <input type="hidden" id="sundryLroLedgerId3" value="">
+                                                                <input type="hidden" id="sundryLedger3" value="">
                                                                 <input type="hidden" id="sundryBamNo3" value="">
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay3" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown3" class="bam-acct-dropdown" style="display: none;">
@@ -560,6 +567,8 @@
                                                         <td style="padding: 0.5rem;">
                                                             <div style="position: relative;">
                                                                 <input type="hidden" name="sundry_acct_code_4" id="sundryAcctCode4" value="">
+                                                                <input type="hidden" id="sundryLroLedgerId4" value="">
+                                                                <input type="hidden" id="sundryLedger4" value="">
                                                                 <input type="hidden" id="sundryBamNo4" value="">
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay4" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown4" class="bam-acct-dropdown" style="display: none;">
@@ -1089,41 +1098,7 @@
                         // Clear and populate sundries slots
                         clearBamHits();
                         for (let i = 1; i <= 4; i++) {
-                            const acctHidden = document.getElementById('sundryAcctCode' + i);
-                            const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + i);
-                            const bamHidden = document.getElementById('sundryBamNo' + i);
-                            const amountField = document.getElementById('sundryAmount' + i);
-
-                            if (acctHidden) acctHidden.value = '';
-                            if (acctDisplay) {
-                                acctDisplay.value = '';
-                                acctDisplay.placeholder = '— Select Acct Code —';
-                            }
-                            if (bamHidden) bamHidden.value = '';
-                            if (amountField) setNumberFieldValue(amountField, 0);
-
-                            const entry = sundries[i - 1] || null;
-                            if (entry && (entry.acct_code || entry.amount)) {
-                                const code = String(entry.acct_code || '').trim();
-                                const bamNo = String(entry.bam_no || q).trim();
-                                const amount = entry.amount ?? 0;
-
-                                if (acctHidden) acctHidden.value = code;
-                                if (bamHidden) bamHidden.value = bamNo;
-                                if (amountField) setNumberFieldValue(amountField, amount);
-
-                                // Display title from dropdown (data-desc) when possible
-                                if (acctDisplay) {
-                                    const opt = code ? document.querySelector('.bam-acct-option[data-code="' + code.replace(/"/g, '&quot;') + '"]') : null;
-                                    const desc = opt && opt.getAttribute('data-desc') ? String(opt.getAttribute('data-desc') || '').trim() : '';
-                                    const displayText = desc ? desc : code;
-                                    acctDisplay.value = displayText;
-                                    acctDisplay.placeholder = displayText ? '' : '— Select Acct Code —';
-
-                                    const row = acctDisplay.closest('tr');
-                                    
-                                }
-                            }
+                            setSundryRowFromEntry(i, sundries[i - 1] || null);
                         }
 
                         if (typeof updateSundryTotals === 'function') updateSundryTotals();
@@ -1157,6 +1132,74 @@
                 return Number.isFinite(value) ? value : 0;
             };
 
+            const collectSundriesToSave = () => {
+                const rows = [];
+                for (let i = 1; i <= 4; i++) {
+                    const amount = parseNumeric((document.getElementById('sundryAmount' + i) || {}).value || 0);
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    const lroLedgerId = parseInt((document.getElementById('sundryLroLedgerId' + i) || {}).value || '0', 10);
+                    const ledger = String((document.getElementById('sundryLedger' + i) || {}).value || '').trim().toUpperCase();
+                    const code = String((document.getElementById('sundryAcctCode' + i) || {}).value || '').trim();
+                    if (!lroLedgerId || ledger !== 'LRO') {
+                        throw new Error('Sundry row ' + i + ' must be loaded from an unpaid LRO charge. Reload the account or clear the row.');
+                    }
+                    rows.push({
+                        lro_ledger_id: lroLedgerId,
+                        ledger: 'LRO',
+                        acct_code: code,
+                        amount: amount
+                    });
+                }
+                return rows;
+            };
+
+            const setSundryRowFromEntry = (index, entry) => {
+                const acctHidden = document.getElementById('sundryAcctCode' + index);
+                const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + index);
+                const lroLedgerIdHidden = document.getElementById('sundryLroLedgerId' + index);
+                const ledgerHidden = document.getElementById('sundryLedger' + index);
+                const bamHidden = document.getElementById('sundryBamNo' + index);
+                const amountField = document.getElementById('sundryAmount' + index);
+                const acctDropdown = document.getElementById('sundryAcctCodeDropdown' + index);
+
+                if (!acctHidden || !acctDisplay || !amountField) {
+                    return;
+                }
+
+                if (entry) {
+                    const code = String(entry.acct_code || '').trim();
+                    const isPaidCmRow = String(entry.type || '').trim().toUpperCase() === 'CM';
+                    const lroLedgerId = entry.lro_ledger_id || (!isPaidCmRow ? (entry.id || '') : '');
+                    const ledger = String(entry.ledger || 'LRO').trim().toUpperCase();
+                    const opt = code ? document.querySelector('.bam-acct-option[data-code="' + code.replace(/"/g, '&quot;') + '"]') : null;
+                    const titleFromDropdown = (opt && opt.getAttribute('data-desc')) ? String(opt.getAttribute('data-desc') || '').trim() : '';
+                    const title = titleFromDropdown || String(entry.acct_title || '').trim();
+                    const displayText = title || code || '— Select Acct Code —';
+
+                    acctHidden.value = code;
+                    if (lroLedgerIdHidden) lroLedgerIdHidden.value = lroLedgerId ? String(lroLedgerId) : '';
+                    if (ledgerHidden) ledgerHidden.value = ledger;
+                    if (bamHidden) bamHidden.value = entry.bam_no || '';
+                    acctDisplay.value = displayText;
+                    acctDisplay.placeholder = displayText ? '' : '— Select Acct Code —';
+                    setNumberFieldValue(amountField, entry.amount ?? 0);
+                } else {
+                    acctHidden.value = '';
+                    acctDisplay.value = '';
+                    acctDisplay.placeholder = '— Select Acct Code —';
+                    if (lroLedgerIdHidden) lroLedgerIdHidden.value = '';
+                    if (ledgerHidden) ledgerHidden.value = '';
+                    if (bamHidden) bamHidden.value = '';
+                    setNumberFieldValue(amountField, 0);
+                }
+
+                if (acctDropdown) {
+                    acctDropdown.style.display = 'none';
+                }
+            };
+
             const debounce = (fn, delay = 400) => {
                 let timer;
                 return (...args) => {
@@ -1169,8 +1212,15 @@
                 if (!lookupStatus) {
                     return;
                 }
+                if (!message || !String(message).trim()) {
+                    lookupStatus.textContent = '';
+                    lookupStatus.className = 'd-none mt-2 small text-muted';
+                    lookupStatus.setAttribute('aria-hidden', 'true');
+                    return;
+                }
                 lookupStatus.textContent = message;
-                lookupStatus.className = `d-none mt-2 small text-${tone}`;
+                lookupStatus.className = `d-block mt-2 small text-${tone}`;
+                lookupStatus.setAttribute('aria-hidden', 'false');
             };
 
             // Update "Payment status (this month)" badge: 'paid' | 'unpaid' | null (show —)
@@ -1376,6 +1426,12 @@
                             acctHidden.value = code;
                             acctDisplay.value = displayText;
                             acctDisplay.placeholder = displayText ? '' : '— Select Acct Code —';
+                            const lroLedgerIdHidden = document.getElementById('sundryLroLedgerId' + index);
+                            const ledgerHidden = document.getElementById('sundryLedger' + index);
+                            const bamHidden = document.getElementById('sundryBamNo' + index);
+                            if (lroLedgerIdHidden) lroLedgerIdHidden.value = '';
+                            if (ledgerHidden) ledgerHidden.value = '';
+                            if (bamHidden) bamHidden.value = '';
                             acctDropdown.style.display = 'none';
                         });
                     });
@@ -1796,47 +1852,8 @@
                 const sundryList = (Array.isArray(sundries) && sundries.length > 0)
                     ? sundries
                     : (Array.isArray(lro_entries_by_or) ? lro_entries_by_or : []);
-                // Resolve account title from dropdown by acct_code (API "name" can be consumer name, not account title)
-                const getAccountTitleByCode = function(acctCode) {
-                    if (!acctCode) return '';
-                    const opt = document.querySelector('.bam-acct-option[data-code="' + String(acctCode).replace(/"/g, '&quot;') + '"]');
-                    return (opt && opt.getAttribute('data-desc')) ? opt.getAttribute('data-desc').trim() : '';
-                };
                 for (let i = 1; i <= 4; i++) {
-                    const entry = sundryList[i - 1] || null;
-                    const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + i);
-                    const acctHidden = document.getElementById('sundryAcctCode' + i);
-                    const acctDropdown = document.getElementById('sundryAcctCodeDropdown' + i);
-                    const amountField = document.getElementById('sundryAmount' + i);
-
-                    if (!acctDisplay || !acctHidden || !amountField) {
-                        continue;
-                    }
-
-                    const bamNoHidden = document.getElementById('sundryBamNo' + i);
-                    if (entry) {
-                        const code = entry.acct_code || '';
-                        const ref = entry.reference || '';
-                        const titleFromDropdown = getAccountTitleByCode(code);
-                        const title = titleFromDropdown || entry.acct_title || '';
-                        const displayText = title.trim() ? title.trim() : (code && ref ? `${code} ${ref}` : (code || ref));
-
-                        acctHidden.value = code;
-                        acctDisplay.value = displayText;
-                        acctDisplay.placeholder = displayText ? '' : '— Select Acct Code —';
-                        setNumberFieldValue(amountField, entry.amount ?? 0);
-                        if (bamNoHidden) bamNoHidden.value = entry.bam_no || entry.reference || '';
-                    } else {
-                        acctHidden.value = '';
-                        acctDisplay.value = '';
-                        acctDisplay.placeholder = '— Select Acct Code —';
-                        setNumberFieldValue(amountField, 0);
-                        if (bamNoHidden) bamNoHidden.value = '';
-                    }
-
-                    if (acctDropdown) {
-                        acctDropdown.style.display = 'none';
-                    }
+                    setSundryRowFromEntry(i, sundryList[i - 1] || null);
                 }
                 updateSundryTotals();
 
@@ -2166,12 +2183,10 @@
 
                 try {
                     let url = `${lookupEndpoint}?`;
-                    // If Account Number field has value, search both account_number and account_name
                     if (accountNumber) {
                         url += `account_number=${encodeURIComponent(accountNumber)}`;
-                        url += `&account_name=${encodeURIComponent(accountNumber)}`; // Also search as account name
+                        url += `&account_name=${encodeURIComponent(accountName || accountNumber)}`;
                     } else if (accountName) {
-                        // If only Account Name field has value, search account_name
                         url += `account_name=${encodeURIComponent(accountName)}`;
                     }
                     if (billMonthRaw) {
@@ -2465,19 +2480,7 @@
 
                 // Clear SUNDRIES fields
                 for (let i = 1; i <= 4; i++) {
-                    const acctDisplay = document.getElementById('sundryAcctCodeDisplay' + i);
-                    const acctHidden = document.getElementById('sundryAcctCode' + i);
-                    const acctDropdown = document.getElementById('sundryAcctCodeDropdown' + i);
-                    const amountField = document.getElementById('sundryAmount' + i);
-                    const bamNoHidden = document.getElementById('sundryBamNo' + i);
-                    if (acctDisplay) {
-                        acctDisplay.value = '';
-                        acctDisplay.placeholder = '— Select Acct Code —';
-                    }
-                    if (acctHidden) acctHidden.value = '';
-                    if (bamNoHidden) bamNoHidden.value = '';
-                    if (acctDropdown) acctDropdown.style.display = 'none';
-                    if (amountField) setNumberFieldValue(amountField, 0);
+                    setSundryRowFromEntry(i, null);
                 }
                 updateSundryTotals();
 
@@ -2720,14 +2723,15 @@
                 accountNumberField.addEventListener('input', (e) => {
                     const value = e.target.value.trim();
                     
-                    // Clear account name when typing in account number field (to avoid confusion)
+                    // Clear resolved account name when user edits the search field
                     if (accountNameField && accountNameField.value) {
                         accountNameField.value = '';
                     }
                     
-                    // Show suggestions as user types
+                    // Show suggestions and run lookup as user types (2+ characters)
                     if (value.length >= 2) {
                         debouncedSuggestions(value);
+                        debouncedLookup();
                     } else {
                         if (suggestionsDropdown) {
                             suggestionsDropdown.style.display = 'none';
@@ -2736,6 +2740,18 @@
                     
                     // Reset lastLookupKey to allow new search
                     lastLookupKey = null;
+                });
+
+                accountNumberField.addEventListener('keydown', (e) => {
+                    if (e.key !== 'Enter') {
+                        return;
+                    }
+                    e.preventDefault();
+                    if (suggestionsDropdown) {
+                        suggestionsDropdown.style.display = 'none';
+                    }
+                    lastLookupKey = null;
+                    performLookup();
                 });
                 
                 accountNumberField.addEventListener('blur', (e) => {
@@ -3029,15 +3045,19 @@
                 };
 
                 try {
-                    // Collect paid sundries (only rows with acct_code and amount > 0)
-                    const sundriesToSave = [];
-                    for (let i = 1; i <= 4; i++) {
-                        const code   = (document.getElementById('sundryAcctCode' + i) || {}).value || '';
-                        const bamNo  = (document.getElementById('sundryBamNo'    + i) || {}).value || '';
-                        const amount = parseNumeric((document.getElementById('sundryAmount' + i) || {}).value || 0);
-                        if (code && amount > 0) {
-                            sundriesToSave.push({ acct_code: code, bam_no: bamNo, amount: amount });
-                        }
+                    let sundriesToSave = [];
+                    try {
+                        sundriesToSave = collectSundriesToSave();
+                    } catch (sundryError) {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Invalid Sundries',
+                            text: sundryError.message || 'Each sundry row must reference an unpaid LRO charge.',
+                            confirmButtonColor: '#e74a3b'
+                        });
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalBtnText;
+                        return;
                     }
 
                     // Single payload: backend creates one main PAYMENT row + one -SC row when senior_citizen_discount > 0
@@ -3149,6 +3169,7 @@
                         return;
                     }
                     updateTotals();
+                    const originalUpdateText = updatePaymentBtn.innerHTML;
                     const amountDue = parseNumeric(totalField.value.replace(/[₱,\s]/g, ''));
                     const amountTendered = parseNumeric(cashTenderedField.value);
                     if (!amountTendered || amountTendered <= 0) {
@@ -3188,14 +3209,19 @@
                     const scDiscountAmount = seniorDiscountField ? parseNumeric(seniorDiscountField.value || 0) : 0;
                     const baseOrNumber = orNumber.replace(/-SC$/i, '');
                     const transactionDateValue = transactionDateField ? transactionDateField.value : null;
-                    const sundriesToSave = [];
-                    for (let i = 1; i <= 4; i++) {
-                        const code   = (document.getElementById('sundryAcctCode' + i) || {}).value || '';
-                        const bamNo  = (document.getElementById('sundryBamNo'    + i) || {}).value || '';
-                        const amount = parseNumeric((document.getElementById('sundryAmount' + i) || {}).value || 0);
-                        if (code && amount > 0) {
-                            sundriesToSave.push({ acct_code: code, bam_no: bamNo, amount: amount });
-                        }
+                    let sundriesToSave = [];
+                    try {
+                        sundriesToSave = collectSundriesToSave();
+                    } catch (sundryError) {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Invalid Sundries',
+                            text: sundryError.message || 'Each sundry row must reference an unpaid LRO charge.',
+                            confirmButtonColor: '#e74a3b'
+                        });
+                        updatePaymentBtn.disabled = false;
+                        updatePaymentBtn.innerHTML = originalUpdateText;
+                        return;
                     }
                     const payload = {
                         downloaded_id: currentDownloadedId || null,
@@ -3223,7 +3249,6 @@
                         sundries: sundriesToSave.length > 0 ? sundriesToSave : undefined,
                     };
                     updatePaymentBtn.disabled = true;
-                    const originalUpdateText = updatePaymentBtn.innerHTML;
                     updatePaymentBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Updating...';
                     try {
                         const response = await fetch(savePaymentEndpoint, {
@@ -3319,8 +3344,7 @@
                         account_no: accountNumber || accountName,
                         account_number: accountNumber || accountName,
                         account_name: accountName || accountNumber,
-                        address: accountAddress,
-                        address1: accountAddress
+                        address: accountAddress
                     };
                     
                     sessionStorage.setItem('currentConsumer', JSON.stringify(consumerData));

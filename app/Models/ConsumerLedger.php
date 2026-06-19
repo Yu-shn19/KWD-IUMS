@@ -5,6 +5,16 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\ConsumerPayment;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class ConsumerLedger extends Model
 {
     protected $fillable = [
@@ -43,7 +53,7 @@ class ConsumerLedger extends Model
      */
     public function consumerZone()
     {
-        return $this->belongsTo(ConsumerZoneOne::class, 'consumer_zone_id');
+        return $this->belongsTo(ConsumerZone::class, 'consumer_zone_id');
     }
 
     /**
@@ -97,22 +107,18 @@ class ConsumerLedger extends Model
     }
 
     /**
-     * Get related collection entries based on account_no and date matching
+     * Get related consumer payment entries based on account and paid_at date.
      */
     public function collections()
     {
         try {
-            if (!$this->consumerZone || !$this->txtime) {
+            if (!$this->consumer_zone_id || !$this->txtime) {
                 return collect([]);
             }
 
-            // Check if Collection class exists
-            if (!class_exists(\App\Models\Collection::class)) {
-                return collect([]);
-            }
-
-            return Collection::where('account_no', $this->consumerZone->account_no)
-                ->whereDate('coll_date', $this->txtime->format('Y-m-d'))
+            return ConsumerPayment::query()
+                ->where(mr_col('consumer_zone_id'), $this->consumer_zone_id)
+                ->whereDate(mr_col('paid_at'), $this->txtime->format('Y-m-d'))
                 ->get();
         } catch (\Throwable $e) {
             return collect([]);
@@ -120,22 +126,18 @@ class ConsumerLedger extends Model
     }
 
     /**
-     * Get the collection entry that matches this ledger entry's date
+     * Get the consumer payment entry that matches this ledger entry's date.
      */
     public function matchingCollection()
     {
         try {
-            if (!$this->consumerZone || !$this->txtime) {
+            if (!$this->consumer_zone_id || !$this->txtime) {
                 return null;
             }
 
-            // Check if Collection class exists
-            if (!class_exists(\App\Models\Collection::class)) {
-                return null;
-            }
-
-            return Collection::where('account_no', $this->consumerZone->account_no)
-                ->whereDate('coll_date', $this->txtime->format('Y-m-d'))
+            return ConsumerPayment::query()
+                ->where(mr_col('consumer_zone_id'), $this->consumer_zone_id)
+                ->whereDate(mr_col('paid_at'), $this->txtime->format('Y-m-d'))
                 ->first();
         } catch (\Throwable $e) {
             return null;

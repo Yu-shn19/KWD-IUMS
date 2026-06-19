@@ -6,6 +6,16 @@ use App\Models\PricingTier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class PricingTierController extends Controller
 {
     /**
@@ -13,9 +23,14 @@ class PricingTierController extends Controller
      */
     public function index()
     {
-        $pricingTiers = PricingTier::orderBy('category_id')
-            ->orderBy('rate_code')
-            ->orderBy('name')
+        $categoryIdColumn = mr_col('category_id');
+        $rateCodeColumn = mr_col('rate_code');
+        $nameColumn = mr_col('name');
+
+        $pricingTiers = PricingTier::query()
+            ->orderBy($categoryIdColumn)
+            ->orderBy($rateCodeColumn)
+            ->orderBy($nameColumn)
             ->get();
         
         return view('admin.pricing-tiers.index', compact('pricingTiers'));

@@ -4,14 +4,34 @@ namespace App\Http\Controllers;
 
 use App\Models\Penalty;
 use App\Models\ConsumerLedger;
-use App\Models\ConsumerZoneOne;
+use App\Models\ConsumerZone;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
+if (!function_exists(__NAMESPACE__ . '\mr_col')) {
+    /**
+     * Column/table name helper for static analysis.
+     */
+    function mr_col(string $name): string
+    {
+        return $name;
+    }
+}
+
 class PenaltyController extends Controller
 {
+    private static function consumerLedgerIdColumn(): string
+    {
+        return (new ConsumerLedger)->getKeyName();
+    }
+
+    private function ledgerQueryForConsumer(int $consumerZoneId)
+    {
+        return ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerZoneId);
+    }
     /**
      * Get penalty data for editing
      */
@@ -41,7 +61,11 @@ class PenaltyController extends Controller
             DB::beginTransaction();
 
             $penalty = Penalty::findOrFail($id);
-            $oldLedger = ConsumerLedger::where('penalty_id', $id)->first();
+            $clPenaltyId = mr_col('penalty_id');
+            $clTxtime = mr_col('txtime');
+            $clId = self::consumerLedgerIdColumn();
+
+            $oldLedger = ConsumerLedger::query()->where($clPenaltyId, $id)->first();
             
             if (!$oldLedger) {
                 return response()->json([
@@ -62,17 +86,17 @@ class PenaltyController extends Controller
             $previousBalanceBeforeOld = round($oldBalance - $oldPenaltyAmount, 2);
 
             // Verify by checking the actual ledger entry before this one
-            $actualPreviousLedger = ConsumerLedger::where('consumer_zone_id', $oldLedger->consumer_zone_id)
-                ->where('txtime', '<', $oldDateTime)
-                ->orderBy('txtime', 'desc')
-                ->orderBy('id', 'desc')
+            $actualPreviousLedger = $this->ledgerQueryForConsumer((int) $oldLedger->consumer_zone_id)
+                ->where($clTxtime, '<', $oldDateTime)
+                ->orderBy($clTxtime, 'desc')
+                ->orderBy($clId, 'desc')
                 ->first();
             
             if ($actualPreviousLedger) {
                 $previousBalanceBeforeOld = (float)($actualPreviousLedger->balance ?? $previousBalanceBeforeOld);
             } else {
                 // If no previous ledger, use consumer zone balance
-                $consumerZoneBefore = ConsumerZoneOne::find($oldLedger->consumer_zone_id);
+                $consumerZoneBefore = ConsumerZone::find($oldLedger->consumer_zone_id);
                 if ($consumerZoneBefore) {
                     $previousBalanceBeforeOld = (float)($consumerZoneBefore->balance ?? $previousBalanceBeforeOld);
                 }
@@ -116,7 +140,7 @@ class PenaltyController extends Controller
                 'bill_amount' => (float)($request->bill_amount ?? $penalty->bill_amount),
                 'penalty_amount' => $newPenaltyAmount,
                 'balance' => $newBalance,
-                'username' => auth()->user()->name ?? $penalty->username,
+                'username' => Auth::user()?->name ?? $penalty->username,
                 'txtime' => $newDateTime,
             ]);
 
@@ -129,7 +153,7 @@ class PenaltyController extends Controller
                 'debit' => $newPenaltyAmount, // Penalty is always a debit
                 'credit' => 0,
                 'balance' => $newBalance,
-                'username' => auth()->user()->name ?? $oldLedger->username,
+                'username' => Auth::user()?->name ?? $oldLedger->username,
                 'txtime' => $newDateTime,
             ]);
 
@@ -164,10 +188,13 @@ class PenaltyController extends Controller
      */
     private function recalculateSubsequentBalances($consumerZoneId, $afterDateTime, $startingBalance)
     {
-        $subsequentEntries = ConsumerLedger::where('consumer_zone_id', $consumerZoneId)
-            ->where('txtime', '>', $afterDateTime)
-            ->orderBy('txtime', 'asc')
-            ->orderBy('id', 'asc')
+        $clTxtime = mr_col('txtime');
+        $clId = self::consumerLedgerIdColumn();
+
+        $subsequentEntries = $this->ledgerQueryForConsumer((int) $consumerZoneId)
+            ->where($clTxtime, '>', $afterDateTime)
+            ->orderBy($clTxtime, 'asc')
+            ->orderBy($clId, 'asc')
             ->get();
 
         $currentBalance = $startingBalance;

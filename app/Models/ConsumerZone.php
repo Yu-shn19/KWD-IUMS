@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 
-class ConsumerZoneOne extends Model
+class ConsumerZone extends Model
 {
     use HasFactory;
 
@@ -74,21 +74,19 @@ class ConsumerZoneOne extends Model
         };
     }
 
-    /** @deprecated Use address column on consumer_zone */
-    public function getAddress1Attribute(): ?string
-    {
-        return $this->attributes['address'] ?? null;
-    }
-
     /**
      * Running balance from consumer_ledgers (not stored on consumer_zone).
      */
     public function getLedgerBalance(): float
     {
-        $latest = ConsumerLedger::where('consumer_zone_id', $this->id)
+        $consumerZoneIdColumn = 'consumer_zone_id';
+        $idColumn = (new ConsumerLedger)->getKeyName();
+
+        $latest = ConsumerLedger::query()
+            ->where($consumerZoneIdColumn, $this->getKey())
             ->whereNotNull('balance')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
+            ->orderByDesc('date')
+            ->orderByDesc($idColumn)
             ->first();
 
         return $latest ? (float) ($latest->balance ?? 0) : 0.0;
@@ -104,7 +102,6 @@ class ConsumerZoneOne extends Model
 
     /**
      * Keep only attributes that exist on consumer_zone.
-     * Maps legacy address1 → address when present.
      *
      * @param  array<string, mixed>  $data
      * @return array<string, mixed>
@@ -114,11 +111,6 @@ class ConsumerZoneOne extends Model
         if (!Schema::hasTable('consumer_zone')) {
             return $data;
         }
-
-        if (isset($data['address1']) && !isset($data['address']) && Schema::hasColumn('consumer_zone', 'address')) {
-            $data['address'] = $data['address1'];
-        }
-        unset($data['address1']);
 
         $payload = [];
         foreach ($data as $key => $value) {
@@ -140,20 +132,21 @@ class ConsumerZoneOne extends Model
             return null;
         }
 
-        $consumer = static::where('account_no', $accountNo)->first();
+        $accountNoColumn = 'account_no';
+        $consumer = static::query()->where($accountNoColumn, $accountNo)->first();
         if ($consumer) {
             return $consumer;
         }
 
         $normalized = str_replace('-', '', $accountNo);
 
-        return static::where(function ($q) use ($accountNo, $normalized) {
+        return static::query()->where(function ($q) use ($accountNo, $normalized) {
             $q->whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
               ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [strtoupper($accountNo)]);
         })->first();
     }
 
-    public function ledgers()
+    public function ledgers(): HasMany
     {
         return $this->hasMany(ConsumerLedger::class, 'consumer_zone_id');
     }
@@ -211,10 +204,13 @@ class ConsumerZoneOne extends Model
             return null;
         }
 
-        $disconnectedAt = $this->disconnectionOrders()
-            ->whereNotNull('disconnected_at')
-            ->orderByDesc('disconnected_at')
-            ->value('disconnected_at');
+        $disconnectedAtColumn = 'disconnected_at';
+
+        $disconnectedAt = DisconnectionOrder::query()
+            ->where(DisconnectionOrder::consumerZoneIdColumn(), $this->getKey())
+            ->whereNotNull($disconnectedAtColumn)
+            ->orderByDesc($disconnectedAtColumn)
+            ->value($disconnectedAtColumn);
 
         return $disconnectedAt ? Carbon::parse($disconnectedAt) : null;
     }
