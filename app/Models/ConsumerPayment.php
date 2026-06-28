@@ -98,6 +98,26 @@ class ConsumerPayment extends Model
         return $this->consumerZone?->account_no;
     }
 
+    /** Legacy alias for account_no. */
+    public function getAccountNumberAttribute(): ?string
+    {
+        return $this->account_no;
+    }
+
+    /** Account name via consumer_zone relationship (not stored on consumer_payments). */
+    public function getAccountNameAttribute(): ?string
+    {
+        if ($this->relationLoaded('consumerZone') && $this->consumerZone) {
+            return $this->consumerZone->account_name;
+        }
+
+        if ($this->consumer_zone_id) {
+            return $this->consumerZone()->value('account_name');
+        }
+
+        return null;
+    }
+
     public function consumerZone()
     {
         return $this->belongsTo(ConsumerZone::class, 'consumer_zone_id');

@@ -187,131 +187,93 @@ class LROLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithCh
                 return null;
             }
             
-            // Try to find consumer_zone_id by account_no and account_name
-            $consumerZone = null;
-            $consumerZoneId = null;
-            
-            if (!empty($accountNo)) {
-                $query = ConsumerZone::query()->where(mr_col('account_no'), $accountNo);
-                
-                // If account_name is provided, also match by name for better accuracy
-                if (!empty($accountName)) {
-                    $query->where(mr_col('account_name'), $accountName);
-                }
-                
-                $consumerZone = $query->first();
-                
-                if ($consumerZone) {
-                    $consumerZoneId = $consumerZone->id;
-                } else {
-                    // Log warning but don't skip - we'll store without consumer_zone_id
-                    Log::warning("Consumer zone not found for LRO ledger", [
-                        'account_no' => $accountNo,
-                        'account_name' => $accountName,
-                        'row' => $rowCount
-                    ]);
-                }
+            // Resolve consumer_zone_id by account_no (identity lives on consumer_zone, not lro_ledger)
+            $query = ConsumerZone::query()->where(mr_col('account_no'), trim((string) $accountNo));
+            if (!empty($accountName)) {
+                $query->where(mr_col('account_name'), trim((string) $accountName));
             }
-            
-            // Build LRO ledger data array
-            $lroLedgerData = [
-                'billmonth'     => $billmonth,
-                'cba_date'      => $cbaDate,
-                'cba_type'      => $this->getRowValue($row, [
-                    'cba_type', 
-                    'cba type', 
-                    'CBA_TYPE',
-                    'type'
-                ]),
-                'cba_no'        => $this->getRowValue($row, [
-                    'cba_no', 
-                    'cba no', 
-                    'CBA_NO',
-                    'cba_number',
-                    'cba number'
-                ]),
-                'zone_code'     => $this->getRowValue($row, [
-                    'zone_code', 
-                    'zone code', 
-                    'ZONE_CODE',
-                    'zone'
-                ]),
-                'account_no'    => $accountNo,
-                'account_name'  => $accountName,
-                'cba_remarks'  => $this->getRowValue($row, [
-                    'cba_remarks', 
-                    'cba remarks', 
-                    'CBA_REMARKS',
-                    'remarks',
-                    'remark'
-                ]),
-                'ar_dm'         => $this->parseDecimal($this->getRowValue($row, [
-                    'ar_dm', 
-                    'ar dm', 
-                    'AR_DM',
-                    'ar debit memo',
-                    'ar_debit_memo'
-                ])),
-                'ar_cm'         => $this->parseDecimal($this->getRowValue($row, [
-                    'ar_cm', 
-                    'ar cm', 
-                    'AR_CM',
-                    'ar credit memo',
-                    'ar_credit_memo'
-                ])),
-                'lro_dm'        => $this->parseDecimal($this->getRowValue($row, [
-                    'lro_dm', 
-                    'lro dm', 
-                    'LRO_DM',
-                    'lro debit memo',
-                    'lro_debit_memo'
-                ])),
-                'lro_cm'        => $this->parseDecimal($this->getRowValue($row, [
-                    'lro_cm', 
-                    'lro cm', 
-                    'LRO_CM',
-                    'lro credit memo',
-                    'lro_credit_memo'
-                ])),
-                'cba_amount'    => $this->parseDecimal($this->getRowValue($row, [
-                    'cba_amount', 
-                    'cba amount', 
-                    'CBA_AMOUNT',
-                    'amount'
-                ])),
-                'acct_group'    => $this->getRowValue($row, [
-                    'acct_group', 
-                    'acct group', 
-                    'ACCT_GROUP',
-                    'account_group',
-                    'account group'
-                ]),
+            $consumerZone = $query->first();
+            if (!$consumerZone) {
+                $normalized = str_replace('-', '', trim((string) $accountNo));
+                $consumerZone = ConsumerZone::query()
+                    ->whereRaw("REPLACE(account_no, '-', '') = ?", [$normalized])
+                    ->first();
+            }
+
+            if (!$consumerZone) {
+                $this->skippedCount++;
+                $this->errors[] = "Row {$rowCount}: Consumer not found for account {$accountNo}";
+                return null;
+            }
+
+            $consumerZoneId = $consumerZone->id;
+
+            $cbaType = strtoupper(trim((string) ($this->getRowValue($row, [
+                'cba_type', 'cba type', 'CBA_TYPE', 'type',
+            ]) ?? '')));
+
+            $arDm = $this->parseDecimal($this->getRowValue($row, [
+                'ar_dm', 'ar dm', 'AR_DM', 'ar debit memo', 'ar_debit_memo',
+            ]));
+            $arCm = $this->parseDecimal($this->getRowValue($row, [
+                'ar_cm', 'ar cm', 'AR_CM', 'ar credit memo', 'ar_credit_memo',
+            ]));
+            $lroDm = $this->parseDecimal($this->getRowValue($row, [
+                'lro_dm', 'lro dm', 'LRO_DM', 'lro debit memo', 'lro_debit_memo',
+            ]));
+            $lroCm = $this->parseDecimal($this->getRowValue($row, [
+                'lro_cm', 'lro cm', 'LRO_CM', 'lro credit memo', 'lro_credit_memo',
+            ]));
+            $cbaAmount = $this->parseDecimal($this->getRowValue($row, [
+                'cba_amount', 'cba amount', 'CBA_AMOUNT', 'amount',
+            ]));
+
+            $dmTotal = $arDm + $lroDm;
+            $cmTotal = $arCm + $lroCm;
+            $type = in_array($cbaType, ['DM', 'CM'], true)
+                ? $cbaType
+                : ($dmTotal >= $cmTotal && $dmTotal > 0 ? 'DM' : 'CM');
+            $amount = $cbaAmount > 0 ? $cbaAmount : ($type === 'DM' ? $dmTotal : $cmTotal);
+            $ledger = ($lroDm > 0 || $lroCm > 0) ? 'LRO' : 'AR';
+
+            $lroLedgerPayload = LROLedger::filterTableAttributes([
                 'consumer_zone_id' => $consumerZoneId,
-            ];
-            
-            // Trim string values
-            foreach ($lroLedgerData as $key => $value) {
-                if (is_string($value)) {
-                    $lroLedgerData[$key] = trim($value);
-                }
+                'type' => $type,
+                'ledger' => $ledger,
+                'date' => $cbaDate,
+                'bam_no' => $this->getRowValue($row, [
+                    'cba_no', 'cba no', 'CBA_NO', 'cba_number', 'cba number',
+                ]),
+                'amount' => $amount,
+                'acct_code' => $this->getRowValue($row, [
+                    'acct_group', 'acct group', 'ACCT_GROUP', 'account_group', 'account group',
+                ]),
+                'remarks' => $this->getRowValue($row, [
+                    'cba_remarks', 'cba remarks', 'CBA_REMARKS', 'remarks', 'remark',
+                ]),
+                'status' => 'POSTED',
+            ]);
+
+            if (empty($lroLedgerPayload['consumer_zone_id']) || ($lroLedgerPayload['amount'] ?? 0) <= 0) {
+                $this->skippedCount++;
+                $this->errors[] = "Row {$rowCount}: Invalid LRO entry (missing consumer or zero amount)";
+                return null;
             }
-            
-            // Create and save the LRO ledger entry
-            $lroLedger = LROLedger::create($lroLedgerData);
+
+            $lroLedger = LROLedger::create($lroLedgerPayload);
             
             if ($lroLedger && $lroLedger->id) {
                 $this->importedCount++;
-                Log::info("LRO Ledger entry created successfully", [
+                Log::info('LRO Ledger entry created successfully', [
                     'id' => $lroLedger->id,
-                    'account_no' => $lroLedgerData['account_no'] ?? null,
-                    'account_name' => $lroLedgerData['account_name'] ?? null,
-                    'consumer_zone_id' => $consumerZoneId
+                    'account_no' => $accountNo,
+                    'consumer_zone_id' => $consumerZoneId,
                 ]);
                 return $lroLedger;
             } else {
                 $this->skippedCount++;
                 $this->errors[] = "Row {$rowCount}: Failed to create LRO ledger row";
-                Log::warning("Failed to create LRO ledger row", ['data' => $lroLedgerData]);
+                Log::warning('Failed to create LRO ledger row', ['data' => $lroLedgerPayload]);
                 return null;
             }
         } catch (\Exception $e) {

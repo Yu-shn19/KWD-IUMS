@@ -41,7 +41,7 @@ class DisconnectorApiController extends Controller
             $orders = DisconnectionOrder::query()
                 ->where(mr_col('disconnector_id'), $disconnectorId)
                 ->whereIn(mr_col('status'), ['assigned', 'in-progress'])
-                ->with('consumer')
+                ->with('consumerZone')
                 ->orderBy(mr_col('disconnection_date'), 'asc')
                 ->orderBy(mr_col('created_at'), 'desc')
                 ->get();
@@ -99,7 +99,7 @@ class DisconnectorApiController extends Controller
     public function getOrders(Request $request)
     {
         try {
-            $query = DisconnectionOrder::with(['consumer', 'disconnector']);
+            $query = DisconnectionOrder::with(['consumerZone', 'disconnector']);
 
             if ($request->has('status')) {
                 $query->where(mr_col('status'), $request->input('status'));
@@ -137,7 +137,7 @@ class DisconnectorApiController extends Controller
     public function getOrder($orderId)
     {
         try {
-            $order = DisconnectionOrder::with(['consumer', 'disconnector'])
+            $order = DisconnectionOrder::with(['consumerZone', 'disconnector'])
                 ->findOrFail($orderId);
 
             return response()->json([
@@ -278,7 +278,7 @@ class DisconnectorApiController extends Controller
                 ->where(mr_col('status'), 'cancelled')
                 ->where(mr_col('notes'), 'like', '%' . DisconnectionOrder::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX)
                 ->where(mr_col('updated_at'), '>=', $since)
-                ->with('consumer')
+                ->with('consumerZone')
                 ->orderBy(mr_col('updated_at'), 'desc')
                 ->get()
                 ->map(function ($order) {
@@ -359,7 +359,7 @@ class DisconnectorApiController extends Controller
                 ->exists();
         }
 
-  $consumer = $order->relationLoaded('consumer') ? $order->consumer : null;
+  $consumer = $order->relationLoaded('consumerZone') ? $order->consumerZone : null;
         $latitude = $consumer?->latitude;
         $longitude = $consumer?->longitude;
 

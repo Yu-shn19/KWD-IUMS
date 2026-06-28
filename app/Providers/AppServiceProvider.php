@@ -41,7 +41,7 @@ class AppServiceProvider extends ServiceProvider
                 ->where('status', 'disconnected')
                 ->whereNotNull('disconnected_at')
                 ->where('disconnected_at', '>=', now()->subDay())
-                ->with(['disconnector:id,name,first_name,last_name'])
+                ->with(['disconnector:id,name,first_name,last_name', 'consumerZone:id,account_no,account_name'])
                 ->orderByDesc('disconnected_at')
                 ->limit(15)
                 ->get();

@@ -2192,7 +2192,7 @@ class DisconnectionController extends Controller
         $doDisconnectedAt = mr_col('disconnected_at');
 
         $query = DisconnectionOrder::query()
-            ->with(['consumer', 'disconnector']);
+            ->with(['consumerZone', 'disconnector']);
 
         $query->whereNotNull($doDisconnectedAt)
             ->whereBetween($doDisconnectedAt, [$range['from'], $range['to']])

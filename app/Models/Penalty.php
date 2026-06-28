@@ -4,12 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
+use Illuminate\Support\Facades\Schema;
+
 class Penalty extends Model
 {
     protected $fillable = [
         'consumer_zone_id',
         'schedule_id',
-        'downloaded_reading_id',
         'date',
         'due_date',
         'reference',
@@ -48,11 +49,37 @@ class Penalty extends Model
     }
 
     /**
-     * Get the downloaded reading related to this penalty
+     * Get the downloaded reading related to this penalty (when column exists).
      */
     public function downloadedReading()
     {
+        if (!Schema::hasColumn($this->getTable(), 'downloaded_reading_id')) {
+            return $this->belongsTo(DownloadedReading::class, 'downloaded_reading_id')->whereRaw('0 = 1');
+        }
+
         return $this->belongsTo(DownloadedReading::class, 'downloaded_reading_id');
+    }
+
+    /**
+     * Keep only attributes that exist on penalties.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function filterTableAttributes(array $data): array
+    {
+        if (!Schema::hasTable('penalties')) {
+            return $data;
+        }
+
+        $payload = [];
+        foreach ($data as $key => $value) {
+            if (Schema::hasColumn('penalties', $key)) {
+                $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
     }
 
     /**

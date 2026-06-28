@@ -13,56 +13,19 @@ class DisconnectionOrder extends Model
 
     protected $fillable = [
         'consumer_zone_id',
-        'consumer_id',
         'disconnector_id',
-        'account_no',
-        'account_name',
-        'address',
-        'zone_code',
-        'meter_number',
-        'card_number',
-        'this_month_arrears',
-        'last_month_arrears',
-        'others_ar',
         'total_outstanding',
-        'current_bill_with_maintenance',
-        'last_reading',
         'unpaid_months',
-        'oldest_unpaid_date',
-        'latest_unpaid_date',
         'disconnection_date',
-        'list_billing_month',
-        'list_billing_date',
-        'list_filter_type',
-        'status',
-        'assigned_at',
         'disconnected_at',
-        'reconnected_at',
+        'status',
         'notes',
     ];
 
     protected $casts = [
-        'this_month_arrears' => 'decimal:2',
-        'last_month_arrears' => 'decimal:2',
-        'others_ar' => 'decimal:2',
         'total_outstanding' => 'decimal:2',
-        'current_bill_with_maintenance' => 'decimal:2',
-        'last_reading' => 'decimal:2',
-        'oldest_unpaid_date' => 'date',
-        'latest_unpaid_date' => 'date',
         'disconnection_date' => 'date',
-        'list_billing_date' => 'date',
-        'assigned_at' => 'datetime',
         'disconnected_at' => 'datetime',
-        'reconnected_at' => 'datetime',
-    ];
-
-    protected $dates = [
-        'created_at',
-        'updated_at',
-        'assigned_at',
-        'disconnected_at',
-        'reconnected_at',
     ];
 
     public static function consumerZoneIdColumn(): string
@@ -111,6 +74,7 @@ class DisconnectionOrder extends Model
 
     /**
      * Keep only attributes that exist on disconnection_orders; map legacy consumer_id → consumer_zone_id.
+     * Identity fields (account_no, account_name, etc.) live on consumer_zone — not duplicated here.
      */
     public static function filterTableAttributes(array $data): array
     {
@@ -122,17 +86,82 @@ class DisconnectionOrder extends Model
             $data['consumer_zone_id'] = $data['consumer_id'];
         }
 
+        unset(
+            $data['consumer_id'],
+            $data['account_no'],
+            $data['account_name'],
+            $data['address'],
+            $data['zone_code'],
+            $data['meter_number'],
+            $data['card_number'],
+            $data['this_month_arrears'],
+            $data['last_month_arrears'],
+            $data['others_ar'],
+            $data['current_bill_with_maintenance'],
+            $data['last_reading'],
+            $data['oldest_unpaid_date'],
+            $data['latest_unpaid_date'],
+            $data['list_billing_month'],
+            $data['list_billing_date'],
+            $data['list_filter_type'],
+            $data['assigned_at'],
+            $data['reconnected_at']
+        );
+
         $payload = [];
         foreach ($data as $key => $value) {
-            if ($key === 'consumer_id' && Schema::hasColumn('disconnection_orders', 'consumer_zone_id')) {
-                continue;
-            }
             if (Schema::hasColumn('disconnection_orders', $key)) {
                 $payload[$key] = $value;
             }
         }
 
         return $payload;
+    }
+
+    /** Resolve a consumer_zone column when not stored on disconnection_orders. */
+    private function consumerZoneValue(string $column): mixed
+    {
+        if ($this->relationLoaded('consumerZone') && $this->consumerZone) {
+            return $this->consumerZone->{$column};
+        }
+
+        if ($this->consumer_zone_id) {
+            return $this->consumerZone()->value($column);
+        }
+
+        return null;
+    }
+
+    public function getAccountNoAttribute(): ?string
+    {
+        return $this->consumerZoneValue('account_no');
+    }
+
+    public function getAccountNameAttribute(): ?string
+    {
+        return $this->consumerZoneValue('account_name');
+    }
+
+    public function getAddressAttribute(): ?string
+    {
+        return $this->consumerZoneValue('address');
+    }
+
+    public function getZoneCodeAttribute(): ?string
+    {
+        return $this->consumerZoneValue('zone_code');
+    }
+
+    public function getMeterNumberAttribute(): ?string
+    {
+        return $this->consumerZoneValue('meter_number');
+    }
+
+    public function getCardNumberAttribute(): ?int
+    {
+        $sequence = $this->consumerZoneValue('sequence');
+
+        return is_numeric($sequence) ? (int) $sequence : null;
     }
 
     public function disconnector(): BelongsTo
@@ -166,7 +195,6 @@ class DisconnectionOrder extends Model
         $this->update([
             'disconnector_id' => $disconnectorId,
             'status' => 'assigned',
-            'assigned_at' => now(),
         ]);
     }
 
@@ -193,7 +221,6 @@ class DisconnectionOrder extends Model
     {
         $this->update([
             'status' => 'reconnected',
-            'reconnected_at' => now(),
             'notes' => $notes ?? $this->notes,
         ]);
 

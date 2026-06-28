@@ -31,6 +31,7 @@ class DisconnectionNotificationController extends Controller
         $doDisconnectedAt = mr_col('disconnected_at');
 
         $orders = DisconnectionOrder::query()
+            ->with('consumerZone')
             ->with('disconnector')
             ->where($doStatus, 'disconnected')
             ->whereNotNull($doDisconnectedAt)

@@ -765,14 +765,24 @@ class ReportController extends Controller
         // Get current balances using ConsumerLedgerController method
         $ledgerController = new \App\Http\Controllers\ConsumerLedgerController();
         
-        // Get disconnection dates from schedules with full schedule info
-        $disconnectionSchedules = DB::table(mr_col('meter_reading_schedules'))
-            ->whereIn(mr_col('account_number'), $eligibleAccountNos)
-            ->where(mr_col('disconnection_date'), '<=', $today)
-            ->whereNotNull(mr_col('disconnection_date'))
-            ->select('id as schedule_id', 'account_number', 'disconnection_date', 'due_date', 'bill_month', 'current_bill', 'arrears', 'total_amount')
-            ->orderBy(mr_col('account_number'))
-            ->orderBy(mr_col('disconnection_date'), 'desc')
+        // Get disconnection dates from schedules (account_no lives on consumer_zone, not mrs)
+        $disconnectionSchedules = DB::table(mr_col('meter_reading_schedules as mrs'))
+            ->join(mr_col('consumer_zone as cz'), mr_col('mrs.consumer_zone_id'), '=', mr_col('cz.id'))
+            ->whereIn(mr_col('cz.account_no'), $eligibleAccountNos)
+            ->where(mr_col('mrs.disconnection_date'), '<=', $today)
+            ->whereNotNull(mr_col('mrs.disconnection_date'))
+            ->select(
+                'mrs.id as schedule_id',
+                'cz.account_no as account_number',
+                'mrs.disconnection_date',
+                'mrs.due_date',
+                'mrs.bill_month',
+                'mrs.current_bill',
+                'mrs.arrears',
+                'mrs.total_amount'
+            )
+            ->orderBy(mr_col('cz.account_no'))
+            ->orderBy(mr_col('mrs.disconnection_date'), 'desc')
             ->get()
             ->groupBy(mr_col('account_number'));
         

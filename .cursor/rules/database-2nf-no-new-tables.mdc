@@ -1,0 +1,72 @@
+---
+alwaysApply: true
+---
+# Database: No New Tables, Use 2NF
+
+## Do NOT create new tables
+
+- Never create new migrations with `Schema::create()` unless the user explicitly asks for a new table.
+- Before proposing schema changes, check `database/migrations/` and `app/Models/` for an existing table.
+- Prefer Eloquent relationships, queries, and existing columns over new tables.
+
+## Existing tables (reuse these)
+
+| Table | Model | Purpose |
+|-------|-------|---------|
+| `consumer_zone` | `ConsumerZone` | Consumer/account master data |
+| `consumer_ledgers` | `ConsumerLedger` | Billing ledger entries |
+| `consumer_payments` | `ConsumerPayment` | Payment records |
+| `billing_adjustments` | `BillingAdjustment` | Billing adjustments |
+| `penalties` | `Penalty` | Penalty records |
+| `downloaded_readings` | `DownloadedReading` | Meter readings |
+| `meter_reading_schedules` | `MeterReadingSchedule` | Reading schedules |
+| `disconnection_orders` | `DisconnectionOrder` | Disconnection orders |
+| `lro_ledger` | `LROLedger` | LRO ledger |
+| `pricing_tiers` | `PricingTier` | Pricing tiers |
+| `settings` | `Setting` | App settings |
+| `users` | `User` | Users/auth |
+
+Framework tables (`cache`, `jobs`, `sessions`, etc.) are allowed only for Laravel internals — not for app features.
+
+## Second Normal Form (2NF)
+
+All work must stay in 2NF:
+
+1. **1NF first**: One value per column; no repeating groups or comma-separated lists in a single column.
+2. **Full key dependency**: Every non-key column depends on the **whole** primary key, not part of it.
+3. **Use foreign keys, not duplication**: Store `consumer_zone_id`, not copied `account_name` / `address` on child rows.
+4. **Code columns stay on master**: `zone_code`, `category_code`, `rate_code`, `status_code` belong on `consumer_zone`, not duplicated elsewhere.
+5. **Ledger pattern**: Transaction detail goes in `consumer_ledgers` with FKs to related records — do not create parallel ledger/billing tables.
+
+## When new data is needed
+
+Instead of a new table:
+
+- **Extend an existing table** with nullable columns via `Schema::table()` (only if user approves schema change).
+- **Link via FK** to an existing parent (`consumer_zone_id`, `consumer_payment_id`, etc.).
+- **Use `settings`** for key-value config, not a new config table.
+- **Use Eloquent relationships** in models/services for reads and writes.
+
+## Examples
+
+```php
+// BAD — new table for consumer notes
+Schema::create('consumer_notes', ...);
+
+// GOOD — use existing master or ledger pattern
+// Add column to consumer_zone, or store as billing_adjustment / ledger entry
+```
+
+```php
+// BAD — duplicate consumer data (violates 2NF)
+$table->string('account_name'); // on consumer_payments
+
+// GOOD — FK only
+$table->foreignId('consumer_zone_id')->constrained('consumer_zone');
+```
+
+## Before any schema change
+
+1. List which existing table fits the need.
+2. Explain why a new table is not needed.
+3. If no existing table fits, ask the user before creating one.
