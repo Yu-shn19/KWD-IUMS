@@ -13,6 +13,7 @@ use App\Http\Controllers\ReaderController;
 // Public routes
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register']);
+Route::post('/reader/login', [AuthController::class, 'login']);
 
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
@@ -46,6 +47,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/routes/import', [CustomerController::class, 'importRoutes']);
 
     // Reader: downloaded_readings by zone and reading_date (for logged-in reader)
+    Route::post('/reader/submit-reading', [ReaderController::class, 'submitReading']);
     Route::get('/reader/downloaded-readings/filters', [ReaderController::class, 'downloadedReadingsFilters']);
     Route::get('/reader/downloaded-readings', [ReaderController::class, 'downloadedReadings']);
 });

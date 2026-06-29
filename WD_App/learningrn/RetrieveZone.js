@@ -411,7 +411,16 @@ export default function RetrieveZone({ onBack, userData }) {
       periodCovered: `${readingDate} / ${dueDateFormatted}`,
       zone: String(zone),
       consumerType: item.category || 'Residential',
-      sequence: item.sedr_number ?? item.sequence ?? '2982',
+      sequence: (() => {
+        const acct = String(account);
+        if (acct.includes('-')) {
+          const tail = acct.split('-').pop()?.trim();
+          if (tail) return tail;
+        }
+        if (item.sequence != null && item.sequence !== '') return String(item.sequence);
+        if (item.sedr_number != null && item.sedr_number !== '') return String(item.sedr_number);
+        return '—';
+      })(),
       accountNumber: String(account),
       customer: {
         name: name || 'Unknown Customer',

@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { getApiConfig } from '../config/api';
-import dbService from './dbService';
 import * as readingsLocalService from './readingsLocalService';
 
 const STORAGE_KEYS = {
@@ -10,109 +9,230 @@ const STORAGE_KEYS = {
   SYNC_STATUS: 'sync_status',
 };
 
-// Offline Queue Management
+const LEGACY_ASYNC_READINGS_MIGRATION_KEY = 'pending_readings_migrated_sqlite_v2';
+
+let legacyReadingsMigrationPromise = null;
+
+async function migrateLegacyAsyncStoragePendingReadingsOnce() {
+  if (legacyReadingsMigrationPromise) return legacyReadingsMigrationPromise;
+  legacyReadingsMigrationPromise = (async () => {
+    try {
+      const done = await AsyncStorage.getItem(LEGACY_ASYNC_READINGS_MIGRATION_KEY);
+      if (done === '1') return;
+
+      const raw = await AsyncStorage.getItem(STORAGE_KEYS.PENDING_READINGS);
+      if (raw == null || raw === '') {
+        await AsyncStorage.setItem(LEGACY_ASYNC_READINGS_MIGRATION_KEY, '1');
+        return;
+      }
+
+      let queue;
+      try {
+        queue = JSON.parse(raw);
+      } catch (_) {
+        await AsyncStorage.removeItem(STORAGE_KEYS.PENDING_READINGS);
+        await AsyncStorage.setItem(LEGACY_ASYNC_READINGS_MIGRATION_KEY, '1');
+        return;
+      }
+
+      if (!Array.isArray(queue) || queue.length === 0) {
+        await AsyncStorage.removeItem(STORAGE_KEYS.PENDING_READINGS);
+        await AsyncStorage.setItem(LEGACY_ASYNC_READINGS_MIGRATION_KEY, '1');
+        return;
+      }
+
+      for (const item of queue) {
+        const data = item?.data;
+        if (!data || data.schedule_id == null) continue;
+        const st = (item?.status || 'pending').toString().toLowerCase();
+        if (st !== 'pending' && st !== 'failed' && st !== 'syncing') continue;
+
+        const existingId = await readingsLocalService.getPendingIdByScheduleId(data.schedule_id);
+        const payload = {
+          schedule_id: data.schedule_id,
+          current_reading: data.current_reading,
+          reading_date: data.reading_date,
+          reader_notes: data.reader_notes || '',
+          reader_id: data.reader_id,
+          consumption: data.consumption,
+          customer: data.customer || {},
+        };
+
+        if (existingId != null) {
+          await readingsLocalService.updatePendingReading(existingId, payload);
+          if (st === 'failed' && item?.error) {
+            await readingsLocalService.markFailed(existingId, String(item.error));
+          }
+        } else {
+          const saved = await readingsLocalService.saveReadingToLocal(payload);
+          if (st === 'failed' && saved?.id && item?.error) {
+            await readingsLocalService.markFailed(saved.id, String(item.error));
+          }
+        }
+      }
+
+      await AsyncStorage.removeItem(STORAGE_KEYS.PENDING_READINGS);
+      await AsyncStorage.setItem(LEGACY_ASYNC_READINGS_MIGRATION_KEY, '1');
+      console.log('✅ Migrated legacy AsyncStorage pending_readings_queue into SQLite');
+    } catch (e) {
+      console.error('Legacy pending readings migration error:', e);
+      legacyReadingsMigrationPromise = null;
+      throw e;
+    }
+  })();
+  return legacyReadingsMigrationPromise;
+}
+
+function mapSqliteRowToLegacyQueueItem(r) {
+  return {
+    id: String(r.id),
+    timestamp: r.lastAttempt || new Date().toISOString(),
+    data: r.data,
+    status: r.status,
+    retryCount: r.retryCount || 0,
+  };
+}
+
+// Offline queue for readings: backed by SQLite (readingsLocalService). Legacy AsyncStorage is migrated once.
 export const offlineQueue = {
-  // Add reading to offline queue
   addReading: async (readingData) => {
     try {
-      const queue = await offlineQueue.getQueue();
-      if (queue === null) {
-        console.error('Queue unavailable (corrupt or busy) - cannot add reading');
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+      const sid = readingData?.schedule_id;
+      if (sid == null || sid === '') {
+        console.error('addReading: missing schedule_id');
         return null;
       }
-      const newReading = {
-        id: Date.now().toString(),
-        timestamp: new Date().toISOString(),
-        data: readingData,
-        status: 'pending', // pending, syncing, failed
-        retryCount: 0,
-      };
-      queue.push(newReading);
-      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_READINGS, JSON.stringify(queue));
-      console.log('✅ Reading added to offline queue:', newReading.id);
-      return newReading.id;
+      const existingId = await readingsLocalService.getPendingIdByScheduleId(sid);
+      if (existingId != null) {
+        await readingsLocalService.updatePendingReading(existingId, readingData);
+        console.log('✅ Reading upserted in SQLite (saved offline):', existingId);
+        return String(existingId);
+      }
+      const saved = await readingsLocalService.saveReadingToLocal(readingData);
+      console.log('✅ Reading added to SQLite (saved offline):', saved.id);
+      return String(saved.id);
     } catch (error) {
-      console.error('Error adding reading to queue:', error);
+      console.error('Error adding reading to SQLite queue:', error);
       return null;
     }
   },
 
-  // Get all pending readings returns null on parse/storage error to avoid overwriting queue
   getQueue: async () => {
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEYS.PENDING_READINGS);
-      if (raw === null || raw === '') return [];
-      return JSON.parse(raw);
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+      const rows = await readingsLocalService.getUnsyncedReadingsForUIMerge();
+      return rows.map(mapSqliteRowToLegacyQueueItem);
     } catch (error) {
-      console.error('Error getting queue:', error);
-      return null; 
+      console.error('Error getting readings queue from SQLite:', error);
+      return null;
     }
   },
 
-  // Remove reading from queue after successful sync
   removeReading: async (readingId) => {
     try {
-      const queue = await offlineQueue.getQueue();
-      if (queue === null || queue.length === 0) return false;
-      const filtered = queue.filter(r => r.id !== readingId);
-      if (filtered.length >= queue.length) return false; // id not found, do not write
-      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_READINGS, JSON.stringify(filtered));
-      console.log('✅ Reading removed from queue:', readingId);
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+      const id = Number(readingId);
+      if (!Number.isFinite(id)) return false;
+      await readingsLocalService.markSynced(id);
+      console.log('✅ Reading marked synced (removed from unsynced queue):', id);
       return true;
     } catch (error) {
-      console.error('Error removing reading from queue:', error);
+      console.error('Error removing reading from SQLite queue:', error);
       return false;
     }
   },
 
-  // Update reading status
   updateReadingStatus: async (readingId, status, error = null) => {
     try {
-      const queue = await offlineQueue.getQueue();
-      if (queue === null) return false;
-      const reading = queue.find(r => r.id === readingId);
-      if (reading) {
-        reading.status = status;
-        reading.lastAttempt = new Date().toISOString();
-        if (error) reading.error = error;
-        if (status === 'failed') reading.retryCount = (reading.retryCount || 0) + 1;
-        await AsyncStorage.setItem(STORAGE_KEYS.PENDING_READINGS, JSON.stringify(queue));
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+      const id = Number(readingId);
+      if (!Number.isFinite(id)) return false;
+      const s = (status || '').toString().toLowerCase();
+      if (s === 'syncing') {
+        await readingsLocalService.markSyncing(id);
+      } else if (s === 'failed') {
+        await readingsLocalService.markFailed(id, error || 'Upload failed');
+      } else if (s === 'pending') {
+        await readingsLocalService.markPending(id);
+      } else {
+        await readingsLocalService.markPending(id);
       }
       return true;
-    } catch (error) {
-      console.error('Error updating reading status:', error);
+    } catch (err) {
+      console.error('Error updating reading status in SQLite:', err);
       return false;
     }
   },
 
-  // Get pending count 
   getPendingCount: async () => {
     try {
-      const queue = await offlineQueue.getQueue();
-      if (queue === null) return 0;
-      return queue.filter(r => r.status === 'pending' || r.status === 'failed' || r.status === 'syncing').length;
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+      return await readingsLocalService.getPendingCount();
     } catch (error) {
-      console.error('Error getting pending count:', error);
+      console.error('Error getting pending count from SQLite:', error);
       return 0;
     }
   },
 
-  // Clear entire queue
   clearQueue: async () => {
     try {
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+      await readingsLocalService.deleteAllPendingReadings();
       await AsyncStorage.removeItem(STORAGE_KEYS.PENDING_READINGS);
       return true;
     } catch (error) {
-      console.error('Error clearing queue:', error);
+      console.error('Error clearing SQLite readings queue:', error);
       return false;
     }
   },
 };
 
 export const disconnectorQueue = {
-  addAction: async (actionData) => {
+  _buildActionSignature: (actionLike = {}) => {
+    const data = actionLike?.data || {};
+    const payload = data?.payload || {};
+    const type = (actionLike?.type || '').toString().trim().toLowerCase();
+    const orderId = (payload?.order_id ?? payload?.assignment_id ?? payload?.schedule_id ?? '').toString().trim();
+    const accountNo = (data?.accountNumber ?? payload?.account_number ?? payload?.account_no ?? '').toString().trim();
+    const statusCode = (data?.statusCode ?? payload?.status_code ?? payload?.status ?? '').toString().trim().toUpperCase();
+    return `${type}|${orderId}|${accountNo}|${statusCode}`;
+  },
+
+  compactQueue: async () => {
     try {
       const queue = await disconnectorQueue.getQueue();
+      if (!Array.isArray(queue) || queue.length === 0) return [];
+
+      const bySignature = new Map();
+      for (const item of queue) {
+        const status = (item?.status || '').toString().trim().toLowerCase();
+        // Keep only actionable queue rows
+        if (!(status === 'pending' || status === 'failed' || status === 'syncing')) continue;
+        const sig = disconnectorQueue._buildActionSignature(item);
+        const existing = bySignature.get(sig);
+        const existingTs = new Date(existing?.timestamp || 0).getTime();
+        const currentTs = new Date(item?.timestamp || 0).getTime();
+        if (!existing || currentTs >= existingTs) {
+          bySignature.set(sig, item);
+        }
+      }
+
+      const compacted = Array.from(bySignature.values());
+      if (compacted.length !== queue.length) {
+        await AsyncStorage.setItem(STORAGE_KEYS.PENDING_DISCONNECTOR_ACTIONS, JSON.stringify(compacted));
+        console.log(`🧹 Disconnector queue compacted: ${queue.length} -> ${compacted.length}`);
+      }
+      return compacted;
+    } catch (error) {
+      console.error('Error compacting disconnector queue:', error);
+      return [];
+    }
+  },
+
+  addAction: async (actionData) => {
+    try {
+      const queue = await disconnectorQueue.compactQueue();
       const newAction = {
         id: Date.now().toString(),
         timestamp: new Date().toISOString(),
@@ -121,8 +241,11 @@ export const disconnectorQueue = {
         retryCount: 0,
         data: actionData.data, 
       };
-      queue.push(newAction);
-      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_DISCONNECTOR_ACTIONS, JSON.stringify(queue));
+
+      const newSig = disconnectorQueue._buildActionSignature(newAction);
+      const deduped = queue.filter((item) => disconnectorQueue._buildActionSignature(item) !== newSig);
+      deduped.push(newAction);
+      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_DISCONNECTOR_ACTIONS, JSON.stringify(deduped));
       console.log('✅ Disconnector action added to offline queue:', newAction.id, newAction.type);
       return newAction.id;
     } catch (error) {
@@ -173,7 +296,7 @@ export const disconnectorQueue = {
 
   getPendingCount: async () => {
     try {
-      const queue = await disconnectorQueue.getQueue();
+      const queue = await disconnectorQueue.compactQueue();
       return queue.filter((a) => a.status === 'pending' || a.status === 'failed').length;
     } catch (error) {
       console.error('Error getting disconnector pending count:', error);
@@ -208,7 +331,7 @@ export const networkStatus = {
       const testUrl = `${apiConfig.baseURL}/reader/login`; 
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); 
+      const timeoutId = setTimeout(() => controller.abort(), 10000); 
       
       try {
         // Use GET so servers that don't support HEAD still respond
@@ -343,12 +466,12 @@ export const networkStatus = {
       if (deviceOnline !== lastKnownStatus || lastKnownStatus === null) {
         console.log(`📡 Network status changed: ${lastKnownStatus ?? 'unknown'} → ${deviceOnline ? '🌐 Online' : '📴 Offline'}`);
         lastKnownStatus = deviceOnline;
-        
-        console.debug(
-            "TEST B BDBDBDB",
-            dbService.get(STORAGE_KEYS.PENDING_READINGS).then(queue => console.log('Current offline queue:', queue))
-        )
-        
+
+        migrateLegacyAsyncStoragePendingReadingsOnce()
+          .then(() => readingsLocalService.getPendingCount())
+          .then((n) => console.log('📦 Unsynced readings (SQLite):', n))
+          .catch(() => {});
+
         // Clear cache when network status changes to allow fresh checks
         if (deviceOnline) {
           networkStatus._apiConnectivityCache.result = null; // Clear cache to force fresh check
@@ -372,6 +495,7 @@ export const networkStatus = {
 
 /** Max readings to upload per batch before fetching the next pending set from SQLite */
 const SYNC_BATCH_SIZE = 10;
+const MAX_TRANSIENT_CONNECTIVITY_MISSES = 3;
 
 // Sync Management
 export const syncManager = {
@@ -395,9 +519,15 @@ export const syncManager = {
     syncManager._syncLock = true;
     let synced = 0;
     let failed = 0;
+    let transientConnectivityMisses = 0;
     try {
+      // Recover rows left in syncing state from crashes/app kills.
+      await readingsLocalService.resetStuckSyncingRows();
+      await migrateLegacyAsyncStoragePendingReadingsOnce();
+
       const processOneReading = async (reading) => {
         try {
+          await readingsLocalService.markSyncing(reading.id);
           const result = await uploadFunction(reading.data);
 
           if (result && result.success === true) {
@@ -419,12 +549,25 @@ export const syncManager = {
       while (true) {
         const canSync = await networkStatus.canSyncToServer();
         if (!canSync) {
-          console.log('⚠️ Cannot sync - device offline or server unreachable');
+          transientConnectivityMisses += 1;
+          console.log(
+            `⚠️ Cannot sync - device offline or server unreachable (miss ${transientConnectivityMisses}/${MAX_TRANSIENT_CONNECTIVITY_MISSES})`
+          );
+          if (transientConnectivityMisses < MAX_TRANSIENT_CONNECTIVITY_MISSES) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            continue;
+          }
           if (synced === 0 && failed === 0) {
-            return { success: false, message: 'Device offline or server unreachable', synced: 0, failed: 0 };
+            return {
+              success: false,
+              message: 'Device offline or server unreachable',
+              synced: 0,
+              failed: 0
+            };
           }
           break;
         }
+        transientConnectivityMisses = 0;
 
         const pending = await readingsLocalService.getPendingReadings();
         const batch = pending.slice(0, SYNC_BATCH_SIZE);
@@ -438,7 +581,7 @@ export const syncManager = {
         }
 
         console.log(
-          `🔄 Sync batch: ${batch.length} reading(s) (${SYNC_BATCH_SIZE} max per batch), ${pending.length} total pending/failed in queue`
+          `🔄 Sync batch: ${batch.length} reading(s) (${SYNC_BATCH_SIZE} max per batch), ${pending.length} total saved offline in queue`
         );
 
         for (const reading of batch) {
@@ -484,6 +627,11 @@ export const syncManager = {
     let unsubscribe = null;
 
     const startAutoSync = () => {
+      // Ensure interrupted sync rows become retryable when app/session starts.
+      readingsLocalService.resetStuckSyncingRows().catch((e) =>
+        console.warn('resetStuckSyncingRows (auto-sync start):', e?.message || e)
+      );
+
       // Sync every interval (default 30 seconds) - automatic for production
       syncInterval = setInterval(async () => {
         const isOnline = await networkStatus.isOnline(true); // Quick check for auto-sync

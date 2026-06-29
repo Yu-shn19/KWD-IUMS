@@ -1,5 +1,5 @@
 import { Alert } from 'react-native';
-import { getApiConfig } from '../config/api';
+import { API_CONFIG, CURRENT_ENV, getApiConfig } from '../config/api';
 import { getLocalDateYYYYMMDD } from '../utils/dateUtils';
 
 // API Configuration
@@ -361,12 +361,7 @@ export const routesAPI = {
 
       console.log('Trying account number variations:', accountVariations);
 
-      // Try direct API endpoint first
-      // Route is in web.php: Route::get('/api/consumer/zone', ...)
-      // This is accessible at: https://hagonoywaterdistrict.com/api/consumer/zone
-      // Since API_BASE_URL is https://hagonoywaterdistrict.com/api
-      // We need to call it directly since web.php routes don't use the /api prefix from Laravel
-      // So we construct: baseURL (https://hagonoywaterdistrict.com/api) + /consumer/zone = https://hagonoywaterdistrict.com/api/consumer/zone ✓
+      // Reader-authenticated API (see routes/api.php): GET /api/consumer/zone?account_no=
       for (const accountVar of accountVariations) {
         try {
           console.log(`🔍 Trying /consumer/zone endpoint with account_no=${accountVar}`);
@@ -409,58 +404,8 @@ export const routesAPI = {
         }
       }
 
-      // Try ledger endpoint as fallback - it now includes latitude/longitude
-      for (const accountVar of accountVariations) {
-        try {
-          console.log(`🔍 Trying /ledger/data with account_no=${accountVar}`);
-          // Note: /ledger/data is in web.php, so it's accessible at domain.com/ledger/data
-          // Since API_BASE_URL is https://hagonoywaterdistrict.com/api
-          // We need to call /ledger/data directly (without /api prefix)
-          const baseUrlWithoutApi = API_BASE_URL.replace('/api', '');
-          const ledgerUrl = `${baseUrlWithoutApi}/ledger/data?account_no=${encodeURIComponent(accountVar)}`;
-          console.log(`🔗 Ledger URL: ${ledgerUrl}`);
-          
-          const ledgerResponse = await fetch(ledgerUrl, {
-            method: 'GET',
-            headers: getHeaders(token),
-          });
-          
-          if (!ledgerResponse.ok) {
-            throw new Error(`HTTP ${ledgerResponse.status}: ${ledgerResponse.statusText}`);
-          }
-          
-          const ledgerData = await ledgerResponse.json();
-          console.log('📥 Response from /ledger/data:', ledgerData);
-          
-          if (ledgerData?.consumer) {
-            const consumer = ledgerData.consumer;
-            const lat = parseFloat(consumer.latitude);
-            const lng = parseFloat(consumer.longitude);
-            
-            console.log('📍 Parsed coordinates from ledger:', { lat, lng, rawLat: consumer.latitude, rawLng: consumer.longitude });
-            
-            if (consumer && !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-              console.log('✅ Found consumer_zone via ledger endpoint:', {
-                account_no: consumer.account_no,
-                searched_with: accountVar,
-                latitude: lat,
-                longitude: lng
-              });
-              return consumer;
-            } else {
-              console.warn('⚠️ Invalid coordinates in ledger response:', { lat, lng, consumer });
-            }
-          } else {
-            console.warn('⚠️ No consumer in ledger response:', ledgerData);
-          }
-        } catch (ledgerError) {
-          console.error(`❌ Ledger endpoint failed for ${accountVar}:`, ledgerError.message);
-          continue;
-        }
-      }
-
       console.warn('⚠️ Could not fetch consumer_zone data for account:', cleanAccountNo, 'Tried variations:', accountVariations);
-      console.warn('⚠️ Make sure the backend endpoint /api/consumer/zone exists and returns latitude/longitude');
+      console.warn('⚠️ Ensure GET /api/consumer/zone is deployed and returns latitude/longitude for this account.');
       return null;
     } catch (error) {
       console.error('❌ Error fetching consumer zone data:', error);
@@ -566,88 +511,178 @@ export const disconnectorAPI = {
     });
   },
 
-  // Update assignment status (e.g., mark as completed/reconnected)
-  updateAssignmentStatus: async (payload = {}, token) => {
-    return apiRequest('/disconnector/assignments/status', {
-      method: 'POST',
-      body: payload,
+  // Fetch disconnection orders payload (contains DB-backed financial fields like last_reading)
+  getOrders: async (params = {}, token) => {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/disconnector/orders${query ? `?${query}` : ''}`;
+
+    return apiRequest(endpoint, {
+      method: 'GET',
       token
     });
+  },
+
+  // Fetch AR aging buckets per account for disconnector UI
+  getArAgingSummary: async (params = {}, token) => {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/disconnector/ar-aging-summary${query ? `?${query}` : ''}`;
+    const url = `${API_BASE_URL}${endpoint}`;
+
+    // Use direct fetch here so missing backend route (404) does not spam API Error logs.
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: getHeaders(token),
+    });
+
+    if (response.status === 404) {
+      return { success: false, unavailable: true, data: [] };
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return { success: false, unavailable: true, data: [] };
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || data.error || `HTTP error! status: ${response.status}`);
+    }
+
+    return data;
+  },
+
+  // Update assignment status (e.g., mark as completed/reconnected)
+  updateAssignmentStatus: async (payload = {}, token) => {
+    const postStatus = async (baseUrl) => {
+      const url = `${baseUrl}/disconnector/assignments/status`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: getHeaders(token),
+        body: JSON.stringify(payload),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      const data = contentType.includes('application/json')
+        ? await response.json()
+        : { success: false, message: `HTTP ${response.status}` };
+
+      if (!response.ok) {
+        return {
+          success: false,
+          status: response.status,
+          message: data?.message || data?.error || `HTTP error! status: ${response.status}`,
+          error: data,
+        };
+      }
+
+      return data;
+    };
+
+    // Primary write (current environment API).
+    const primary = await postStatus(API_BASE_URL);
+    if (!primary || primary.success === false) return primary;
+
+    // In development testing, mirror the same disconnect/reconnect status to main system API.
+    // This keeps test flow while ensuring the main system reflects the action.
+    const mainBaseUrl = API_CONFIG.xampp?.baseURL || API_CONFIG.production?.baseURL;
+    const shouldMirrorToMain =
+      CURRENT_ENV === 'development' &&
+      mainBaseUrl &&
+      mainBaseUrl !== API_BASE_URL;
+
+    if (shouldMirrorToMain) {
+      const mirror = await postStatus(mainBaseUrl);
+      if (!mirror || mirror.success === false) {
+        return {
+          success: false,
+          message: `Updated in development, but failed to update main system: ${mirror?.message || 'Unknown error'}`,
+          mirror_error: mirror,
+          primary,
+        };
+      }
+      return {
+        ...primary,
+        mirrored_to_main: true,
+      };
+    }
+
+    return primary;
+  },
+
+  // Permanently clear active assignments for the current disconnector on server.
+  clearAllAssignments: async (payload = {}, token) => {
+    const disconnectorId = payload?.disconnector_id;
+    const url = `${API_BASE_URL}/disconnector/assignments/clear-all`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: getHeaders(token),
+      body: JSON.stringify(payload),
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    const data = contentType.includes('application/json')
+      ? await response.json()
+      : { success: false, message: `HTTP ${response.status}` };
+
+    if (response.ok) {
+      return data;
+    }
+
+    // Backward-compatible fallback when clear-all route is not yet deployed.
+    if (response.status === 404 && disconnectorId) {
+      const ordersRes = await disconnectorAPI.getOrders({ disconnector_id: disconnectorId }, token);
+      const orders = Array.isArray(ordersRes?.orders) ? ordersRes.orders : [];
+      const activeOrders = orders.filter((o) => {
+        const st = (o?.status || '').toString().trim().toLowerCase();
+        return st === 'pending' || st === 'assigned' || st === 'in-progress' || st === 'in progress';
+      });
+      let cleared = 0;
+
+      for (const item of activeOrders) {
+        const orderId = item?.order_id ?? item?.orderId ?? item?.id;
+        if (!orderId) continue;
+        const result = await disconnectorAPI.updateAssignmentStatus(
+          { order_id: orderId, status: 'cancelled', notes: 'Cleared by disconnector from mobile app' },
+          token
+        );
+        if (result && result.success !== false) cleared += 1;
+      }
+
+      return {
+        success: true,
+        message: 'Assignments cleared via fallback mode.',
+        cleared_count: cleared,
+        fallback_used: true,
+      };
+    }
+
+    return {
+      success: false,
+      status: response.status,
+      message: data?.message || data?.error || `HTTP error! status: ${response.status}`,
+      error: data,
+    };
   },
 
   // Update consumer zone status code
   updateConsumerZoneStatus: async (accountNumber, statusCode, token, accountName = null) => {
     console.log('Updating consumer zone status:', { accountNumber, statusCode, accountName });
-    
-    // If accountNumber is missing or invalid, try to find it by account name
-    if ((!accountNumber || accountNumber === 'N/A' || accountNumber === 'undefined' || accountNumber === 'null') && accountName) {
-      console.log('Account number missing, attempting to find by account name:', accountName);
-      try {
-        // Try to search for consumer by name
-        // This would require a backend endpoint that searches by name
-        // For now, we'll try the update-status endpoint with account_name
-        return await apiRequest(`/api/consumer/update-status`, {
-          method: 'POST',
-          body: {
-            account_name: accountName,
-            status_code: statusCode
-          },
-          token
-        });
-      } catch (nameError) {
-        console.warn('Update by account name failed:', nameError);
-        throw new Error(`Cannot update: Account number not found and lookup by name failed. Please ensure account_number is included in assignment data.`);
-      }
+
+    if (!accountNumber || accountNumber === 'N/A' || accountNumber === 'undefined' || accountNumber === 'null') {
+      throw new Error('Cannot update consumer zone status: missing account number.');
     }
-    
-    // Try the direct update-status endpoint first (if it exists on backend)
-    try {
-      return await apiRequest(`/api/consumer/update-status`, {
-        method: 'POST',
-        body: {
-          account_number: accountNumber,
-          account_no: accountNumber, // Also try account_no (backend might use this field name)
-          status_code: statusCode
-        },
-        token
-      });
-    } catch (error) {
-      console.warn('Direct update-status endpoint failed, trying consumer update endpoint:', error.message);
-      
-      // Alternative: Try to find and update consumer directly
-      try {
-        // Try to find consumer by account_no (the field name in consumer_zone table)
-        const searchResponse = await apiRequest(`/api/consumers-by-zone?account_no=${accountNumber}`, {
-          method: 'GET',
-          token
-        }).catch(() => null);
-        
-        // If that doesn't work, try finding by account_number
-        let consumer = null;
-        if (searchResponse && searchResponse.consumers && searchResponse.consumers.length > 0) {
-          consumer = searchResponse.consumers.find(c => 
-            (c.account_no === accountNumber || c.account_number === accountNumber)
-          ) || searchResponse.consumers[0];
-        }
-        
-        if (consumer && consumer.id) {
-          // Update using the consumer update endpoint
-          return await apiRequest(`/api/consumers/${consumer.id}`, {
-            method: 'PUT',
-            body: {
-              ...consumer,
-              status_code: statusCode
-            },
-            token
-          });
-        } else {
-          throw new Error(`Consumer not found with account number: ${accountNumber}`);
-        }
-      } catch (altError) {
-        console.error('Alternative consumer update also failed:', altError);
-        throw new Error(`Failed to update consumer zone status: ${error.message}. Please ensure the backend endpoint /api/consumer/update-status exists or update the consumer_zone table manually.`);
-      }
-    }
+
+    // Existing backend route in routes/api.php:
+    // POST /api/reader/update-status
+    return apiRequest('/reader/update-status', {
+      method: 'POST',
+      body: {
+        account_number: accountNumber,
+        account_no: accountNumber,
+        status_code: statusCode,
+      },
+      token,
+    });
   },
 
   // Fetch orders cancelled because consumer paid (do not disconnect these)
