@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { disconnectorAPI, routesAPI } from './services/api';
-import { routesStorage, tokenStorage, userStorage, disconnectorPaidStorage } from './services/storage';
+import { routesStorage, tokenStorage, userStorage, disconnectorPaidStorage, ROUTES_BUCKET_DISCONNECTOR } from './services/storage';
 import { networkStatus, disconnectorQueue, syncManager } from './services/offlineQueue';
 import { getApiConfig } from './config/api';
 
@@ -58,10 +58,152 @@ const formatDate = (value) => {
   }
 };
 
+const formatMoney = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (Number.isNaN(n)) return '—';
+  return n.toFixed(2);
+};
+
+const formatNumber = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (Number.isNaN(n)) return '—';
+  return String(n);
+};
+
+const parseMoney = (value) => {
+  const n = Number(value);
+  return Number.isNaN(n) ? 0 : n;
+};
+
+/** Map AR aging API row to assignment bucket fields (_30, _60, etc. each stay separate). */
+const mapAgingRowToBuckets = (aging) => {
+  const current = parseMoney(aging?.current ?? aging?.CURRENT);
+  const b30 = parseMoney(aging?._30 ?? aging?.thirty_days ?? aging?.arrears_30);
+  const b60 = parseMoney(aging?._60 ?? aging?.sixty_days ?? aging?.arrears_60);
+  const b90 = parseMoney(aging?._90 ?? aging?.ninety_days ?? aging?.arrears_90);
+  const over90 = parseMoney(
+    aging?._OVER90 ?? aging?._over90 ?? aging?.over_90 ?? aging?.over90 ?? aging?.arrears_over_90
+  );
+  const prevYear = parseMoney(aging?.PREV_YEAR ?? aging?.prev_year ?? aging?.previous_year);
+  const sumBuckets = current + b30 + b60 + b90 + over90 + prevYear;
+  const balance = parseMoney(
+    aging?.total_balance ?? aging?.balance ?? aging?.BALANCE ?? sumBuckets
+  );
+
+  return {
+    current,
+    CURRENT: current,
+    _30: b30,
+    _60: b60,
+    _90: b90,
+    _over90: over90,
+    _OVER90: over90,
+    prev_year: prevYear,
+    PREV_YEAR: prevYear,
+    total_balance: balance,
+    BALANCE: balance,
+  };
+};
+
+/** Full AR balance (sum of aging columns), same as AR Aging Summary report. */
+const computeDisconnectorAgingBalance = (item) => {
+  if (!item || typeof item !== 'object') return 0;
+  const buckets = mapAgingRowToBuckets(item);
+  return buckets.BALANCE;
+};
+
+const buildAssignmentIdentifier = (item = {}) => {
+  const accountNo = (item.account_no || item.account_number || item.accountNumber || '').toString().trim();
+  const zone = (item.zone_code || item.zone || '').toString().trim();
+  if (accountNo) return `acct:${accountNo}|zone:${zone}`;
+  return `id:${item.id || item.schedule_id || item.assignment_id || ''}|zone:${zone}`;
+};
+
+const normalizeAccountNo = (value) => {
+  const raw = (value ?? '').toString().trim();
+  if (!raw) return '';
+  // Normalize account numbers across formats:
+  // e.g. "091-12-1072", "091121072", "091 12 1072" -> "091121072"
+  return raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+};
+const getAccountMatchKeys = (value) => {
+  const normalized = normalizeAccountNo(value);
+  if (!normalized) return [];
+  const noLeadingZero = normalized.replace(/^0+/, '');
+  if (!noLeadingZero || noLeadingZero === normalized) return [normalized];
+  return [normalized, noLeadingZero];
+};
+const normalizeScheduleId = (value) => (value ?? '').toString().trim();
+const normalizeAccountName = (value) => (value ?? '')
+  .toString()
+  .toLowerCase()
+  .trim()
+  .replace(/[^a-z0-9\s]/g, '')
+  .replace(/\s+/g, ' ');
+const isCompletedDisconnectionStatus = (rawStatus) => {
+  const status = normalize(rawStatus);
+  return (
+    rawStatus === 'X' ||
+    rawStatus === 'A' ||
+    (status.includes('disconnected') && !status.includes('reconnected')) ||
+    status.includes('reconnected')
+  );
+};
+const isActiveDisconnectionStatus = (rawStatus) => {
+  const status = normalize(rawStatus);
+  return (
+    status === 'pending' ||
+    status === 'assigned' ||
+    status === 'in-progress' ||
+    status === 'in progress'
+  );
+};
+
 // Normalize account identifier for matching paid list
 const getAssignmentAccountNo = (a) => {
   const no = (a.account_no || a.account_number || a.accountNumber || '').toString().trim();
   return no;
+};
+
+const getAssignmentOrderId = (a) => {
+  const id = a?.id ?? a?.order_id ?? a?.orderId;
+  if (id == null || id === '') return '';
+  return String(id);
+};
+
+const isActiveDisconnectionAssignment = (assignment) => {
+  const raw = (assignment?.status || assignment?.assignment_status || '').toString().trim();
+  return isActiveDisconnectionStatus(raw);
+};
+
+const accountKeysForPaidMatch = (accountNo) => {
+  const keys = new Set();
+  const no = (accountNo || '').toString().trim();
+  if (!no) return keys;
+  keys.add(no);
+  const norm = normalizeAccountNo(no);
+  if (norm) keys.add(norm);
+  getAccountMatchKeys(no).forEach((k) => keys.add(k));
+  return keys;
+};
+
+/** Remove cancelled-paid rows for accounts with a new active assignment (new billing round). */
+const filterPaidListForActiveReassignments = (paidList, activeAssignments) => {
+  const activeAccountKeys = new Set();
+  (activeAssignments || []).forEach((a) => {
+    if (!isActiveDisconnectionAssignment(a)) return;
+    accountKeysForPaidMatch(getAssignmentAccountNo(a)).forEach((k) => activeAccountKeys.add(k));
+  });
+
+  return (paidList || []).filter((cancelledRow) => {
+    const keys = accountKeysForPaidMatch(getAssignmentAccountNo(cancelledRow));
+    for (const k of keys) {
+      if (activeAccountKeys.has(k)) return false;
+    }
+    return true;
+  });
 };
 
 /** DB field is zone_code; legacy cached rows may only have zone */
@@ -109,20 +251,21 @@ export default function DisconnectorAssignments({ userData, onBack }) {
     });
   }, [zoneFilteredAssignments, searchQuery]);
 
-  const paidAccountNos = React.useMemo(() => {
+  const paidCancelledOrderIds = React.useMemo(() => {
     const set = new Set();
     (cancelledDueToPayment || []).forEach((c) => {
-      const no = (c.account_no || c.account_number || '').toString().trim();
-      const num = (c.account_number || c.account_no || '').toString().trim();
-      if (no) set.add(no);
-      if (num && num !== no) set.add(num);
+      const oid = getAssignmentOrderId(c);
+      if (oid) set.add(oid);
     });
     return set;
   }, [cancelledDueToPayment]);
 
   const isAssignmentPaid = (assignment) => {
-    const no = getAssignmentAccountNo(assignment);
-    return no && paidAccountNos.has(no);
+    if (isActiveDisconnectionAssignment(assignment)) {
+      return false;
+    }
+    const orderId = getAssignmentOrderId(assignment);
+    return orderId !== '' && paidCancelledOrderIds.has(orderId);
   };
 
   const loadAssignments = async (showAlerts = false, silent = false) => {
@@ -141,13 +284,17 @@ export default function DisconnectorAssignments({ userData, onBack }) {
       const online = await networkStatus.isOnline(true);
       setIsOnline(online);
 
-      // When offline: show cached data only; use cached paid list so paid consumers stay "Paid not assign"
+      // When offline: show cached data only
       if (!online) {
-        const cachedRoutes = await routesStorage.getRoutes();
+        const cachedRoutes = await routesStorage.getRoutes(ROUTES_BUCKET_DISCONNECTOR);
         const cachedAssignments = filterDisconnectionAssignments(cachedRoutes || []);
-        const cachedPaidList = await disconnectorPaidStorage.getPaidList();
+        const cachedPaidRaw = await disconnectorPaidStorage.getPaidList();
+        const cachedPaidFiltered = filterPaidListForActiveReassignments(
+          Array.isArray(cachedPaidRaw) ? cachedPaidRaw : [],
+          cachedAssignments
+        );
         setAssignments(cachedAssignments);
-        setCancelledDueToPayment(Array.isArray(cachedPaidList) ? cachedPaidList : []);
+        setCancelledDueToPayment(cachedPaidFiltered);
         setErrorMessage('Offline — showing cached list. Disconnect/reconnect will sync when back online.');
         if (showAlerts && cachedAssignments.length > 0) {
           Alert.alert('Offline', 'Showing cached assignments. Your actions will sync when you\'re back online.');
@@ -170,6 +317,134 @@ export default function DisconnectorAssignments({ userData, onBack }) {
           response?.schedules ||
           response?.tasks ||
           [];
+
+        // Fallback enrichment: some deployments return null last_reading in assignments
+        // while orders payload has disconnection_orders.last_reading.
+        try {
+          const ordersResponse = await disconnectorAPI.getOrders(
+            { disconnector_id: disconnectorId },
+            token
+          );
+          const ordersList = ordersResponse?.orders || [];
+          if (Array.isArray(ordersList) && ordersList.length > 0 && Array.isArray(assignmentsList)) {
+            const orderByIdentifier = new Map();
+            ordersList.forEach((orderItem) => {
+              orderByIdentifier.set(buildAssignmentIdentifier(orderItem), orderItem);
+            });
+
+            assignmentsList = assignmentsList.map((assignmentItem) => {
+              const orderMatch = orderByIdentifier.get(buildAssignmentIdentifier(assignmentItem));
+              if (!orderMatch) return assignmentItem;
+
+              const orderConsumer = orderMatch?.consumer;
+              const orderLat = orderMatch?.latitude ?? orderConsumer?.latitude;
+              const orderLng = orderMatch?.longitude ?? orderConsumer?.longitude;
+
+              return {
+                ...assignmentItem,
+                latitude: assignmentItem?.latitude ?? orderLat ?? null,
+                longitude: assignmentItem?.longitude ?? orderLng ?? null,
+                // Always merge richer financial fields from orders when available.
+                // Keep assignment values as first priority, then fall back to orders.
+                last_reading:
+                  assignmentItem?.last_reading ??
+                  assignmentItem?.lastReading ??
+                  assignmentItem?.previous_reading ??
+                  assignmentItem?.current_reading ??
+                  orderMatch?.last_reading ??
+                  orderMatch?.lastReading ??
+                  orderMatch?.previous_reading ??
+                  orderMatch?.current_reading ??
+                  null,
+                meter_number: assignmentItem?.meter_number ?? orderMatch?.meter_number,
+                this_month_arrears: assignmentItem?.this_month_arrears ?? orderMatch?.this_month_arrears,
+                last_month_arrears: assignmentItem?.last_month_arrears ?? orderMatch?.last_month_arrears,
+                total_outstanding: assignmentItem?.total_outstanding ?? orderMatch?.total_outstanding,
+              };
+            });
+          }
+        } catch (ordersError) {
+          console.warn('Disconnector orders enrichment error:', ordersError);
+        }
+
+        // Enrich aging buckets from AR aging summary API (same source used by ar-aging-summary blade report).
+        try {
+          const agingResponse = await disconnectorAPI.getArAgingSummary(
+            { disconnector_id: disconnectorId },
+            token
+          );
+          const agingRows = Array.isArray(agingResponse?.data)
+            ? agingResponse.data
+            : Array.isArray(agingResponse?.detailRecords)
+              ? agingResponse.detailRecords
+              : [];
+
+          if (agingRows.length > 0 && Array.isArray(assignmentsList) && assignmentsList.length > 0) {
+            const agingByConsumerId = new Map();
+            const agingByAccount = new Map();
+            agingRows.forEach((row) => {
+              const consumerZoneId = (row?.consumer_zone_id ?? row?.consumer_id ?? '').toString().trim();
+              if (consumerZoneId) agingByConsumerId.set(consumerZoneId, row);
+
+              const rawAccountNo = (
+                row?.account_no ??
+                row?.account_number ??
+                row?.accountNumber ??
+                ''
+              ).toString().trim();
+              if (!rawAccountNo) return;
+              const normalized = normalizeAccountNo(rawAccountNo);
+              const keys = new Set([
+                rawAccountNo.toUpperCase(),
+                normalized,
+                ...getAccountMatchKeys(rawAccountNo),
+              ]);
+              keys.forEach((k) => {
+                if (k) agingByAccount.set(k, row);
+              });
+            });
+
+            assignmentsList = assignmentsList.map((assignmentItem) => {
+              const assignmentConsumerId = (assignmentItem?.consumer_id ?? assignmentItem?.consumerId ?? '').toString().trim();
+              let aging = assignmentConsumerId ? agingByConsumerId.get(assignmentConsumerId) : null;
+
+              // Fallback only when consumer_id isn't present/matched.
+              if (!aging) {
+                const rawAccountNo = (
+                  assignmentItem?.account_number ??
+                  assignmentItem?.account_no ??
+                  assignmentItem?.accountNumber ??
+                  ''
+                ).toString().trim();
+                const normalizedAccountNo = normalizeAccountNo(rawAccountNo);
+                const keys = [
+                  rawAccountNo.toUpperCase(),
+                  normalizedAccountNo,
+                  ...getAccountMatchKeys(rawAccountNo),
+                ].filter(Boolean);
+                for (const k of keys) {
+                  const v = agingByAccount.get(k);
+                  if (v) {
+                    aging = v;
+                    break;
+                  }
+                }
+              }
+
+              if (!aging) return assignmentItem;
+
+              return {
+                ...assignmentItem,
+                ...mapAgingRowToBuckets(aging),
+              };
+            });
+          }
+        } catch (agingError) {
+          const msg = (agingError?.message || '').toLowerCase();
+          if (!(msg.includes('could not be found') || msg.includes('not found') || msg.includes('404'))) {
+            console.warn('Disconnector AR aging enrichment error:', agingError);
+          }
+        }
       } catch (apiError) {
         console.warn('Disconnector assignments API error:', apiError);
         setErrorMessage(
@@ -177,68 +452,127 @@ export default function DisconnectorAssignments({ userData, onBack }) {
         );
       }
 
-      // Always merge with local storage to ensure disconnected assignments remain visible
-      const cachedRoutes = await routesStorage.getRoutes();
-      const cachedAssignments = filterDisconnectionAssignments(cachedRoutes || []);
-      
-      // Merge API assignments with cached assignments
-      // Priority: API data for new/updated assignments, cached data for disconnected/completed ones
+      // Use API list as source-of-truth while online for fresh assignments.
+      // Do not re-add stale cached completed rows that were not part of latest API response.
       const mergedAssignments = [...assignmentsList];
-      const apiIdentifiers = new Set();
-      assignmentsList.forEach((item) => {
-        const z = item.zone_code ?? item.zone;
-        const identifier = item.id || item.schedule_id || `${item.account_number}-${z}`;
-        apiIdentifiers.add(identifier);
-      });
-      
-      // Add cached assignments that aren't in API response (e.g., disconnected ones)
-      cachedAssignments.forEach((cachedItem) => {
-        const z = cachedItem.zone_code ?? cachedItem.zone;
-        const identifier = cachedItem.id || cachedItem.schedule_id || `${cachedItem.account_number}-${z}`;
-        if (!apiIdentifiers.has(identifier)) {
-          mergedAssignments.push(cachedItem);
-        }
-      });
 
       // Ensure assignments are unique by schedule ID if available
       const uniqueAssignments = [];
-      const seen = new Set();
+      const seenIndex = new Map();
       mergedAssignments.forEach((item) => {
-        const z = item.zone_code ?? item.zone;
-        const identifier = item.id || item.schedule_id || `${item.account_number}-${z}`;
-        if (!seen.has(identifier)) {
-          seen.add(identifier);
+        const identifier = buildAssignmentIdentifier(item);
+        if (!seenIndex.has(identifier)) {
+          seenIndex.set(identifier, uniqueAssignments.length);
           uniqueAssignments.push(item);
+          return;
         }
+        // Merge duplicate entries to preserve richer fields (e.g., financial columns from API)
+        const idx = seenIndex.get(identifier);
+        const existing = uniqueAssignments[idx];
+        const mergedLastReading =
+          item.last_reading ??
+          item.lastReading ??
+          item.previous_reading ??
+          item.previousReading ??
+          item.current_reading ??
+          item.currentReading ??
+          item.reading ??
+          existing.last_reading ??
+          existing.lastReading ??
+          existing.previous_reading ??
+          existing.previousReading ??
+          existing.current_reading ??
+          existing.currentReading ??
+          existing.reading ??
+          null;
+
+        uniqueAssignments[idx] = {
+          ...existing,
+          ...item,
+          last_reading: mergedLastReading,
+          this_month_arrears: item.this_month_arrears ?? existing.this_month_arrears,
+          last_month_arrears: item.last_month_arrears ?? existing.last_month_arrears,
+          total_outstanding: item.total_outstanding ?? existing.total_outstanding,
+        };
       });
 
-      setAssignments(uniqueAssignments);
-      // Persist to cache so when offline we can show this list
-      await routesStorage.saveRoutes(uniqueAssignments);
+      // Prefer exact AR-aging buckets from API/backend assignment payload.
+      // Do not approximate _30/_60/_90/_OVER90/PREV YEAR from disconnection-order fields.
+      const assignmentsWithFallbackAging = uniqueAssignments.map((item) => {
+        const hasExactAging =
+          item?._30 != null ||
+          item?._60 != null ||
+          item?._90 != null ||
+          item?._over90 != null ||
+          item?._OVER90 != null ||
+          item?.prev_year != null ||
+          item?.PREV_YEAR != null;
+
+        if (hasExactAging) {
+          return {
+            ...item,
+            ...mapAgingRowToBuckets(item),
+          };
+        }
+
+        const totalOutstanding = Number(item?.total_outstanding ?? item?.balance ?? 0);
+        const safeBalance = Number.isNaN(totalOutstanding) ? 0 : totalOutstanding;
+
+        return {
+          ...item,
+          current: item?.current ?? item?.CURRENT,
+          CURRENT: item?.CURRENT ?? item?.current,
+          total_balance: safeBalance,
+          BALANCE: safeBalance,
+        };
+      });
+      const latestAssignmentMs = (assignmentsWithFallbackAging || []).reduce((max, item) => {
+        const rawTs = item?.assigned_at || item?.created_at || item?.updated_at || null;
+        if (!rawTs) return max;
+        const ms = new Date(rawTs).getTime();
+        return Number.isFinite(ms) && ms > max ? ms : max;
+      }, 0);
 
       // Fetch consumers who already paid (do not disconnect – show as "Paid not assign"); cache for offline
+      let paidList = [];
       if (disconnectorId && token) {
         try {
+          const paidParams = { disconnector_id: disconnectorId };
+          if (latestAssignmentMs > 0) {
+            paidParams.since = new Date(latestAssignmentMs).toISOString();
+          }
           const res = await disconnectorAPI.getCancelledDueToPayment(
-            { disconnector_id: disconnectorId },
+            paidParams,
             token
           );
           const list = res?.cancelled_due_to_payment || [];
-          const paidList = Array.isArray(list) ? list : [];
-          setCancelledDueToPayment(paidList);
-          await disconnectorPaidStorage.savePaidList(paidList);
+          paidList = Array.isArray(list) ? list : [];
         } catch (e) {
           console.warn('DisconnectorAssignments cancelled-due-to-payment:', e);
           const cachedPaid = await disconnectorPaidStorage.getPaidList();
-          setCancelledDueToPayment(Array.isArray(cachedPaid) ? cachedPaid : []);
+          paidList = Array.isArray(cachedPaid) ? cachedPaid : [];
         }
       }
+
+      const activeAssignments = assignmentsWithFallbackAging.filter((item) => {
+        const rawStatus = item.status || item.assignment_status || '';
+        if (isCompletedDisconnectionStatus(rawStatus)) return false;
+        return true;
+      });
+
+      const paidListForUi = filterPaidListForActiveReassignments(paidList, activeAssignments);
+      setCancelledDueToPayment(paidListForUi);
+      await disconnectorPaidStorage.savePaidList(paidListForUi);
+
+      setAssignments(activeAssignments);
+      // Persist filtered active list so offline view matches current assignable queue
+      await routesStorage.saveRoutes(activeAssignments, ROUTES_BUCKET_DISCONNECTOR);
 
       if (showAlerts) {
         Alert.alert(
           'Assignments Updated',
-          uniqueAssignments.length
-            ? `${uniqueAssignments.length} assignment(s) loaded.`
+          activeAssignments.length
+            ? `${activeAssignments.length} assignment(s) loaded.`
             : 'No disconnection assignments found.'
         );
       }
@@ -297,8 +631,30 @@ export default function DisconnectorAssignments({ userData, onBack }) {
     setPendingDisconnectorCount(count);
   };
 
+  // Remove stale queued actions for the same order once online API succeeds.
+  const clearQueuedActionsForOrder = async (orderId) => {
+    if (!orderId) return;
+    try {
+      const queue = await disconnectorQueue.getQueue();
+      const normalizedTarget = String(orderId).trim();
+      const matches = queue.filter((item) => {
+        const queuedOrderId = item?.data?.payload?.order_id ?? item?.data?.payload?.assignment_id ?? null;
+        return queuedOrderId != null && String(queuedOrderId).trim() === normalizedTarget;
+      });
+      for (const item of matches) {
+        await disconnectorQueue.removeAction(item.id);
+      }
+    } catch (err) {
+      console.warn('clearQueuedActionsForOrder:', err?.message || err);
+    }
+  };
+
   useEffect(() => {
-    refreshPendingDisconnectorCount();
+    const initQueueCount = async () => {
+      await disconnectorQueue.compactQueue();
+      await refreshPendingDisconnectorCount();
+    };
+    initQueueCount();
   }, []);
 
   // Sync one disconnector action (used by syncManager.syncDisconnectorActions)
@@ -309,16 +665,20 @@ export default function DisconnectorAssignments({ userData, onBack }) {
       const { payload, accountNumber, accountName, statusCode } = action.data || {};
       if (!payload) return { success: false, message: 'Invalid action data' };
       const res = await disconnectorAPI.updateAssignmentStatus(payload, token);
-      if (!res || (res.success === false && res.success !== undefined)) return { success: false, message: res?.message || 'API failed' };
-      if (accountNumber && accountNumber !== 'N/A' && statusCode) {
-        try {
-          await disconnectorAPI.updateConsumerZoneStatus(accountNumber, statusCode, token, accountName);
-        } catch (e) {
-          console.warn('Consumer zone update failed (action still synced):', e);
+      if (!res || (res.success === false && res.success !== undefined)) {
+        const msg = (res?.message || 'API failed').toString();
+        if (msg.toLowerCase().includes('already paid')) {
+          return { success: true, skipped_paid: true, message: msg };
         }
+        return { success: false, message: msg };
       }
+      // Consumer status is updated by backend assignment status endpoint.
       return { success: true };
     } catch (error) {
+      const msg = (error?.message || '').toString();
+      if (msg.toLowerCase().includes('already paid')) {
+        return { success: true, skipped_paid: true, message: msg };
+      }
       return { success: false, message: error.message };
     }
   };
@@ -368,7 +728,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
         [];
 
       const filtered = filterDisconnectionAssignments(list);
-      await routesStorage.saveRoutes(filtered);
+      await routesStorage.saveRoutes(filtered, ROUTES_BUCKET_DISCONNECTOR);
       setAssignments(filtered);
 
       Alert.alert(
@@ -384,6 +744,62 @@ export default function DisconnectorAssignments({ userData, onBack }) {
         error.message || 'Unable to download assignments. Please try again later.'
       );
     }
+  };
+
+  const handleClearAllAssignments = () => {
+    Alert.alert(
+      'Clear All Assignments',
+      'This will remove all currently assigned consumers from this device.\n\nUse this before assigning a new consumer list for disconnection.\n\nAre you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const online = await networkStatus.isOnline(true);
+              const token = await tokenStorage.getToken();
+              const storedUser = userData || (await userStorage.getUserData());
+              const disconnectorId = storedUser?.id;
+
+              if (!online || !token || !disconnectorId) {
+                Alert.alert(
+                  'Online Required',
+                  'Clear All permanently removes assignments from server. Connect online and try again.'
+                );
+                return;
+              }
+
+              const serverRes = await disconnectorAPI.clearAllAssignments(
+                { disconnector_id: disconnectorId },
+                token
+              );
+              if (!serverRes || serverRes.success === false) {
+                throw new Error(serverRes?.message || 'Failed to clear assignments on server.');
+              }
+
+              await routesStorage.saveRoutes([], ROUTES_BUCKET_DISCONNECTOR);
+              await disconnectorPaidStorage.savePaidList([]);
+              await disconnectorQueue.clearQueue();
+              setAssignments([]);
+              setCancelledDueToPayment([]);
+              setSelectedAssignmentId(null);
+              setSearchQuery('');
+              setSelectedZone(null);
+              setShowZoneDropdown(false);
+              setErrorMessage('');
+              await loadAssignments(false, true);
+              Alert.alert(
+                'Cleared',
+                `Assignments were permanently cleared from server (${serverRes?.cleared_count ?? 0}) and removed from this device.`
+              );
+            } catch (error) {
+              Alert.alert('Error', error?.message || 'Failed to clear assignments.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleCardPress = (uniqueKey) => {
@@ -425,10 +841,10 @@ export default function DisconnectorAssignments({ userData, onBack }) {
         console.warn('View location getConsumerZoneByAccount:', e);
       }
     }
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       Alert.alert(
         'Location Not Available',
-        `GPS coordinates not found in consumer_zone for account: ${accountNumber || 'N/A'}\n\nCustomer: ${name}\n\nEnsure the consumer_zone table has latitude and longitude for this account.`,
+        `GPS coordinates not found for account: ${accountNumber || 'N/A'}\n\nCustomer: ${name}\n\nSet the consumer location in the admin consumer page (Location tab), then refresh assignments.`,
         [{ text: 'OK' }]
       );
       return;
@@ -518,6 +934,8 @@ export default function DisconnectorAssignments({ userData, onBack }) {
               console.log('Network status check:', isOnlineNow ? '🌐 Online' : '📴 Offline');
 
               let apiSuccess = false;
+              let skippedBecausePaid = false;
+              let queuedForRetry = false;
               let apiError = null;
 
               // Build payload once for both API and offline queue
@@ -556,7 +974,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                   return a;
                 });
                 setAssignments(updatedAssignments);
-                await routesStorage.saveRoutes(updatedAssignments);
+                await routesStorage.saveRoutes(updatedAssignments, ROUTES_BUCKET_DISCONNECTOR);
                 setIsProcessing(false);
                 Alert.alert('Saved offline', 'Will sync when you\'re back online.');
                 return;
@@ -580,65 +998,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                         apiSuccess = true;
                         console.log('✅ Disconnection updated in main system:', response);
                         
-                        // Also update consumer_zone status_code to 'X' if disconnection was successful
-                        const accountNumber = actualAssignment.account_number || 
-                                            actualAssignment.accountNumber || 
-                                            actualAssignment.account_no ||
-                                            actualAssignment.accountNo ||
-                                            displayAccountNumber;
-                        
-                        console.log('Attempting to update consumer_zone status_code:', {
-                          accountNumber,
-                          displayAccountNumber,
-                          actualAssignmentAccountNumber: actualAssignment.account_number,
-                          assignmentAccountNumber: assignment.account_number
-                        });
-                        
-                        // Always try to update consumer_zone, even if account number is missing
-                        // We'll use account name as fallback to find the consumer
-                        try {
-                          console.log('Updating consumer_zone status_code to X:', {
-                            accountNumber,
-                            displayAccountNumber,
-                            accountName: displayAccountName,
-                            actualAssignment: {
-                              account_number: actualAssignment.account_number,
-                              accountNumber: actualAssignment.accountNumber,
-                              account_no: actualAssignment.account_no,
-                              accountNo: actualAssignment.accountNo,
-                              name: actualAssignment.account_name || actualAssignment.name
-                            }
-                          });
-                          
-                          // Pass account number if available, otherwise null (API will try to find by name)
-                          const consumerZoneResponse = await disconnectorAPI.updateConsumerZoneStatus(
-                            accountNumber && accountNumber !== 'N/A' && accountNumber !== 'undefined' && accountNumber !== 'null' 
-                              ? accountNumber 
-                              : null, 
-                            'X', 
-                            token, 
-                            displayAccountName
-                          );
-                          console.log('✅ Consumer zone status_code updated to X:', consumerZoneResponse);
-                          
-                          // Show success message
-                          if (consumerZoneResponse && (consumerZoneResponse.success !== false)) {
-                            console.log('✅ Consumer zone status_code successfully updated in database');
-                          }
-                        } catch (consumerZoneError) {
-                          console.error('❌ Failed to update consumer_zone status_code:', consumerZoneError);
-                          console.error('Error details:', {
-                            message: consumerZoneError.message,
-                            accountNumber: accountNumber,
-                            accountName: displayAccountName,
-                            statusCode: 'X'
-                          });
-                          // Show warning but don't fail the whole operation
-                          Alert.alert(
-                            'Warning',
-                            `Disconnection saved, but failed to update consumer status in database.\n\nAccount: ${displayAccountName}\nAccount No.: ${accountNumber || 'Not found'}\nError: ${consumerZoneError.message || 'Unknown error'}\n\nPlease update consumer_zone.status_code to 'X' manually in the database for account "${displayAccountName}".`
-                          );
-                        }
+                        // Consumer status is updated by backend assignment status endpoint.
                       } 
                       // Check for explicit failure indicators
                       else if (response.success === false || response.success === 0 ||
@@ -661,20 +1021,51 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                       apiError = 'API returned empty response';
                     }
                 } catch (error) {
-                  console.error('❌ API update failed:', error);
-                  if (payload) {
-                    await disconnectorQueue.addAction({ type: 'disconnect', data: { payload, accountNumber: displayAccountNumber, accountName: displayAccountName, statusCode: 'X' } });
-                    setPendingDisconnectorCount(await disconnectorQueue.getPendingCount());
-                  }
                   if (error.message) apiError = error.message;
                   else if (error.response) apiError = error.response.message || error.response.error || 'API request failed';
                   else if (typeof error === 'string') apiError = error;
                   else apiError = 'API request failed. Please check your connection and try again.';
+
+                  if ((apiError || '').toLowerCase().includes('already paid')) {
+                    skippedBecausePaid = true;
+                    console.log('ℹ️ Skip disconnect: consumer already paid.');
+                  } else {
+                    console.error('❌ API update failed:', error);
+                    const lowerErr = (apiError || '').toLowerCase();
+                    const isNetworkFailure =
+                      lowerErr.includes('network') ||
+                      lowerErr.includes('fetch') ||
+                      lowerErr.includes('timeout') ||
+                      lowerErr.includes('connection');
+                    if (payload && isNetworkFailure) {
+                      await disconnectorQueue.addAction({ type: 'disconnect', data: { payload, accountNumber: displayAccountNumber, accountName: displayAccountName, statusCode: 'X' } });
+                      setPendingDisconnectorCount(await disconnectorQueue.getPendingCount());
+                      queuedForRetry = true;
+                    }
+                  }
                 }
               }
-              if (!apiSuccess && payload) {
+              if (!apiSuccess && !skippedBecausePaid && !queuedForRetry && payload) {
+                const lowerErr = (apiError || '').toLowerCase();
+                const isNetworkFailure =
+                  lowerErr.includes('network') ||
+                  lowerErr.includes('fetch') ||
+                  lowerErr.includes('timeout') ||
+                  lowerErr.includes('connection');
+                if (isNetworkFailure) {
                 await disconnectorQueue.addAction({ type: 'disconnect', data: { payload, accountNumber: displayAccountNumber, accountName: displayAccountName, statusCode: 'X' } });
                 setPendingDisconnectorCount(await disconnectorQueue.getPendingCount());
+                  queuedForRetry = true;
+                }
+              }
+
+              if (skippedBecausePaid) {
+                await loadAssignments(false, true);
+                setSelectedAssignmentId(null);
+                await clearQueuedActionsForOrder(orderId);
+                await refreshPendingDisconnectorCount();
+                Alert.alert('Already paid', 'This consumer has already paid and cannot be marked as disconnected.');
+                return;
               }
 
               // Update local state - ALWAYS set to 'disconnected' (never 'saved offline')
@@ -726,16 +1117,20 @@ export default function DisconnectorAssignments({ userData, onBack }) {
               setAssignments(updatedAssignments);
               
               // Update local storage
-              await routesStorage.saveRoutes(updatedAssignments);
+              await routesStorage.saveRoutes(updatedAssignments, ROUTES_BUCKET_DISCONNECTOR);
               
               setSelectedAssignmentId(null);
               
               // Show appropriate message based on API success
               if (apiSuccess) {
+                await clearQueuedActionsForOrder(orderId);
+                await refreshPendingDisconnectorCount();
                 Alert.alert('Success', 'Account marked as disconnected and updated in main system.');
-              } else if (payload) {
+              } else if (queuedForRetry) {
+                await refreshPendingDisconnectorCount();
                 Alert.alert('Saved offline', 'Will sync when you\'re back online.');
               } else {
+                await refreshPendingDisconnectorCount();
                 const errorMsg = apiError || 'Unknown error';
                 Alert.alert('Warning', `Could not update main system.\n\nError: ${errorMsg}\n\nStatus updated locally. Please check your connection and try refreshing.`);
               }
@@ -848,7 +1243,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                   return a;
                 });
                 setAssignments(updatedAssignmentsReconnect);
-                await routesStorage.saveRoutes(updatedAssignmentsReconnect);
+                await routesStorage.saveRoutes(updatedAssignmentsReconnect, ROUTES_BUCKET_DISCONNECTOR);
                 setIsProcessing(false);
                 Alert.alert('Saved offline', 'Will sync when you\'re back online.');
                 return;
@@ -871,25 +1266,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                         apiSuccess = true;
                         console.log('✅ Reconnection updated in main system:', response);
                         
-                        // Also update consumer_zone status_code back to 'A' (Active) if reconnection was successful
-                        const accountNumber = actualAssignment.account_number || 
-                                            actualAssignment.accountNumber || 
-                                            actualAssignment.account_no ||
-                                            actualAssignment.accountNo ||
-                                            displayAccountNumber;
-                        
-                        if (accountNumber && accountNumber !== 'N/A' && accountNumber !== 'undefined' && accountNumber !== 'null') {
-                          try {
-                            console.log('Updating consumer_zone status_code back to A (Active) for account:', accountNumber);
-                            await disconnectorAPI.updateConsumerZoneStatus(accountNumber, 'A', token, displayAccountName);
-                            console.log('✅ Consumer zone status_code updated to A (Active)');
-                          } catch (consumerZoneError) {
-                            console.warn('⚠️ Failed to update consumer_zone status_code:', consumerZoneError);
-                            // Don't fail the whole operation if consumer_zone update fails
-                          }
-                        } else {
-                          console.warn('⚠️ No valid account number found to update consumer_zone');
-                        }
+                        // Consumer status is updated by backend assignment status endpoint.
                       } 
                       // Check for explicit failure indicators
                       else if (response.success === false || response.success === 0 ||
@@ -977,16 +1354,20 @@ export default function DisconnectorAssignments({ userData, onBack }) {
               setAssignments(updatedAssignments);
               
               // Update local storage
-              await routesStorage.saveRoutes(updatedAssignments);
+              await routesStorage.saveRoutes(updatedAssignments, ROUTES_BUCKET_DISCONNECTOR);
               
               setSelectedAssignmentId(null);
               
               // Show appropriate message based on API success
               if (apiSuccess) {
+                await clearQueuedActionsForOrder(orderIdReconnect);
+                await refreshPendingDisconnectorCount();
                 Alert.alert('Success', 'Account marked as reconnected and updated in main system.');
               } else if (payloadReconnect) {
+                await refreshPendingDisconnectorCount();
                 Alert.alert('Saved offline', 'Will sync when you\'re back online.');
               } else {
+                await refreshPendingDisconnectorCount();
                 const errorMsg = apiError || 'Unknown error';
                 Alert.alert('Warning', `Could not update main system.\n\nError: ${errorMsg}\n\nStatus updated locally. Please check your connection and try refreshing.`);
               }
@@ -1085,22 +1466,26 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                     synced++;
                     console.log('✅ Successfully synced assignment:', assignmentId);
                     
-                    // Also try to update consumer_zone
-                    if (accountNumber && accountNumber !== 'N/A') {
-                      try {
-                        await disconnectorAPI.updateConsumerZoneStatus(accountNumber, 'X', token, accountName);
-                        console.log('✅ Consumer zone updated for:', accountNumber);
-                      } catch (czError) {
-                        console.warn('⚠️ Consumer zone update failed:', czError);
-                      }
-                    }
+                    // Consumer status is updated by backend assignment status endpoint.
                   } else {
-                    failed++;
-                    console.warn('⚠️ Failed to sync assignment:', assignmentId);
+                    const msg = (response?.message || '').toString().toLowerCase();
+                    if (msg.includes('already paid')) {
+                      synced++;
+                      console.log('ℹ️ Skipped sync for already paid account:', assignmentId);
+                    } else {
+                      failed++;
+                      console.warn('⚠️ Failed to sync assignment:', assignmentId);
+                    }
                   }
                 } catch (error) {
-                  failed++;
-                  console.error('❌ Error syncing assignment:', assignment.id, error);
+                  const msg = (error?.message || '').toString().toLowerCase();
+                  if (msg.includes('already paid')) {
+                    synced++;
+                    console.log('ℹ️ Skipped sync for already paid account:', assignment.id);
+                  } else {
+                    failed++;
+                    console.error('❌ Error syncing assignment:', assignment.id, error);
+                  }
                 }
               }
 
@@ -1169,6 +1554,13 @@ export default function DisconnectorAssignments({ userData, onBack }) {
         <TouchableOpacity style={styles.secondaryButton} onPress={handleDownload} disabled={isLoading}>
           <Text style={styles.secondaryButtonText}>Download Latest</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.secondaryButton, styles.clearButton]}
+          onPress={handleClearAllAssignments}
+          disabled={isLoading || isProcessing || assignments.length === 0}
+        >
+          <Text style={styles.clearButtonText}>Clear All</Text>
+        </TouchableOpacity>
         <TouchableOpacity 
           style={[styles.secondaryButton, styles.syncButton]} 
           onPress={handleRetryFailedSync} 
@@ -1191,11 +1583,11 @@ export default function DisconnectorAssignments({ userData, onBack }) {
             autoCapitalize="none"
             autoCorrect={false}
           />
-          {searchQuery.trim().length > 0 && (
-            <Text style={styles.searchHint}>
-              {filteredAssignments.length} of {zoneFilteredAssignments.length} assignment(s)
-            </Text>
-          )}
+          <Text style={styles.searchHint}>
+            {searchQuery.trim().length > 0
+              ? `${filteredAssignments.length} of ${zoneFilteredAssignments.length} assignment(s)`
+              : `${zoneFilteredAssignments.length} assignment(s)`}
+          </Text>
         </View>
       )}
 
@@ -1270,7 +1662,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                   <Text style={styles.detailText}>
                     Account No.:{' '}
                     <Text style={styles.detailValue}>
-                      {assignment.account_number || assignment.accountNumber || '—'}
+                      {assignment.account_no || assignment.account_number || assignment.accountNumber || '—'}
                     </Text>
                   </Text>
 
@@ -1330,60 +1722,119 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                   <View style={styles.paidMessageContainer}>
                     <Text style={styles.paidMessageText}>This consumer has paid – do not disconnect.</Text>
                   </View>
-                ) : isSelected ? (() => {
-                  const rawStatus = assignment.status || assignment.assignment_status || '';
-                  const status = normalize(rawStatus);
-                  const isDisconnected = rawStatus === 'X' || (status.includes('disconnected') && !status.includes('reconnected'));
-                  
-                  return (
-                    <View style={styles.actionButtonsContainer}>
-                      {isDisconnected ? (
-                        // Show Reconnect button if already disconnected
-                        <>
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.reconnectBtn]}
-                            onPress={() => handleReconnect(assignment)}
-                            disabled={isProcessing}
-                          >
-                            <Text style={styles.actionBtnText}>Reconnect</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.cancelBtn]}
-                            onPress={handleCancel}
-                            disabled={isProcessing}
-                          >
-                            <Text style={styles.actionBtnText}>Cancel</Text>
-                          </TouchableOpacity>
-                        </>
-                      ) : (
-                        // Show Disconnect button if not disconnected
-                        <>
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.disconnectBtn]}
-                            onPress={() => handleDisconnect(assignment)}
-                            disabled={isProcessing}
-                          >
-                            <Text style={styles.actionBtnText}>Disconnect</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.actionBtn, styles.cancelBtn]}
-                            onPress={handleCancel}
-                            disabled={isProcessing}
-                          >
-                            <Text style={styles.actionBtnText}>Cancel</Text>
-                          </TouchableOpacity>
-                        </>
-                      )}
+                ) : isSelected ? (
+                  <>
+                    <View style={styles.agingInfoContainer}>
+                      <View style={styles.readingMetaRow}>
+                        <Text style={styles.readingMetaLabel}>Meter Number:</Text>
+                        <Text style={styles.readingMetaValue}>
+                          {assignment.meter_number || assignment.meterNumber || assignment.consumer?.meter_number || assignment.consumer?.meterNumber || '—'}
+                        </Text>
+                      </View>
+                      <View style={styles.readingMetaRow}>
+                        <Text style={styles.readingMetaLabel}>Last Reading:</Text>
+                        <Text style={styles.readingMetaValue}>
+                          {formatNumber(
+                            assignment.last_reading ??
+                            assignment.lastReading ??
+                            assignment.previous_reading ??
+                            assignment.previousReading ??
+                            assignment.current_reading ??
+                            assignment.currentReading ??
+                            assignment.reading ??
+                            assignment.consumer?.last_reading ??
+                            assignment.consumer?.lastReading ??
+                            assignment.consumer?.previous_reading ??
+                            assignment.consumer?.previousReading ??
+                            null
+                          )}
+                        </Text>
+                      </View>
+                      <View style={styles.agingHeaderRow}>
+                        <Text style={styles.agingHeaderCell}>_30</Text>
+                        <Text style={styles.agingHeaderCell}>_60</Text>
+                        <Text style={styles.agingHeaderCell}>_90</Text>
+                        <Text style={styles.agingHeaderCell}>_OVER90</Text>
+                        <Text style={styles.agingHeaderCell}>PREV YEAR</Text>
+                        <Text style={styles.agingHeaderCell}>BALANCE</Text>
+                      </View>
+                      <View style={styles.agingValueRow}>
+                        <Text style={styles.agingValueCell}>
+                          {formatMoney(assignment._30 ?? assignment.thirty_days ?? assignment.arrears_30 ?? 0)}
+                        </Text>
+                        <Text style={styles.agingValueCell}>
+                          {formatMoney(assignment._60 ?? assignment.sixty_days ?? assignment.arrears_60 ?? 0)}
+                        </Text>
+                        <Text style={styles.agingValueCell}>
+                          {formatMoney(assignment._90 ?? assignment.ninety_days ?? assignment.arrears_90 ?? 0)}
+                        </Text>
+                        <Text style={styles.agingValueCell}>
+                          {formatMoney(assignment._OVER90 ?? assignment.over_90 ?? assignment.over90 ?? assignment.arrears_over_90 ?? 0)}
+                        </Text>
+                        <Text style={styles.agingValueCell}>
+                          {formatMoney(assignment.PREV_YEAR ?? assignment.prev_year ?? assignment.previous_year ?? 0)}
+                        </Text>
+                        <Text style={[styles.agingValueCell, styles.agingBalanceValue]}>
+                          {formatMoney(computeDisconnectorAgingBalance(assignment))}
+                        </Text>
+                      </View>
                     </View>
-                  );
-                })() : null}
+                    {(() => {
+                      const rawStatus = assignment.status || assignment.assignment_status || '';
+                      const status = normalize(rawStatus);
+                      const isDisconnected = rawStatus === 'X' || (status.includes('disconnected') && !status.includes('reconnected'));
+                      
+                      return (
+                        <View style={styles.actionButtonsContainer}>
+                          {isDisconnected ? (
+                            // Show Reconnect button if already disconnected
+                            <>
+                              <TouchableOpacity
+                                style={[styles.actionBtn, styles.reconnectBtn]}
+                                onPress={() => handleReconnect(assignment)}
+                                disabled={isProcessing}
+                              >
+                                <Text style={styles.actionBtnText}>Reconnect</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.actionBtn, styles.cancelBtn]}
+                                onPress={handleCancel}
+                                disabled={isProcessing}
+                              >
+                                <Text style={styles.actionBtnText}>Cancel</Text>
+                              </TouchableOpacity>
+                            </>
+                          ) : (
+                            // Show Disconnect button if not disconnected
+                            <>
+                              <TouchableOpacity
+                                style={[styles.actionBtn, styles.disconnectBtn]}
+                                onPress={() => handleDisconnect(assignment)}
+                                disabled={isProcessing}
+                              >
+                                <Text style={styles.actionBtnText}>Disconnect</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.actionBtn, styles.cancelBtn]}
+                                onPress={handleCancel}
+                                disabled={isProcessing}
+                              >
+                                <Text style={styles.actionBtnText}>Cancel</Text>
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                      );
+                    })()}
+                  </>
+                ) : null}
               </View>
             );
           })}
         </View>
       )}
     </ScrollView>
-
+ 
     <Modal
       visible={showZoneDropdown}
       transparent
@@ -1534,6 +1985,15 @@ const styles = StyleSheet.create({
   syncButton: {
     borderColor: '#4CAF50',
     backgroundColor: '#f1f8f4',
+  },
+  clearButton: {
+    borderColor: '#dc3545',
+    backgroundColor: '#fff5f5',
+  },
+  clearButtonText: {
+    color: '#dc3545',
+    fontWeight: 'bold',
+    fontSize: 12,
   },
   zoneFilterSection: {
     paddingHorizontal: 20,
@@ -1808,6 +2268,66 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  agingInfoContainer: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#dbe3ef',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#f8fbff',
+  },
+  readingMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e6edf7',
+    backgroundColor: '#fff',
+  },
+  readingMetaLabel: {
+    fontSize: 13,
+    color: '#596170',
+    fontWeight: '700',
+  },
+  readingMetaValue: {
+    fontSize: 13,
+    color: '#2f3743',
+    fontWeight: '700',
+  },
+  agingHeaderRow: {
+    flexDirection: 'row',
+    backgroundColor: '#eaf1f9',
+  },
+  agingValueRow: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+  },
+  agingHeaderCell: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 11,
+    color: '#5f6773',
+    fontWeight: '700',
+    paddingVertical: 8,
+    borderRightWidth: 1,
+    borderRightColor: '#dbe3ef',
+  },
+  agingValueCell: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#2f3743',
+    fontWeight: '600',
+    paddingVertical: 8,
+    borderRightWidth: 1,
+    borderRightColor: '#eef2f7',
+  },
+  agingBalanceValue: {
+    color: '#1b5e20',
+    fontWeight: '700',
   },
   metaRow: {
     flexDirection: 'row',

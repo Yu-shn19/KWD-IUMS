@@ -170,6 +170,34 @@ async function requestAndroidBtPermissions() {
 
 let isInitialized = false;
 let currentConnection = null;
+let cachedLogoBase64 = null;
+let cachedLogoKey = null;
+let connectionIdleTimer = null;
+const CONNECTION_REUSE_IDLE_MS = 45000;
+
+function clearConnectionIdleTimer() {
+	if (connectionIdleTimer) {
+		clearTimeout(connectionIdleTimer);
+		connectionIdleTimer = null;
+	}
+}
+
+function scheduleConnectionClose() {
+	clearConnectionIdleTimer();
+	connectionIdleTimer = setTimeout(async () => {
+		try {
+			if (BLEPrinter && BLEPrinter.closeConn) {
+				console.log('Closing idle printer connection after reuse window');
+				await BLEPrinter.closeConn();
+			}
+		} catch (e) {
+			console.warn('Idle close connection error:', e?.message || e);
+		} finally {
+			currentConnection = null;
+			connectionIdleTimer = null;
+		}
+	}, CONNECTION_REUSE_IDLE_MS);
+}
 
 async function ensureInit() {
 	if (!BLEPrinter) return false;
@@ -196,6 +224,7 @@ async function ensureInit() {
 
 async function closeExistingConnection() {
 	if (!BLEPrinter) return;
+	clearConnectionIdleTimer();
 	try {
 		console.log('Closing any existing printer connection...');
 		await BLEPrinter.closeConn();
@@ -317,6 +346,13 @@ export const connectToPrinter = async (target, retryCount = 0) => {
 			Alert.alert('Select Printer', 'No printer address provided. Printer object: ' + JSON.stringify(target));
 			return false;
 		}
+
+		// Reuse active connection for consecutive prints to reduce latency
+		if (currentConnection === macAddress) {
+			console.log('Reusing active printer connection:', macAddress);
+			clearConnectionIdleTimer();
+			return true;
+		}
 		
 		// Close any existing connection first
 		await closeExistingConnection();
@@ -347,6 +383,7 @@ export const connectToPrinter = async (target, retryCount = 0) => {
 				await BLEPrinter.connectPrinter(macAddress);
 				
 				currentConnection = macAddress;
+				clearConnectionIdleTimer();
 				console.log('Successfully connected to printer');
 				// Wait a moment for connection to stabilize
 				await new Promise(resolve => setTimeout(resolve, 500));
@@ -546,8 +583,30 @@ function buildEscPosReceipt(receipt, options = {}) {
 		
 		return lines;
 	};
-	
-	push(formatField('Period', receipt.periodCovered));
+
+	// Period line: STRICTLY from meter_reading_schedules columns:
+	// previous_reading_date - reading_date
+	const formatPeriodDateEscPos = (value) => {
+		if (value == null || value === '') return '-';
+		const d = new Date(value);
+		if (Number.isNaN(d.getTime())) return '-';
+		return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+	};
+	const periodStartRaw =
+		receipt.previous_reading_date ??
+		receipt.previousReadingDate ??
+		receipt.customer?.previous_reading_date ??
+		receipt.customer?.previousReadingDate ??
+		null;
+	const periodEndRaw =
+		receipt.reading_date ??
+		receipt.scheduleReadingDate ??
+		receipt.readingDateRaw ??
+		receipt.customer?.reading_date ??
+		receipt.customer?.scheduleReadingDate ??
+		null;
+	const periodCoveredLine = `${formatPeriodDateEscPos(periodStartRaw)} - ${formatPeriodDateEscPos(periodEndRaw)}`;
+	push(formatField('Period', periodCoveredLine));
 	push(formatField('Zone', receipt.zone) + `  Type: ${receipt.consumerType}`);
 	push(formatField('Sequence', receipt.sequence));
 	push(formatField('Account Number', receipt.accountNumber));
@@ -693,6 +752,10 @@ async function loadLogoBase64ForPrinting() {
 
 		// 1) Try custom logo if the user saved one (already a file/URI)
 		const savedLogo = await receiptLogoStorage.getLogo();
+		const logoKey = savedLogo || '__default_asset__';
+		if (cachedLogoBase64 && cachedLogoKey === logoKey) {
+			return cachedLogoBase64;
+		}
 		if (savedLogo) {
 			console.log('Using saved receipt logo URI:', savedLogo);
 			try {
@@ -701,6 +764,8 @@ async function loadLogoBase64ForPrinting() {
 				});
 				if (base64 && base64.length > 100) {
 					console.log('Custom logo converted to base64, length:', base64.length);
+					cachedLogoBase64 = base64;
+					cachedLogoKey = logoKey;
 					return base64;
 				} else {
 					console.warn('Custom logo base64 too short, trying default logo');
@@ -729,6 +794,8 @@ async function loadLogoBase64ForPrinting() {
 				
 				if (assetBase64 && assetBase64.length > 100) {
 					console.log('SUCCESS: WD-logo.jpg converted to base64, length:', assetBase64.length);
+					cachedLogoBase64 = assetBase64;
+					cachedLogoKey = logoKey;
 					return assetBase64;
 				} else {
 					console.warn('WARNING: Logo base64 conversion returned invalid result. Length:', assetBase64?.length || 0);
@@ -756,6 +823,8 @@ async function loadLogoBase64ForPrinting() {
 					const trimmed = base64Text.trim();
 					if (trimmed && trimmed.length > 100) {
 						console.log('SUCCESS: Loaded logo from base64 text file, length:', trimmed.length);
+						cachedLogoBase64 = trimmed;
+						cachedLogoKey = logoKey;
 						return trimmed;
 					}
 				}
@@ -910,14 +979,8 @@ export const printReceiptEscPos = async (receiptData, targetPrinter) => {
 		}
 		return false;
 	} finally {
-		// Always try to disconnect gracefully
-		try {
-			if (BLEPrinter && BLEPrinter.closeConn) {
-				BLEPrinter.closeConn();
-			}
-		} catch (disconnectError) {
-			console.warn('Error disconnecting printer:', disconnectError);
-		}
+		// Keep connection warm briefly for faster consecutive prints.
+		scheduleConnectionClose();
 	}
 };
 

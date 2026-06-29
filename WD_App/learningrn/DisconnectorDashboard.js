@@ -1,10 +1,37 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ScrollView, View, Text, StyleSheet, TouchableOpacity, Alert, AppState, Modal, FlatList } from 'react-native';
-import { routesStorage, tokenStorage, userStorage, disconnectorPaidStorage } from './services/storage';
+import { routesStorage, tokenStorage, userStorage, disconnectorPaidStorage, ROUTES_BUCKET_DISCONNECTOR } from './services/storage';
 import { disconnectorAPI } from './services/api';
 import { networkStatus } from './services/offlineQueue';
 
 const normalize = (value) => (value || '').toString().toLowerCase();
+
+const formatDate = (value) => {
+  if (!value) return '—';
+  try {
+    return new Date(value).toLocaleDateString();
+  } catch (error) {
+    return String(value);
+  }
+};
+
+/** Paid date from API field, order notes, or cancellation update time. */
+const getPaidAtFromItem = (item) => {
+  if (!item) return null;
+  const direct = item.paid_at ?? item.paidAt ?? item.payment_date ?? item.paymentDate;
+  if (direct) return direct;
+  const notes = (item.notes || '').toString();
+  const match = notes.match(/paid on (\d{4}-\d{2}-\d{2})/i);
+  if (match) return match[1];
+  return item.updated_at ?? item.updatedAt ?? null;
+};
+
+const formatPaidConsumerLine = (item) => {
+  const account = item.account_no || '—';
+  const name = item.account_name ? ` (${item.account_name})` : '';
+  const paidLabel = formatDate(getPaidAtFromItem(item));
+  return `${account}${name} — paid ${paidLabel}`;
+};
 
 const extractAssignments = (records = []) => {
   return records.filter((item) => {
@@ -107,7 +134,7 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
 
       // When offline: use only cached data so counts still display
       if (!online) {
-        const stored = await routesStorage.getRoutes();
+        const stored = await routesStorage.getRoutes(ROUTES_BUCKET_DISCONNECTOR);
         const cachedAssignments = extractAssignments(stored || []);
         setStats(categorizeAssignments(cachedAssignments));
         const cachedPaidList = await disconnectorPaidStorage.getPaidList();
@@ -138,30 +165,19 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
         }
       }
 
-      // Always merge with local storage to ensure disconnected assignments are included
-      const stored = await routesStorage.getRoutes();
-      const cachedAssignments = extractAssignments(stored || []);
-      
-      // Merge API assignments with cached assignments
-      // Priority: API data for new/updated assignments, cached data for disconnected/completed ones
-      const mergedAssignments = [...assignmentsList];
-      const apiIdentifiers = new Set();
-      assignmentsList.forEach((item) => {
-        const z = item.zone_code ?? item.zone;
-        const identifier = item.id || item.schedule_id || `${item.account_number}-${z}`;
-        apiIdentifiers.add(identifier);
-      });
-      
-      // Add cached assignments that aren't in API response (e.g., disconnected ones)
-      cachedAssignments.forEach((cachedItem) => {
-        const z = cachedItem.zone_code ?? cachedItem.zone;
-        const identifier = cachedItem.id || cachedItem.schedule_id || `${cachedItem.account_number}-${z}`;
-        if (!apiIdentifiers.has(identifier)) {
-          mergedAssignments.push(cachedItem);
-        }
-      });
-
-      const assignments = extractAssignments(mergedAssignments);
+      // Online mode should use fresh API assignments only.
+      // Fallback to cached list only when API returned no assignments.
+      const assignments = extractAssignments(
+        Array.isArray(assignmentsList) && assignmentsList.length > 0
+          ? assignmentsList
+          : (await routesStorage.getRoutes(ROUTES_BUCKET_DISCONNECTOR)) || []
+      );
+      const latestAssignmentMs = (assignments || []).reduce((max, item) => {
+        const rawTs = item?.assigned_at || item?.created_at || item?.updated_at || null;
+        if (!rawTs) return max;
+        const ms = new Date(rawTs).getTime();
+        return Number.isFinite(ms) && ms > max ? ms : max;
+      }, 0);
       const totals = categorizeAssignments(assignments);
 
       console.log('DisconnectorDashboard Stats:', {
@@ -181,25 +197,33 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
       // Fetch orders cancelled because consumer paid (do not disconnect these); cache for offline
       if (disconnectorId && token) {
         try {
+          const paidParams = { disconnector_id: disconnectorId };
+          if (latestAssignmentMs > 0) {
+            paidParams.since = new Date(latestAssignmentMs).toISOString();
+          }
           const res = await disconnectorAPI.getCancelledDueToPayment(
-            { disconnector_id: disconnectorId },
+            paidParams,
             token
           );
           const list = res?.cancelled_due_to_payment || [];
           const paidList = Array.isArray(list) ? list : [];
+          // Use the raw paid list for notification + count.
+          // Filtering by current assignments can hide valid "already paid" notifications
+          // because the backend marks them as cancelled and they may disappear from active assignments.
           setCancelledDueToPayment(paidList);
           await disconnectorPaidStorage.savePaidList(paidList);
         } catch (e) {
           console.warn('DisconnectorDashboard cancelled-due-to-payment:', e);
           const cachedPaid = await disconnectorPaidStorage.getPaidList();
-          setCancelledDueToPayment(Array.isArray(cachedPaid) ? cachedPaid : []);
+          const safeCachedPaid = Array.isArray(cachedPaid) ? cachedPaid : [];
+          setCancelledDueToPayment(safeCachedPaid);
         }
       }
     } catch (error) {
       console.error('DisconnectorDashboard loadStats error:', error);
       // On error, try to load from local storage as fallback
       try {
-        const stored = await routesStorage.getRoutes();
+        const stored = await routesStorage.getRoutes(ROUTES_BUCKET_DISCONNECTOR);
         const assignments = extractAssignments(stored || []);
         setStats(categorizeAssignments(assignments));
       } catch (fallbackError) {
@@ -245,7 +269,7 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
       const n = cancelledDueToPayment.length;
       const names = cancelledDueToPayment
         .slice(0, 3)
-        .map((c) => c.account_no + (c.account_name ? ` (${c.account_name})` : ''))
+        .map((c) => formatPaidConsumerLine(c))
         .join('\n');
       Alert.alert(
         'Do not disconnect',
@@ -278,7 +302,7 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
     const paidCount = cancelledDueToPayment.length;
     const paidMsg =
       paidCount > 0
-        ? `• ${paidCount} consumer(s) have paid – do not disconnect them.${paidCount <= 3 ? '\n  ' + cancelledDueToPayment.slice(0, 3).map((c) => c.account_no + (c.account_name ? ` (${c.account_name})` : '')).join('\n  ') : ''}`
+        ? `• ${paidCount} consumer(s) have paid – do not disconnect them.${paidCount <= 3 ? '\n  ' + cancelledDueToPayment.slice(0, 3).map((c) => formatPaidConsumerLine(c)).join('\n  ') : ''}`
         : '';
     const message = [pendingMsg, paidMsg].filter(Boolean).join('\n\n') || 'No new notifications. Check View Assignments for your tasks.';
     Alert.alert('Notifications', message, [{ text: 'OK' }]);
@@ -355,8 +379,11 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           </Text>
           {cancelledDueToPayment.slice(0, 10).map((item) => (
             <View key={item.id || item.account_no} style={styles.noticeRow}>
-              <Text style={styles.noticeAccount}>{item.account_no}</Text>
-              <Text style={styles.noticeName} numberOfLines={1}>{item.account_name || '—'}</Text>
+              <View style={styles.noticeRowLeft}>
+                <Text style={styles.noticeAccount}>{item.account_no}</Text>
+                <Text style={styles.noticeName} numberOfLines={1}>{item.account_name || '—'}</Text>
+              </View>
+              <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
             </View>
           ))}
           {cancelledDueToPayment.length > 10 && (
@@ -442,10 +469,13 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           contentContainerStyle={styles.paidModalListContent}
           renderItem={({ item }) => (
             <View style={styles.paidModalRow}>
-              <Text style={styles.noticeAccount}>{item.account_no}</Text>
-              <Text style={styles.paidModalName} numberOfLines={3}>
-                {item.account_name || '—'}
-              </Text>
+              <View style={styles.paidModalRowMain}>
+                <Text style={styles.noticeAccount}>{item.account_no}</Text>
+                <Text style={styles.paidModalName} numberOfLines={3}>
+                  {item.account_name || '—'}
+                </Text>
+              </View>
+              <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
             </View>
           )}
           ItemSeparatorComponent={() => <View style={styles.paidModalSeparator} />}
@@ -621,6 +651,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0,0,0,0.06)',
   },
+  noticeRowLeft: {
+    flex: 1,
+    marginRight: 8,
+  },
+  noticePaidDate: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#2e7d32',
+  },
   noticeAccount: {
     fontSize: 14,
     fontWeight: '600',
@@ -691,7 +730,12 @@ const styles = StyleSheet.create({
   paidModalRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    justifyContent: 'space-between',
     paddingVertical: 10,
+  },
+  paidModalRowMain: {
+    flex: 1,
+    marginRight: 8,
   },
   paidModalName: {
     fontSize: 14,

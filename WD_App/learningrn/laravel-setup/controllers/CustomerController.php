@@ -26,7 +26,10 @@ class CustomerController extends Controller
                     DB::raw('COALESCE(address, customer_address, "") as address'),
                     DB::raw('COALESCE(meter_number, meterNumber, meter_no) as meterNumber'),
                     DB::raw('COALESCE(last_reading, lastReading, previous_reading, 0) as lastReading'),
-                    DB::raw('COALESCE(estimated_reading, estimatedReading, estimated_reading, 0) as estimatedReading')
+                    DB::raw('COALESCE(estimated_reading, estimatedReading, estimated_reading, 0) as estimatedReading'),
+                    DB::raw('COALESCE(previous_reading_date, previousReadingDate) as previous_reading_date'),
+                    DB::raw('COALESCE(reading_date, bill_date, readingDate) as reading_date'),
+                    DB::raw('COALESCE(due_date, dueDate) as due_date')
                 )
                 ->orderBy('id')
                 ->get();
@@ -48,7 +51,10 @@ class CustomerController extends Controller
                         DB::raw('COALESCE(address, "") as address'),
                         DB::raw('COALESCE(meterNumber, meter_number) as meterNumber'),
                         DB::raw('COALESCE(lastReading, last_reading, 0) as lastReading'),
-                        DB::raw('COALESCE(estimatedReading, estimated_reading, 0) as estimatedReading')
+                        DB::raw('COALESCE(estimatedReading, estimated_reading, 0) as estimatedReading'),
+                        DB::raw('COALESCE(previous_reading_date, previousReadingDate) as previous_reading_date'),
+                        DB::raw('COALESCE(reading_date, bill_date, readingDate) as reading_date'),
+                        DB::raw('COALESCE(due_date, dueDate) as due_date')
                     )
                     ->orderBy('id')
                     ->get();
