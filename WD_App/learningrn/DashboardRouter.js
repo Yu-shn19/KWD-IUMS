@@ -29,10 +29,6 @@ export default function DashboardRouter({ onLogout, userData }) {
     setCurrentScreen('readAndBill');
   };
 
-  const handleMobilePayment = () => {
-    Alert.alert('Not Available', 'Mobile Payment is not available for now');
-  };
-
   const handleRetrieveZone = () => {
     setCurrentScreen('retrieveZone');
   };
@@ -91,7 +87,6 @@ export default function DashboardRouter({ onLogout, userData }) {
   };
 
   // Render different screens based on currentScreen state
-  // Mobile Payment is temporarily disabled
 
   if (isDisconnector) {
     if (currentScreen === 'disconnectorAssignments') {
@@ -197,16 +192,6 @@ export default function DashboardRouter({ onLogout, userData }) {
           <View style={styles.buttonTextContainer}>
             <Text style={styles.buttonTitle}>Save Coordinates</Text>
             <Text style={styles.buttonSubtitle}>Save latitude and longitude for a consumer</Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionButton} onPress={handleMobilePayment}>
-          <View style={styles.buttonIcon}>
-            <Text style={styles.iconText}>💳</Text>
-          </View>
-          <View style={styles.buttonTextContainer}>
-            <Text style={styles.buttonTitle}>Mobile Payment</Text>
-            <Text style={styles.buttonSubtitle}>Process payments and transactions</Text>
           </View>
         </TouchableOpacity>
 

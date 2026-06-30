@@ -1,7 +1,7 @@
 export const API_CONFIG = {
   
   development: {
-    baseURL: 'http://localhost:8000/api',
+    baseURL: 'https://teschies.com/api',
     timeout: 10000,
   },
   

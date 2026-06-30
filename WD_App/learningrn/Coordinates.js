@@ -10,12 +10,14 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  Linking,
+  Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { consumerAPI } from './services/api';
 import { tokenStorage, routesStorage } from './services/storage';
 
-// Normalize a route item to { account_no, account_name, display, id } for display and selection
+
 const routeToSuggestion = (r, idx) => {
   const accountNo = r.account_number ?? r.accountNumber ?? '';
   const accountName = r.account_name ?? r.name ?? '';
@@ -27,7 +29,7 @@ const routeToSuggestion = (r, idx) => {
   };
 };
 
-// Filter routes by search query (account number, name, meter number)
+
 const filterRoutesByQuery = (routes, query) => {
   if (!routes || routes.length === 0 || !query || query.length < 2) return [];
   const q = query.trim().toUpperCase();
@@ -71,7 +73,32 @@ export default function Coordinates({ onBack }) {
       const routes = await routesStorage.getRoutes();
       const list = Array.isArray(routes) ? routes : [];
       const filtered = filterRoutesByQuery(list, trimmed);
-      const mapped = filtered.slice(0, 50).map((r, idx) => routeToSuggestion(r, idx));
+      let mapped = filtered.slice(0, 50).map((r, idx) => routeToSuggestion(r, idx));
+
+      // Local SQLite routes only include downloaded assignments; if empty or no match, ask the server.
+      if (mapped.length === 0) {
+        try {
+          const token = await tokenStorage.getToken();
+          if (token) {
+            const apiRes = await consumerAPI.getSuggestions(trimmed, token);
+            const data = Array.isArray(apiRes?.data) ? apiRes.data : [];
+            mapped = data.slice(0, 50).map((row, idx) => ({
+              id: row.id != null ? row.id : `api-${idx}`,
+              account_no: row.account_no ?? '',
+              account_name: row.account_name ?? '',
+              display:
+                row.display ||
+                `${row.account_no ?? ''} - ${row.account_name ?? ''}`.trim() ||
+                row.account_no ||
+                row.account_name ||
+                '—',
+            }));
+          }
+        } catch (apiErr) {
+          console.warn('Save Coordinates: suggestions API failed', apiErr?.message || apiErr);
+        }
+      }
+
       setSuggestions(mapped);
       setSuggestionsVisible(mapped.length > 0);
     } catch (err) {
@@ -107,57 +134,104 @@ export default function Coordinates({ onBack }) {
       Alert.alert('Select consumer', 'Search and select a consumer first.');
       return false;
     }
-    const token = await tokenStorage.getToken();
-    const res = await consumerAPI.saveConsumerCoordinates(acc, latitude, longitude, token);
-    if (res?.success) {
-      setLastCoords({ latitude, longitude });
-      Alert.alert('Saved', res.message || `Coordinates saved for ${accountName || acc}.`);
-      return true;
+    try {
+      const token = await tokenStorage.getToken();
+      const res = await consumerAPI.saveConsumerCoordinates(acc, latitude, longitude, token);
+      if (res?.success) {
+        setLastCoords({ latitude, longitude });
+        Alert.alert('Saved', res.message || `Coordinates saved for ${accountName || acc}.`);
+        return true;
+      }
+      Alert.alert('Error', res?.message || 'Failed to save coordinates.');
+      return false;
+    } catch (err) {
+      Alert.alert('Error', err?.message || 'Failed to save coordinates.');
+      return false;
     }
-    Alert.alert('Error', res?.message || 'Failed to save coordinates.');
-    return false;
   };
 
-  // Get current location with expo-location and save (no WebView to avoid crashes)
-  const handleGetLocationViaGoogleMaps = async () => {
-    const acc = (accountNo || '').trim();
-    if (!acc) {
-      Alert.alert('Select consumer', 'Search and select a consumer first.');
-      return;
+  /** Request a fresh GPS/network fix (with timeout), then optional last-known fallback. */
+  const fetchDeviceCoordinates = async () => {
+    const servicesOn = await Location.hasServicesEnabledAsync();
+    if (!servicesOn) {
+      throw new Error(
+        'Location services are off. Turn on location (GPS) in your device settings, then try again.'
+      );
     }
+
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      const openSettings = {
+        text: 'Open settings',
+        onPress: () => Linking.openSettings().catch(() => {}),
+      };
+      Alert.alert(
+        'Permission needed',
+        'Allow location access for this app to capture your current coordinates.',
+        [openSettings, { text: 'OK' }]
+      );
+      throw new Error('PERMISSION_DENIED');
+    }
+
+    const timeoutMs = Platform.OS === 'android' ? 35000 : 25000;
+    const positionOptions = {
+      accuracy: Location.Accuracy.High,
+      ...(Platform.OS === 'android' ? { mayShowUserSettingsDialog: true } : {}),
+    };
+
+    const withTimeout = (promise, ms, message) =>
+      Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+      ]);
+
+    try {
+      const location = await withTimeout(
+        Location.getCurrentPositionAsync(positionOptions),
+        timeoutMs,
+        'Location request timed out. Try outdoors, wait for GPS, or enter coordinates manually.'
+      );
+      const lat = location?.coords?.latitude;
+      const lng = location?.coords?.longitude;
+      if (lat == null || lng == null || typeof lat !== 'number' || typeof lng !== 'number') {
+        throw new Error('Invalid coordinates from device.');
+      }
+      return { latitude: lat, longitude: lng };
+    } catch (primaryErr) {
+      const last = await Location.getLastKnownPositionAsync({
+        maxAge: 10 * 60 * 1000,
+      });
+      const lat = last?.coords?.latitude;
+      const lng = last?.coords?.longitude;
+      if (lat != null && lng != null && typeof lat === 'number' && typeof lng === 'number') {
+        return { latitude: lat, longitude: lng };
+      }
+      throw primaryErr;
+    }
+  };
+
+  // Device GPS/network via expo-location; saves to API when a consumer is selected.
+  const handleGetCurrentLocationAndSave = async () => {
     setSaving(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
+      const { latitude, longitude } = await fetchDeviceCoordinates();
+      setManualLat(String(latitude));
+      setManualLong(String(longitude));
+
+      const acc = (accountNo || '').trim();
+      if (!acc) {
         Alert.alert(
-          'Permission needed',
-          'Location permission is required. You can enter coordinates manually below.'
+          'Location captured',
+          'Latitude and longitude are filled below. Select a consumer, then tap this button again to save to the server—or use Save entered coordinates.'
         );
         return;
       }
-      // Timeout so we don't hang if GPS is slow/unavailable
-      const timeoutMs = 20000;
-      const locationPromise = Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-        maximumAge: 60000,
-      });
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Location request timed out. Please try again or enter coordinates manually.')), timeoutMs)
-      );
-      const location = await Promise.race([locationPromise, timeoutPromise]);
-      const latitude = location?.coords?.latitude;
-      const longitude = location?.coords?.longitude;
-      if (latitude == null || longitude == null || typeof latitude !== 'number' || typeof longitude !== 'number') {
-        Alert.alert('Location error', 'Could not get valid coordinates. Try again or enter manually.');
-        return;
-      }
-      const saved = await saveCoordinatesToApi(latitude, longitude);
-      if (saved) {
-        setManualLat(String(latitude));
-        setManualLong(String(longitude));
-      }
+
+      await saveCoordinatesToApi(latitude, longitude);
     } catch (err) {
-      const message = err?.message || 'Could not get location. Try entering coordinates manually.';
+      if (err?.message === 'PERMISSION_DENIED') return;
+      const message =
+        err?.message || 'Could not get location. Try entering coordinates manually.';
       Alert.alert('Location error', message);
     } finally {
       setSaving(false);
@@ -246,8 +320,8 @@ export default function Coordinates({ onBack }) {
 
         <TouchableOpacity
           style={[styles.submitButton, saving && styles.submitButtonDisabled]}
-          onPress={handleGetLocationViaGoogleMaps}
-          disabled={saving || !accountNo}
+          onPress={handleGetCurrentLocationAndSave}
+          disabled={saving}
         >
           {saving ? (
             <ActivityIndicator color="#fff" />

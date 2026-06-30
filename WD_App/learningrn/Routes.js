@@ -1,16 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Image, ScrollView, Alert, Linking, ActivityIndicator, Modal, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { routesAPI } from './services/api';
+import * as Location from 'expo-location';
+import { routesAPI, consumerAPI } from './services/api';
 import { routesStorage, tokenStorage, userStorage } from './services/storage';
 
 export default function Routes({ onBack }) {
   const [customers, setCustomers] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showMapModal, setShowMapModal] = useState(false);
   const [customerLocation, setCustomerLocation] = useState(null);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
+  /** Row busy state: which customer key and which action (view saved map vs capture GPS). */
+  const [locationAction, setLocationAction] = useState(null);
 
   const loadRoutes = async (showAlerts = false) => {
     setIsLoading(true);
@@ -93,128 +94,176 @@ export default function Routes({ onBack }) {
     return item.account_name || item.name || fallback;
   };
 
-  const handleCustomerPress = async (customer) => {
-    console.log('🚀 handleCustomerPress called with customer:', customer);
-    
+  const customerRowKey = (customer, index) =>
+    String(customer?.id ?? customer?.account_number ?? customer?.accountNumber ?? customer?.account_no ?? index);
+
+  /** Load saved lat/lng from consumer_zone (via API). */
+  const fetchSavedCoordinatesForCustomer = async (customer) => {
+    const accountNumber = customer.account_number || customer.accountNumber || customer.account_no;
+    const name = formatCustomerName(customer, 'Customer');
+    const address = customer.address || customer.customer_address || customer.address1 || '';
+
+    if (!accountNumber || accountNumber === '-' || accountNumber === 'N/A' || accountNumber === 'undefined') {
+      return null;
+    }
+
+    const token = await tokenStorage.getToken();
+    if (!token) {
+      return null;
+    }
+
     try {
-      const address = customer.address || customer.customer_address || '';
-      const name = formatCustomerName(customer, 'Customer');
-      
-      // Get account number - try multiple field names
-      const accountNumber = customer.account_number || customer.accountNumber || customer.account_no;
-      
-      console.log('📍 Getting location for customer:', {
-        name: name,
-        accountNumber: accountNumber,
-        address: address
-      });
-      
-      // ALWAYS fetch latitude/longitude from consumer_zone table (source of truth)
-      let lat = null;
-      let lng = null;
-      
-      if (accountNumber && accountNumber !== '-' && accountNumber !== 'N/A' && accountNumber !== 'undefined') {
-        try {
-          const token = await tokenStorage.getToken();
-          if (token) {
-            console.log('🔍 Fetching consumer_zone data for account:', accountNumber);
-            
-            // Add timeout to prevent hanging (5 seconds)
-            const fetchPromise = routesAPI.getConsumerZoneByAccount(accountNumber, token);
-            const timeoutPromise = new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('API timeout after 5 seconds')), 5000)
-            );
-            
-            const consumerZone = await Promise.race([fetchPromise, timeoutPromise]);
-            
-            if (consumerZone && consumerZone.latitude && consumerZone.longitude) {
-              // Extract latitude/longitude from consumer_zone table (source of truth)
-              // These coordinates come directly from the consumer_zone database table
-              lat = parseFloat(consumerZone.latitude);
-              lng = parseFloat(consumerZone.longitude);
-              
-              console.log('📍 Coordinates from consumer_zone table:', { 
-                lat, 
-                lng,
-                account_no: consumerZone.account_no,
-                source: 'consumer_zone database table'
-              });
-              
-              // Validate coordinates from consumer_zone table
-              if (lat && lng && !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-                console.log('✅ Valid coordinates from consumer_zone table:', { lat, lng });
-              } else {
-                console.warn('⚠️ Invalid coordinates in consumer_zone table:', { lat, lng });
-                lat = null;
-                lng = null;
-              }
-            } else {
-              console.warn('⚠️ No latitude/longitude found in consumer_zone table for account:', accountNumber);
-            }
-          } else {
-            console.warn('⚠️ No token available');
-          }
-        } catch (error) {
-          console.error('❌ API error:', error.message);
-        }
+      const fetchPromise = routesAPI.getConsumerZoneByAccount(accountNumber, token);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out')), 8000)
+      );
+      const consumerZone = await Promise.race([fetchPromise, timeoutPromise]);
+      const lat = parseFloat(consumerZone?.latitude);
+      const lng = parseFloat(consumerZone?.longitude);
+      if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+        return { latitude: lat, longitude: lng, accountNumber, name, address };
       }
-      
-      // If no coordinates found from consumer_zone table, show error
-      if (!lat || !lng) {
+    } catch (e) {
+      console.warn('fetchSavedCoordinatesForCustomer:', e?.message || e);
+    }
+    return null;
+  };
+
+  const handleViewLocation = async (customer, index) => {
+    const key = customerRowKey(customer, index);
+    setLocationAction({ key, mode: 'view' });
+    try {
+      const loc = await fetchSavedCoordinatesForCustomer(customer);
+      if (!loc) {
+        const acc = customer.account_number || customer.accountNumber || customer.account_no || 'N/A';
         Alert.alert(
-          'Location Not Available',
-          `GPS coordinates not found in consumer_zone table for account: ${accountNumber || 'N/A'}\n\nCustomer: ${name}\n\nPlease ensure the consumer_zone table has latitude and longitude values for this account.`,
-          [{ text: 'OK' }]
+          'Location not available',
+          `No saved coordinates in consumer_zone for account ${acc}.\n\nUse Get location while at the meter to save GPS, or ask an admin to enter coordinates.`
         );
         return;
       }
-      
-      // Open Google Maps directly with navigation (turn‑by‑turn routes)
-      console.log('✅ Opening Google Maps navigation with coordinates from consumer_zone:', {
-        lat,
-        lng,
-        accountNumber,
-        name,
-      });
+      setCustomerLocation(loc);
+      setShowMapModal(true);
+    } catch (error) {
+      Alert.alert('Error', error?.message || 'Could not load saved location.');
+    } finally {
+      setLocationAction(null);
+    }
+  };
 
-      // Prefer native navigation schemes first, then fallback to web URL
-      const urlsToTry = [
-        // Android Google Maps navigation intent (starts navigation immediately)
-        `google.navigation:q=${lat},${lng}&mode=d`,
-        // Geo URI (shows place, user can start navigation)
-        `geo:${lat},${lng}?q=${lat},${lng}`,
-        // Web fallback
-        `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
-      ];
+  const handleOpenDirections = useCallback(async () => {
+    if (!customerLocation?.latitude || !customerLocation?.longitude) return;
+    const lat = customerLocation.latitude;
+    const lng = customerLocation.longitude;
+    const urlsToTry = [
+      `https://www.google.com/maps?q=${lat},${lng}&z=17`,
+      `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
+      `geo:${lat},${lng}?q=${lat},${lng}`,
+      `google.navigation:q=${lat},${lng}&mode=d`,
+    ];
+    for (const url of urlsToTry) {
+      try {
+        await Linking.openURL(url);
+        return;
+      } catch (err) {
+        console.warn('Linking.openURL failed:', url, err?.message);
+      }
+    }
+    Alert.alert('Open map', 'Could not open Google Maps. Try opening a browser or Maps manually.');
+  }, [customerLocation]);
 
-      let opened = false;
-      for (const url of urlsToTry) {
-        try {
-          console.log('🔗 Trying URL:', url);
-          const canOpen = await Linking.canOpenURL(url);
-          if (!canOpen) continue;
-          await Linking.openURL(url);
-          console.log('✅ Successfully opened:', url);
-          opened = true;
-          break;
-        } catch (e) {
-          console.warn('⚠️ Failed to open URL:', url, e?.message);
+  /** Capture device GPS and POST to /api/consumer/coordinates for this account. */
+  const handleGetLocation = async (customer, index) => {
+    const accountNumber = String(
+      customer.account_number || customer.accountNumber || customer.account_no || ''
+    ).trim();
+    const name = formatCustomerName(customer, 'Customer');
+    if (!accountNumber) {
+      Alert.alert('Error', 'This route has no account number.');
+      return;
+    }
+
+    const key = customerRowKey(customer, index);
+    setLocationAction({ key, mode: 'get' });
+    try {
+      const servicesOn = await Location.hasServicesEnabledAsync();
+      if (!servicesOn) {
+        Alert.alert(
+          'Location services off',
+          'Turn on GPS/location in your device settings, then try again.'
+        );
+        return;
+      }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow location access to save your current position for this consumer.');
+        return;
+      }
+
+      const timeoutMs = Platform.OS === 'android' ? 35000 : 25000;
+      const positionOptions = {
+        accuracy: Location.Accuracy.High,
+        ...(Platform.OS === 'android' ? { mayShowUserSettingsDialog: true } : {}),
+      };
+
+      let latitude;
+      let longitude;
+      try {
+        const location = await Promise.race([
+          Location.getCurrentPositionAsync(positionOptions),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Location request timed out. Try again outdoors or near a window.')),
+              timeoutMs
+            )
+          ),
+        ]);
+        latitude = location?.coords?.latitude;
+        longitude = location?.coords?.longitude;
+      } catch (primaryErr) {
+        const last = await Location.getLastKnownPositionAsync({ maxAge: 10 * 60 * 1000 }).catch(() => null);
+        latitude = last?.coords?.latitude;
+        longitude = last?.coords?.longitude;
+        if (
+          latitude == null ||
+          longitude == null ||
+          typeof latitude !== 'number' ||
+          typeof longitude !== 'number'
+        ) {
+          throw primaryErr;
         }
       }
 
-      if (!opened) {
-        Alert.alert(
-          'Unable to Open Maps',
-          'Could not open Google Maps. Please make sure Google Maps is installed or try again.'
-        );
+      if (
+        latitude == null ||
+        longitude == null ||
+        typeof latitude !== 'number' ||
+        typeof longitude !== 'number'
+      ) {
+        Alert.alert('Location error', 'Could not read valid coordinates from this device.');
+        return;
       }
-      
+
+      const token = await tokenStorage.getToken();
+      if (!token) {
+        Alert.alert('Session', 'Please log in again to save coordinates.');
+        return;
+      }
+
+      try {
+        const res = await consumerAPI.saveConsumerCoordinates(accountNumber, latitude, longitude, token);
+        if (res?.success) {
+          Alert.alert('Saved', res.message || `Coordinates saved for ${name}.`);
+        } else {
+          Alert.alert('Error', res?.message || 'Failed to save coordinates.');
+        }
+      } catch (apiErr) {
+        Alert.alert('Error', apiErr?.message || 'Failed to save coordinates.');
+      }
     } catch (error) {
-      console.error('❌ Error in handleCustomerPress:', error);
-      Alert.alert(
-        'Error',
-        `Failed to load location: ${error.message}`
-      );
+      Alert.alert('Location error', error?.message || 'Could not get location.');
+    } finally {
+      setLocationAction(null);
     }
   };
 
@@ -256,33 +305,57 @@ export default function Routes({ onBack }) {
           </View>
         </View>
         <View style={styles.customerList}>
-          {customers.map((customer, index) => (
-            <TouchableOpacity 
-              key={customer.id ?? index} 
-              style={styles.customerCard}
-              onPress={() => handleCustomerPress(customer)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.customerHeader}>
-                <Text style={styles.routeNumber}>#{customer.sedr_number || customer.sedrNumber || index + 1}</Text>
-                <Text style={styles.customerName}>{formatCustomerName(customer, `Route ${index + 1}`)}</Text>
+          {customers.map((customer, index) => {
+            const rowKey = customerRowKey(customer, index);
+            const rowBusy = locationAction?.key === rowKey;
+            const viewLoading = rowBusy && locationAction.mode === 'view';
+            const getLoading = rowBusy && locationAction.mode === 'get';
+            return (
+              <View key={customer.id ?? index} style={styles.customerCard}>
+                <View style={styles.customerHeader}>
+                  <Text style={styles.routeNumber}>#{customer.sedr_number || customer.sedrNumber || index + 1}</Text>
+                  <Text style={styles.customerName}>{formatCustomerName(customer, `Route ${index + 1}`)}</Text>
+                </View>
+                <Text style={styles.customerAccount}>Account: {customer.account_number || customer.accountNumber || '-'}</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 }}>
+                  <Text style={styles.customerAddress}>Category: {customer.category ?? '-'}</Text>
+                  {customer.zone && <Text style={styles.customerZone}>Zone: {customer.zone}</Text>}
+                </View>
+                {customer.address && customer.address !== '-' && (
+                  <Text style={styles.customerAddressText} numberOfLines={2}>
+                    📍 {customer.address}
+                  </Text>
+                )}
+                {customer.status && <Text style={styles.customerStatus}>Status: {customer.status}</Text>}
+                <View style={styles.locationActions}>
+                  <TouchableOpacity
+                    style={[styles.locationBtn, styles.locationBtnView, rowBusy && styles.locationBtnDisabled]}
+                    onPress={() => handleViewLocation(customer, index)}
+                    disabled={rowBusy}
+                    activeOpacity={0.7}
+                  >
+                    {viewLoading ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.locationBtnText}>View location</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.locationBtn, styles.locationBtnGet, rowBusy && styles.locationBtnDisabled]}
+                    onPress={() => handleGetLocation(customer, index)}
+                    disabled={rowBusy}
+                    activeOpacity={0.7}
+                  >
+                    {getLoading ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.locationBtnText}>Get location</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Text style={styles.customerAccount}>Account: {customer.account_number || customer.accountNumber || '-'}</Text>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 }}>
-                <Text style={styles.customerAddress}>Category: {customer.category ?? '-'}</Text>
-                {customer.zone && <Text style={styles.customerZone}>Zone: {customer.zone}</Text>}
-              </View>
-              {customer.address && customer.address !== '-' && (
-                <Text style={styles.customerAddressText} numberOfLines={2}>
-                  📍 {customer.address}
-                </Text>
-              )}
-              {customer.status && <Text style={styles.customerStatus}>Status: {customer.status}</Text>}
-              <View style={styles.mapHint}>
-                <Text style={styles.mapHintText}>📍 Tap to view location on map</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
+            );
+          })}
         </View>
       </View>
 
@@ -291,7 +364,10 @@ export default function Routes({ onBack }) {
         visible={showMapModal}
         animationType="slide"
         transparent={false}
-        onRequestClose={() => setShowMapModal(false)}
+        onRequestClose={() => {
+          setShowMapModal(false);
+          setCustomerLocation(null);
+        }}
       >
         <View style={styles.mapContainer}>
           <View style={styles.mapHeader}>
@@ -316,12 +392,7 @@ export default function Routes({ onBack }) {
             </View>
           </View>
 
-          {isLoadingLocation ? (
-            <View style={styles.mapLoadingContainer}>
-              <ActivityIndicator size="large" color="#2196F3" />
-              <Text style={styles.mapLoadingText}>Loading location...</Text>
-            </View>
-          ) : customerLocation ? (
+          {customerLocation ? (
             <>
               <WebView
                 style={styles.map}
@@ -548,17 +619,34 @@ const styles = StyleSheet.create({
     marginTop: 5,
     fontStyle: 'italic',
   },
-  mapHint: {
-    marginTop: 8,
-    paddingTop: 8,
+  locationActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
   },
-  mapHintText: {
-    fontSize: 11,
-    color: '#2196F3',
-    fontStyle: 'italic',
-    textAlign: 'center',
+  locationBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  locationBtnView: {
+    backgroundColor: '#2196F3',
+  },
+  locationBtnGet: {
+    backgroundColor: '#1565C0',
+  },
+  locationBtnDisabled: {
+    opacity: 0.65,
+  },
+  locationBtnText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '600',
   },
   mapContainer: {

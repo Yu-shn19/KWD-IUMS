@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as routesLocalService from './routesLocalService';
 
 // Storage Keys
 const STORAGE_KEYS = {
@@ -6,7 +7,6 @@ const STORAGE_KEYS = {
   USER_DATA: 'user_data',
   REMEMBER_ME: 'remember_me',
   LAST_LOGIN: 'last_login',
-  ROUTES_LIST: 'routes_list',
   DISCONNECTOR_PAID_LIST: 'disconnector_paid_list',
   RECEIPT_LAST: 'receipt_last',
   SELECTED_PRINTER: 'selected_printer',
@@ -205,29 +205,32 @@ export const disconnectorPaidStorage = {
   },
 };
 
-// Routes list cache (uploaded by admin)
+/** Reader meter routes (default bucket). Disconnector uses ROUTES_BUCKET_DISCONNECTOR. */
+export const ROUTES_BUCKET_READER = routesLocalService.ROUTES_BUCKET_READER;
+export const ROUTES_BUCKET_DISCONNECTOR = routesLocalService.ROUTES_BUCKET_DISCONNECTOR;
+
+// Routes list: SQLite `routes_cache` table (same DB as pending readings). Legacy AsyncStorage migrates once.
 export const routesStorage = {
-  saveRoutes: async (routes) => {
+  saveRoutes: async (routes, bucket = ROUTES_BUCKET_READER) => {
     try {
-      await AsyncStorage.setItem(STORAGE_KEYS.ROUTES_LIST, JSON.stringify(routes || []));
+      await routesLocalService.saveRoutes(bucket, routes);
       return true;
     } catch (error) {
       console.error('Error saving routes list:', error);
       return false;
     }
   },
-  getRoutes: async () => {
+  getRoutes: async (bucket = ROUTES_BUCKET_READER) => {
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEYS.ROUTES_LIST);
-      return raw ? JSON.parse(raw) : [];
+      return await routesLocalService.getRoutes(bucket);
     } catch (error) {
       console.error('Error getting routes list:', error);
       return [];
     }
   },
-  clearRoutes: async () => {
+  clearRoutes: async (bucket = ROUTES_BUCKET_READER) => {
     try {
-      await AsyncStorage.removeItem(STORAGE_KEYS.ROUTES_LIST);
+      await routesLocalService.clearRoutes(bucket);
       return true;
     } catch (error) {
       console.error('Error clearing routes list:', error);
