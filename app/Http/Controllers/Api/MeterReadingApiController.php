@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
 use App\Models\ConsumerLedger;
+use App\Services\WaterBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
@@ -542,30 +543,12 @@ class MeterReadingApiController extends Controller
             return $pricingTier->calculateBill($cu);
         }
         
-        // Fallback to hardcoded calculations if no database tier found
-        switch ($catId) {
-            case 12:
-                return $this->computeResidential($cu);
-            case 22:
-                return $this->computeResidential($cu); // Government uses residential rates
-            case 32:
-                return $this->computeCommercialIndustrial($cu, $rateCode);
-            case 33:
-                return $this->computeCommercialA($cu, $rateCode);
-            case 34:
-                return $this->computeCommercialB($cu);
-            case 35:
-                return $this->computeCommercialD($cu);
-            case 36:
-                return $this->computeWholesale($cu);
-            default:
-                // Fallback: treat as residential
-            return $this->computeResidential($cu);
-        }
+        // Fallback to unified water billing service
+        return app(WaterBillingService::class)->calculate($cu, $category, $rateCode);
     }
 
     /**
-     * Resolve category ID from category string (matches mobile app logic)
+     * Resolve category ID from category string (for pricing_tiers lookup).
      */
     private function resolveCategoryId($category)
     {
@@ -578,210 +561,34 @@ class MeterReadingApiController extends Controller
             return null;
         }
         
-        // If numeric-like string, parse it
         if (is_numeric($raw)) {
             return (int) $raw;
         }
-        
-        // Map common text to IDs
+
+        return match ($raw) {
+            'RES', 'RESIDENTIAL' => 12,
+            'GOVT', 'GOVT-LGU', 'GOVERNMENT' => 22,
+            'INDUSTRIAL' => 32,
+            'COM-A', 'COMMERCIAL A', 'COMMERCIAL_A' => 33,
+            'COM-B', 'COMMERCIAL B', 'COMMERCIAL_B' => 34,
+            'COM-C', 'COMMERCIAL C', 'COMMERCIAL_C' => 35,
+            default => $this->resolveLegacyCategoryId($raw),
+        };
+    }
+
+    private function resolveLegacyCategoryId(string $raw): ?int
+    {
         if (strpos($raw, 'RES') !== false) return 12;
         if (strpos($raw, 'GOV') !== false) return 22;
         if (strpos($raw, 'IND') !== false) return 32;
         if (strpos($raw, 'COMA') !== false) return 33;
         if (strpos($raw, 'COMB') !== false) return 34;
+        if (strpos($raw, 'COMC') !== false) return 35;
         if (strpos($raw, 'COMD') !== false) return 35;
-        if (strpos($raw, 'COM') !== false) return 32; // general commercial/industrial
+        if (strpos($raw, 'COM') !== false) return 32;
         if (strpos($raw, 'WHOLESALE') !== false || strpos($raw, 'BULK') !== false) return 36;
-        
+
         return null;
-    }
-
-    /**
-     * Rate Code C computation (for categories 32 and 33) - Tiered pricing
-     * Minimum: ₱390.00 for 10 cubic meters
-     * Note: Meter rental (₱20) is NOT included - shown separately
-     */
-    private function computeRateCodeC($cu)
-    {
-        $minCharge = 390.0;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            // 11-20 cubic meters: minCharge + (cu - 10) * 43.20
-            return $minCharge + (($cu - 10) * 43.20);
-        } else if ($cu <= 30) {
-            // 21-30 cubic meters: minCharge + 10 * 43.20 + (cu - 20) * 47.50
-            return $minCharge + (10 * 43.20) + (($cu - 20) * 47.50);
-        } else if ($cu <= 40) {
-            // 31-40 cubic meters: minCharge + 10 * 43.20 + 10 * 47.50 + (cu - 30) * 52.20
-            return $minCharge + (10 * 43.20) + (10 * 47.50) + (($cu - 30) * 52.20);
-        } else {
-            // 41+ cubic meters: minCharge + 10 * 43.20 + 10 * 47.50 + 10 * 52.20 + (cu - 40) * 57.00
-            return $minCharge + (10 * 43.20) + (10 * 47.50) + (10 * 52.20) + (($cu - 40) * 57.00);
-        }
-    }
-
-    /**
-     * Rate Code D computation (for categories 32 and 33) - Tiered pricing
-     * Minimum: ₱243.75 for 10 cubic meters
-     * Note: Meter rental (₱20) is NOT included - shown separately
-     */
-    private function computeRateCodeD($cu)
-    {
-        $minCharge = 243.75;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            // 11-20 cubic meters: minCharge + (cu - 10) * 27.00
-            return $minCharge + (($cu - 10) * 27.00);
-        } else if ($cu <= 30) {
-            // 21-30 cubic meters: minCharge + 10 * 27.00 + (cu - 20) * 29.65
-            return $minCharge + (10 * 27.00) + (($cu - 20) * 29.65);
-        } else if ($cu <= 40) {
-            // 31-40 cubic meters: minCharge + 10 * 27.00 + 10 * 29.65 + (cu - 30) * 32.60
-            return $minCharge + (10 * 27.00) + (10 * 29.65) + (($cu - 30) * 32.60);
-        } else {
-            // 41+ cubic meters: minCharge + 10 * 27.00 + 10 * 29.65 + 10 * 32.60 + (cu - 40) * 35.60
-            return $minCharge + (10 * 27.00) + (10 * 29.65) + (10 * 32.60) + (($cu - 40) * 35.60);
-        }
-    }
-
-    /**
-     * Industrial / Commercial general (Category 32) - now based on rate code
-     */
-    private function computeCommercialIndustrial($cu, $rateCode = null)
-    {
-        // Check rate code first
-        if ($rateCode) {
-            $rateCodeUpper = strtoupper(trim($rateCode));
-            if ($rateCodeUpper === 'C') {
-                return $this->computeRateCodeC($cu);
-            } else if ($rateCodeUpper === 'D') {
-                return $this->computeRateCodeD($cu);
-            }
-        }
-        // Fallback to old calculation if no rate code or invalid rate code
-        $minCharge = 390.0;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 43.2);
-        } else if ($cu <= 30) {
-            return $minCharge + (10 * 43.2) + (($cu - 20) * 47.5);
-        } else if ($cu <= 40) {
-            return $minCharge + (10 * 43.2) + (10 * 47.5) + (($cu - 30) * 52.2);
-        } else {
-            return $minCharge + (10 * 43.2) + (10 * 47.5) + (10 * 52.2) + (($cu - 40) * 57.0);
-        }
-    }
-
-    /**
-     * Commercial A (Category 33) - now based on rate code
-     */
-    private function computeCommercialA($cu, $rateCode = null)
-    {
-        // Check rate code first
-        if ($rateCode) {
-            $rateCodeUpper = strtoupper(trim($rateCode));
-            if ($rateCodeUpper === 'C') {
-                return $this->computeRateCodeC($cu);
-            } else if ($rateCodeUpper === 'D') {
-                return $this->computeRateCodeD($cu);
-            }
-        }
-        // Fallback to old calculation if no rate code or invalid rate code
-        $minCharge = 341.25;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 37.8);
-        } else if ($cu <= 30) {
-            return $minCharge + (10 * 37.8) + (($cu - 20) * 41.55);
-        } else if ($cu <= 40) {
-            return $minCharge + (10 * 37.8) + (10 * 41.55) + (($cu - 30) * 45.65);
-        } else {
-            return $minCharge + (10 * 37.8) + (10 * 41.55) + (10 * 45.65) + (($cu - 40) * 49.85);
-        }
-    }
-
-    /**
-     * Commercial B (Category 34)
-     */
-    private function computeCommercialB($cu)
-    {
-        $minCharge = 292.5;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 32.4);
-        } else if ($cu <= 30) {
-            return $minCharge + (10 * 32.4) + (($cu - 20) * 35.6);
-        } else if ($cu <= 40) {
-            return $minCharge + (10 * 32.4) + (10 * 35.6) + (($cu - 30) * 39.15);
-        } else {
-            return $minCharge + (10 * 32.4) + (10 * 35.6) + (10 * 39.15) + (($cu - 40) * 42.75);
-        }
-    }
-
-    /**
-     * Commercial D (Category 35)
-     */
-    private function computeCommercialD($cu)
-    {
-        $minCharge = 243.75;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 27.0);
-        } else if ($cu <= 30) {
-            return $minCharge + (10 * 27.0) + (($cu - 20) * 29.65);
-        } else if ($cu <= 40) {
-            return $minCharge + (10 * 27.0) + (10 * 29.65) + (($cu - 30) * 32.6);
-        } else {
-            return $minCharge + (10 * 27.0) + (10 * 29.65) + (10 * 32.6) + (($cu - 40) * 35.6);
-        }
-    }
-
-    /**
-     * Wholesale (Category 36)
-     */
-    private function computeWholesale($cu)
-    {
-        $minCharge = 585.0;
-        if ($cu <= 10) {
-            return $minCharge;
-        } else if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 64.8);
-        } else if ($cu <= 30) {
-            return $minCharge + (10 * 64.8) + (($cu - 20) * 71.25);
-        } else if ($cu <= 40) {
-            return $minCharge + (10 * 64.8) + (10 * 71.25) + (($cu - 30) * 78.3);
-        } else {
-            return $minCharge + (10 * 64.8) + (10 * 71.25) + (10 * 78.3) + (($cu - 40) * 85.5);
-        }
-    }
-
-
-    /**
-     * Calculate residential water bill with tiered pricing (excluding meter rental)
-     * Meter rental (₱20) should be shown separately as Water Maintenance Charge
-     */
-    private function computeResidential($cu)
-    {
-        $minCharge = 195.0;
-        // Note: Meter rental (₱20) is NOT included here - it's shown separately
-        
-        if ($cu <= 10) {
-            return $minCharge;
-        } elseif ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 21.6);
-        } elseif ($cu <= 30) {
-            return $minCharge + (10 * 21.6) + (($cu - 20) * 23.75);
-        } elseif ($cu <= 40) {
-            return $minCharge + (10 * 21.6) + (10 * 23.75) + (($cu - 30) * 26.1);
-        } else {
-            return $minCharge + (10 * 21.6) + (10 * 23.75) + (10 * 26.1) + (($cu - 40) * 28.5);
-        }
     }
 
     /**

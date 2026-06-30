@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#3b82f6">
   
   <link href="{{url('WDMS/img/logo/logo.png')}}" rel="icon">
-  <title>HagunoyWD-IUMS | Water Management System</title>
+  <title>KIBLAWAN WATER DISTRICT-IUMS | Water Management System</title>
   
   <!-- Font Awesome -->
   <link href="{{url('WDMS/vendor/fontawesome-free/css/all.min.css')}}" rel="stylesheet" type="text/css">

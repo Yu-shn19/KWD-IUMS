@@ -31,7 +31,7 @@
       box-shadow: 0px 8px 25px rgba(0, 0, 0, 0.3);
       padding: 40px;
       width: 100%;
-      max-width: 450px;
+      max-width: 480px;
       animation: fadeIn 0.8s ease-in-out;
     }
 
@@ -73,8 +73,16 @@
     <form method="POST" action="/register">
       @csrf
       <div class="mb-3 text-start">
-        <label for="name" class="form-label">Full Name</label>
-        <input type="text" name="name" id="name" class="form-control" placeholder="Enter your full name" required>
+        <label for="first_name" class="form-label">First Name</label>
+        <input type="text" name="first_name" id="first_name" class="form-control" placeholder="Enter your first name" value="{{ old('first_name') }}" required>
+      </div>
+      <div class="mb-3 text-start">
+        <label for="last_name" class="form-label">Last Name</label>
+        <input type="text" name="last_name" id="last_name" class="form-control" placeholder="Enter your last name" value="{{ old('last_name') }}" required>
+      </div>
+      <div class="mb-3 text-start">
+        <label for="middle_name" class="form-label">Middle Name <span class="text-muted">(optional)</span></label>
+        <input type="text" name="middle_name" id="middle_name" class="form-control" placeholder="Enter your middle name" value="{{ old('middle_name') }}">
       </div>
       <div class="mb-3 text-start">
         <label for="email" class="form-label">Email address</label>

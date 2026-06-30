@@ -2,14 +2,20 @@
 
 namespace App\Http\Controllers;
 
+use App\Imports\ConsumerZoneImport;
 use App\Models\ConsumerZone;
 use App\Models\MeterReadingSchedule;
 use App\Models\ConsumerLedger;
 use App\Models\Setting;
+use App\Services\WaterBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
+use Maatwebsite\Excel\Facades\Excel;
+use Maatwebsite\Excel\Imports\HeadingRowFormatter;
 
 if (!function_exists(__NAMESPACE__ . '\mr_col')) {
     /**
@@ -214,14 +220,53 @@ class ConsumerController extends Controller
     }
 
     /**
+     * Check whether an account number is available (not already used).
+     */
+    public function checkAccountNo(Request $request)
+    {
+        $request->validate([
+            'account_no' => 'required|string|max:100',
+            'exclude_id' => 'nullable|integer',
+        ]);
+
+        $accountNo = $this->normalizeAccountNo($request->input('account_no'));
+        $excludeId = $request->input('exclude_id') ? (int) $request->input('exclude_id') : null;
+
+        if ($accountNo === '') {
+            return response()->json([
+                'available' => false,
+                'message' => 'Account number is required.',
+            ]);
+        }
+
+        if ($this->accountNoIsTaken($accountNo, $excludeId)) {
+            return response()->json([
+                'available' => false,
+                'message' => 'This account number is already assigned to another consumer.',
+            ]);
+        }
+
+        return response()->json([
+            'available' => true,
+            'message' => 'Account number is available.',
+        ]);
+    }
+
+    /**
      * Store a newly created resource in storage.
      */
     public function store(Request $request)
     {
+        $request->merge([
+            'account_no' => $this->normalizeAccountNo($request->input('account_no')),
+        ]);
+
         $validator = Validator::make($request->all(), [
             'install_date' => 'nullable|date',
             'transaction_date' => 'nullable|date',
-            'account_no' => 'required|string|unique:consumer_zone,account_no',
+            'account_no' => 'required|string|max:100',
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
             'account_name' => 'required|string',
             'gender' => 'required|string|in:Male,Female,Others',
             'address' => 'nullable|string',
@@ -236,6 +281,15 @@ class ConsumerController extends Controller
             'sequence' => 'nullable|integer',
             'cons_ctrl' => 'nullable|string',
         ]);
+
+        $validator->after(function ($v) use ($request) {
+            if ($this->accountNoIsTaken($request->input('account_no'))) {
+                $v->errors()->add(
+                    'account_no',
+                    'This account number is already assigned to another consumer.'
+                );
+            }
+        });
 
         if ($validator->fails()) {
             return response()->json([
@@ -255,6 +309,20 @@ class ConsumerController extends Controller
                 'message' => 'Consumer created successfully!',
                 'consumer' => $consumer
             ], 201);
+        } catch (QueryException $e) {
+            if ($this->isAccountNoUniqueViolation($e)) {
+                return response()->json([
+                    'success' => false,
+                    'errors' => [
+                        'account_no' => ['This account number is already assigned to another consumer.'],
+                    ],
+                ], 422);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create consumer: ' . $e->getMessage()
+            ], 500);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -589,54 +657,9 @@ class ConsumerController extends Controller
      * Calculate water bill based on consumption (cubic meters) and category
      * Simplified version - matches the calculation used in billing payment
      */
-    private function calculateWaterBill($consumption, $category = null)
+    private function calculateWaterBill($consumption, $category = null, $rateCode = null)
     {
-        $cu = (int) $consumption;
-        
-        // Default to residential if category is not specified or invalid
-        $isCommercial = $category && (stripos($category, 'commercial') !== false || stripos($category, 'industrial') !== false);
-        
-        if ($isCommercial) {
-            return $this->computeCommercial($cu);
-        } else {
-            return $this->computeResidential($cu);
-        }
-    }
-
-    /**
-     * Calculate commercial water bill with tiered pricing (excluding meter rental)
-     */
-    private function computeCommercial($cu)
-    {
-        $minCharge = 243.75;
-        
-        if ($cu <= 10) {
-            return $minCharge;
-        } elseif ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 24.38);
-        } elseif ($cu <= 30) {
-            return $minCharge + (10 * 24.38) + (($cu - 20) * 48.75);
-        } else {
-            return $minCharge + (10 * 24.38) + (10 * 48.75) + (($cu - 30) * 73.13);
-        }
-    }
-
-    /**
-     * Calculate residential water bill with tiered pricing (excluding meter rental)
-     */
-    private function computeResidential($cu)
-    {
-        $minCharge = 162.50;
-        
-        if ($cu <= 10) {
-            return $minCharge;
-        } elseif ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 16.25);
-        } elseif ($cu <= 30) {
-            return $minCharge + (10 * 16.25) + (($cu - 20) * 32.50);
-        } else {
-            return $minCharge + (10 * 16.25) + (10 * 32.50) + (($cu - 30) * 48.75);
-        }
+        return app(WaterBillingService::class)->calculate($consumption, $category, $rateCode);
     }
 
     
@@ -648,10 +671,16 @@ class ConsumerController extends Controller
     {
         $billDiscChanged = $this->consumerBillDiscChangedFromRequest($request, $consumer);
 
+        $request->merge([
+            'account_no' => $this->normalizeAccountNo($request->input('account_no')),
+        ]);
+
         $rules = [
             'install_date' => 'nullable|date',
             'transaction_date' => 'nullable|date',
-            'account_no' => 'required|string|unique:consumer_zone,account_no,' . $consumer->id,
+            'account_no' => 'required|string|max:100',
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
             'account_name' => 'required|string',
             'gender' => 'required|string|in:Male,Female,Others',
             'address' => 'nullable|string',
@@ -677,6 +706,15 @@ class ConsumerController extends Controller
         }
 
         $validator = Validator::make($request->all(), $rules);
+
+        $validator->after(function ($v) use ($request, $consumer) {
+            if ($this->accountNoIsTaken($request->input('account_no'), $consumer->id)) {
+                $v->errors()->add(
+                    'account_no',
+                    'This account number is already assigned to another consumer.'
+                );
+            }
+        });
 
         if ($validator->fails()) {
             return response()->json([
@@ -885,6 +923,200 @@ class ConsumerController extends Controller
             'success' => false,
             'message' => 'Invalid PIN.',
         ], 422);
+    }
+
+    /**
+     * Display the consumer master list import page.
+     */
+    public function importIndex()
+    {
+        return view('consumer.import');
+    }
+
+    /**
+     * Import consumer_zone master list from Excel file.
+     */
+    public function importStore(Request $request)
+    {
+        @set_time_limit(0);
+        @ini_set('max_execution_time', '0');
+        @ini_set('memory_limit', '512M');
+
+        DB::connection()->disableQueryLog();
+
+        Log::info('Consumer zone import request received', [
+            'has_file' => $request->hasFile('file'),
+            'file_name' => $request->file('file') ? $request->file('file')->getClientOriginalName() : 'no file',
+            'content_length' => $request->server('CONTENT_LENGTH'),
+            'memory_limit' => ini_get('memory_limit'),
+            'max_execution_time' => ini_get('max_execution_time'),
+        ]);
+
+        try {
+            if (!$request->hasFile('file') && (int) $request->server('CONTENT_LENGTH') > 0) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'file' => ['The uploaded file exceeds the server upload limit. Ask your administrator to increase upload_max_filesize and post_max_size in PHP settings.'],
+                ]);
+            }
+
+            $uploadedFile = $request->file('file');
+
+            if (!$uploadedFile) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'file' => ['Please select a file to upload.'],
+                ]);
+            }
+
+            $extension = strtolower($uploadedFile->getClientOriginalExtension());
+            $mimeType = $uploadedFile->getMimeType();
+            $allowedExtensions = ['xls', 'xlsx', 'xltx', 'xlsm', 'csv', 'txt'];
+            $allowedMimeTypes = [
+                'application/vnd.ms-excel',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
+                'application/vnd.ms-excel.sheet.macroEnabled.12',
+                'application/vnd.ms-office',
+                'application/octet-stream',
+                'text/plain',
+                'text/csv',
+                'application/csv',
+            ];
+
+            if (!in_array($extension, $allowedExtensions, true) && !in_array($mimeType, $allowedMimeTypes, true)) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'file' => ['The file must be an Excel file (.xlsx, .xls, .xltx, .csv).'],
+                ]);
+            }
+
+            $import = new ConsumerZoneImport();
+            $beforeCount = ConsumerZone::count();
+
+            $filePath = $uploadedFile->getRealPath();
+            if (!$filePath || !is_readable($filePath)) {
+                throw new \Exception('The uploaded file cannot be read. Please ensure the file is not corrupted.');
+            }
+
+            try {
+                Excel::import($import, $uploadedFile);
+            } catch (\PhpOffice\PhpSpreadsheet\Reader\Exception $e) {
+                if (strpos($e->getMessage(), 'OLE') !== false || strpos($e->getMessage(), 'not recognised') !== false) {
+                    throw new \Exception('The Excel file appears to be corrupted or is not in a valid Excel format. Please try re-saving the file in Excel and upload again.');
+                }
+                throw $e;
+            } finally {
+                HeadingRowFormatter::reset();
+            }
+
+            $afterCount = ConsumerZone::count();
+            $imported = $import->importedCount;
+            $updated = $import->updatedCount;
+            $skipped = $import->skippedCount;
+            $errors = $import->errors;
+
+            Log::info('Consumer zone import completed', [
+                'imported' => $imported,
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'beforeCount' => $beforeCount,
+                'afterCount' => $afterCount,
+            ]);
+
+            $processed = $imported + $updated;
+
+            if ($processed > 0) {
+                $message = "Consumer master list imported successfully! {$imported} new record(s), {$updated} updated.";
+                if ($skipped > 0) {
+                    $message .= " {$skipped} row(s) skipped.";
+                }
+
+                if ($request->expectsJson() || $request->ajax()) {
+                    return response()->json([
+                        'success' => true,
+                        'message' => $message,
+                        'imported' => $imported,
+                        'updated' => $updated,
+                        'skipped' => $skipped,
+                    ]);
+                }
+
+                return back()->with('success', $message);
+            }
+
+            $message = 'Import failed. No records were imported or updated.';
+            if ($skipped > 0) {
+                $message .= " {$skipped} row(s) skipped.";
+            }
+            if (!empty($errors)) {
+                $message .= ' Issues: ' . implode(' | ', array_slice($errors, 0, 5));
+            } else {
+                $message .= ' Please verify your file format matches the expected column headers.';
+            }
+
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $message,
+                    'imported' => $imported,
+                    'updated' => $updated,
+                    'skipped' => $skipped,
+                    'errors' => $errors,
+                ], 422);
+            }
+
+            return back()->with('warning', $message);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Consumer zone import error', [
+                'message' => $e->getMessage(),
+                'class' => get_class($e),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $errorMessage = 'An error occurred during import: ' . $e->getMessage();
+            if (str_contains($e->getMessage(), 'memory') || str_contains($e->getMessage(), 'Memory')) {
+                $errorMessage = 'Import ran out of memory. Restart the server with higher memory_limit (512M+) and try again.';
+            } elseif (str_contains($e->getMessage(), 'Maximum execution time')) {
+                $errorMessage = 'Import timed out. Restart the server with max_execution_time=300 (or 0) and try again.';
+            }
+
+            if ($request->expectsJson() || $request->ajax()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $errorMessage,
+                ], 500);
+            }
+
+            return back()->with('error', $errorMessage);
+        }
+    }
+
+    private function normalizeAccountNo(?string $accountNo): string
+    {
+        return trim((string) ($accountNo ?? ''));
+    }
+
+    private function accountNoIsTaken(string $accountNo, ?int $exceptConsumerId = null): bool
+    {
+        $accountNo = $this->normalizeAccountNo($accountNo);
+        if ($accountNo === '') {
+            return false;
+        }
+
+        $existing = ConsumerZone::findByAccountNo($accountNo);
+        if (!$existing) {
+            return false;
+        }
+
+        return $exceptConsumerId === null || (int) $existing->id !== (int) $exceptConsumerId;
+    }
+
+    private function isAccountNoUniqueViolation(QueryException $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        return str_contains($message, 'unique')
+            && str_contains($message, 'account_no');
     }
 }
 

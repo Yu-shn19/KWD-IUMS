@@ -46,21 +46,36 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $request->validate([
-            'name' => 'required|string',
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
+            'middle_name' => 'nullable|string|max:255',
+            'extension' => 'nullable|string|max:10',
             'email' => 'required|email|unique:users',
             'password' => 'required|min:6|confirmed',
         ]);
 
+        $fullName = $request->last_name . ', ' . $request->first_name;
+        if (!empty($request->middle_name)) {
+            $fullName .= ' ' . substr($request->middle_name, 0, 1) . '.';
+        }
+        if (!empty($request->extension)) {
+            $fullName .= ' ' . $request->extension;
+        }
+
         $user = User::create([
-            'name' => $request->name,
+            'name' => $fullName,
+            'first_name' => $request->first_name,
+            'last_name' => $request->last_name,
+            'middle_name' => $request->middle_name,
+            'extension' => $request->extension,
             'email' => $request->email,
             'password' => Hash::make($request->password),
-            'role' => 'customer', // default role
+            'role' => 'customer',
         ]);
 
         Auth::login($user);
 
-        return redirect('/');
+        return redirect('/dashboard');
     }
 
     public function logout(Request $request)

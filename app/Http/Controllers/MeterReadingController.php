@@ -12,6 +12,7 @@ use App\Models\LROLedger;
 use App\Support\SundryLedgerRemarks;
 use Carbon\Carbon;
 use App\Imports\PreviousReadingImport;
+use App\Services\WaterBillingService;
 use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -2313,62 +2314,9 @@ class MeterReadingController extends Controller
      * @param string|null $category Consumer category ('commercial' or 'residential')
      * @return float Calculated bill amount
      */
-    private function calculateWaterBill($consumption, $category = null)
+    private function calculateWaterBill($consumption, $category = null, $rateCode = null)
     {
-        $cu = (int) $consumption;
-        
-        // Default to residential if category is not specified or invalid
-        $isCommercial = $category && strtolower($category) === 'commercial';
-        
-        if ($isCommercial) {
-            return $this->computeCommercial($cu);
-        } else {
-            return $this->computeResidential($cu);
-        }
-    }
-
-    /**
-     * Calculate commercial water bill with tiered pricing (excluding meter rental)
-     * Meter rental (₱20) should be shown separately as Water Maintenance Charge
-     */
-    private function computeCommercial($cu)
-    {
-        $minCharge = 243.75;
-        // Note: Meter rental (₱20) is NOT included here - it's shown separately
-        
-        if ($cu <= 10) {
-            return $minCharge;
-        } elseif ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 27.0);
-        } elseif ($cu <= 30) {
-            return $minCharge + (10 * 27.0) + (($cu - 20) * 29.69);
-        } elseif ($cu <= 40) {
-            return $minCharge + (10 * 27.0) + (10 * 29.69) + (($cu - 30) * 32.62);
-        } else {
-            return $minCharge + (10 * 27.0) + (10 * 29.69) + (10 * 32.62) + (($cu - 40) * 35.62);
-        }
-    }
-
-    /**
-     * Calculate residential water bill with tiered pricing (excluding meter rental)
-     * Meter rental (₱20) should be shown separately as Water Maintenance Charge
-     */
-    private function computeResidential($cu)
-    {
-        $minCharge = 195.0;
-        // Note: Meter rental (₱20) is NOT included here - it's shown separately
-        
-        if ($cu <= 10) {
-            return $minCharge;
-        } elseif ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 21.6);
-        } elseif ($cu <= 30) {
-            return $minCharge + (10 * 21.6) + (($cu - 20) * 23.75);
-        } elseif ($cu <= 40) {
-            return $minCharge + (10 * 21.6) + (10 * 23.75) + (($cu - 30) * 26.1);
-        } else {
-            return $minCharge + (10 * 21.6) + (10 * 23.75) + (10 * 26.1) + (($cu - 40) * 28.5);
-        }
+        return app(WaterBillingService::class)->calculate($consumption, $category, $rateCode);
     }
 
     /**

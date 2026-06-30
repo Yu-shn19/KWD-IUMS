@@ -27,8 +27,8 @@ Route::get('/cron/consumer-activate-pending', [ConsumerActivationCronController:
 // Public routes (no authentication required)
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
-//Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-//Route::post('/register', [AuthController::class, 'register']);
+Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
+Route::post('/register', [AuthController::class, 'register']);
 
 // Protected routes (authentication and admin role required)
 Route::middleware(['auth', 'role:admin'])->group(function () {
@@ -68,9 +68,12 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/consumer', [ConsumerController::class, 'index'])->name('consumer');
     Route::get('/consumer/search', [ConsumerController::class, 'search'])->name('consumer.search');
     Route::get('/consumer/suggestions', [ConsumerController::class, 'getSuggestions'])->name('consumer.suggestions');
+    Route::get('/consumer/check-account-no', [ConsumerController::class, 'checkAccountNo'])->name('consumer.check-account-no');
     Route::post('/consumer', [ConsumerController::class, 'store'])->name('consumer.store');
     Route::put('/consumer/{consumer}', [ConsumerController::class, 'update'])->name('consumer.update');
     Route::delete('/consumer/{consumer}', [ConsumerController::class, 'destroy'])->name('consumer.destroy');
+    Route::get('/consumer/import', [ConsumerController::class, 'importIndex'])->name('consumer.import');
+    Route::post('/consumer/import', [ConsumerController::class, 'importStore'])->name('consumer.import.store');
 
     // Ledger page route
    // Route::get('/ledger', [ConsumerController::class, 'ledger'])->name('ledger');
