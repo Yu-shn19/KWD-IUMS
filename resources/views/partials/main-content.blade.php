@@ -299,7 +299,7 @@
             <span class="kpi-chip">Dashboard</span>
         </div>
         <h1 class="h3 mb-0" style="font-weight:900; color: var(--dark);">
-            Hagonoy Water District
+            Kiblawan Water District
         </h1>
         <div style="color:var(--text-light); font-size:.95rem; margin-top: 0.5rem;">Overview of performance and customer activity</div>
     </div>

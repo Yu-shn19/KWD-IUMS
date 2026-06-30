@@ -517,7 +517,7 @@
                                 </div>
                                 <div class="mb-3">
                                     <label for="edit_account_no" class="form-label">Account Number <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="edit_account_no" name="account_no" readonly required>
+                                    <input type="text" class="form-control" id="edit_account_no" name="account_no" required>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -534,24 +534,13 @@
                                     <label for="edit_category" class="form-label">Category <span class="text-danger">*</span></label>
                                     <select class="form-select" id="edit_category" name="category" required>
                                         <option value="">Select Category</option>
-                                        <option value="Residential" data-code="12">Residential</option>
-                                        <option value="Government" data-code="22">Government</option>
-                                        <option value="Commercial/Industrial C" data-code="32">Commercial/Industrial C</option>
-                                        <option value="Commercial A" data-code="33" disabled>Commercial A</option>
-                                        <option value="Commercial B" data-code="34" disabled>Commercial B</option>
-                                        <option value="Commercial D" data-code="35">Commercial D</option>
-                                        <option value="Whole Sale/Bulk" data-code="36" disabled>Whole Sale/Bulk</option>
-                                    </select>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="edit_rate_code" class="form-label">Rate Code <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="edit_rate_code" name="rate_code" required>
-                                        <option value="">Select Rate Code</option>
-                                        <option value="A">A</option>
-                                        <option value="B">B</option>
-                                        <option value="C">C</option>
-                                        <option value="D">D</option>
+                                        <option value="COM-A" data-code="COM-A">COM-A</option>
+                                        <option value="COM-B" data-code="COM-B">COM-B</option>
+                                        <option value="COM-C" data-code="COM-C">COM-C</option>
+                                        <option value="RES" data-code="RES">RES</option>
+                                        <option value="GOVT-LGU" data-code="GOVT-LGU">GOVT-LGU</option>
+                                        <option value="GOVT" data-code="GOVT">GOVT</option>
+                                        <option value="INDUSTRIAL" data-code="INDUSTRIAL">INDUSTRIAL</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
@@ -568,9 +557,19 @@
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="edit_account_name" class="form-label">Account name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="edit_account_name" name="account_name" placeholder="e.g. DELA CRUZ, JUAN M." required>
+                                    <label for="edit_last_name" class="form-label">Last Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="edit_last_name" name="last_name" required>
                                     <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="edit_first_name" class="form-label">First Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="edit_first_name" name="first_name" required>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="edit_account_name" class="form-label">Account Name</label>
+                                    <input type="text" class="form-control" id="edit_account_name" name="account_name" readonly>
+                                    <small class="text-muted">Auto-generated from name, account number, category, and zone.</small>
                                 </div>
                                 <div class="mb-3">
                                     <label for="edit_gender" class="form-label">Gender <span class="text-danger">*</span></label>
@@ -597,15 +596,13 @@
                                     <label for="edit_zone" class="form-label">Zone <span class="text-danger">*</span></label>
                                     <select class="form-select" id="edit_zone" name="zone" required>
                                         <option value="">Select Zone</option>
-                                        <option value="011">Zone 011</option>
-                                        <option value="021">Zone 021</option>
-                                        <option value="031">Zone 031</option>
-                                        <option value="041">Zone 041</option>
-                                        <option value="051">Zone 051</option>
-                                        <option value="061">Zone 061</option>
-                                        <option value="071">Zone 071</option>
-                                        <option value="081">Zone 081</option>
-                                        <option value="091">Zone 091</option>
+                                        <option value="1A">1A</option>
+                                        <option value="1B">1B</option>
+                                        <option value="2A">2A</option>
+                                        <option value="2B">2B</option>
+                                        <option value="Z3">Z3</option>
+                                        <option value="Z4">Z4</option>
+                                        <option value="Z5">Z5</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
@@ -707,7 +704,8 @@
                                 </div>
                                 <div class="mb-3">
                                     <label for="account_no" class="form-label">Account Number <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="account_no" name="account_no" readonly required>
+                                    <input type="text" class="form-control" id="account_no" name="account_no" placeholder="e.g. 2099" required autocomplete="off">
+                                    <small class="text-muted">Must be unique — no duplicate account numbers.</small>
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
@@ -724,29 +722,16 @@
                                     <label for="category" class="form-label">Category <span class="text-danger">*</span></label>
                                     <select class="form-select" id="category" name="category" required>
                                         <option value="">Select Category</option>
-                                        <option value="Residential" data-code="12">Residential</option>
-                                        <option value="Government" data-code="22">Government</option>
-                                        <option value="Commercial/Industrial C" data-code="32">Commercial/Industrial C</option>
-                                        <option value="Commercial A" data-code="33" disabled>Commercial A</option>
-                                        <option value="Commercial B" data-code="34" disabled>Commercial B</option>
-                                        <option value="Commercial D" data-code="35">Commercial D</option>
-                                        <option value="Whole Sale/Bulk" data-code="36" disabled>Whole Sale/Bulk</option>
+                                        <option value="COM-A" data-code="COM-A">COM-A</option>
+                                        <option value="COM-B" data-code="COM-B">COM-B</option>
+                                        <option value="COM-C" data-code="COM-C">COM-C</option>
+                                        <option value="RES" data-code="RES">RES</option>
+                                        <option value="GOVT-LGU" data-code="GOVT-LGU">GOVT-LGU</option>
+                                        <option value="GOVT" data-code="GOVT">GOVT</option>
+                                        <option value="INDUSTRIAL" data-code="INDUSTRIAL">INDUSTRIAL</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                     <label for="rate_code" class="form-label">Rate Code <span class="text-danger">*</span></label>
-                                     <select class="form-select " id="rate_code" name="rate_code" required>
-                                        <option value="">Select Rate Code</option>
-                                        <option value="A">A</option>
-                                        <option value="B">B</option>
-                                        <option value="C">C</option>
-                                        <option value="D">D</option>
-                        
-                                    </select>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                        
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
@@ -760,9 +745,19 @@
                                     <div class="invalid-feedback"></div>
                                 </div>
                                 <div class="mb-3">
-                                    <label for="account_name" class="form-label">Account name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="account_name" name="account_name" placeholder="e.g. DELA CRUZ, JUAN M." required>
+                                    <label for="last_name" class="form-label">Last Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="last_name" name="last_name" required>
                                     <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="first_name" class="form-label">First Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="first_name" name="first_name" required>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="account_name" class="form-label">Account Name</label>
+                                    <input type="text" class="form-control" id="account_name" name="account_name" readonly>
+                                    <small class="text-muted">Auto-generated from name, account number, category, and zone.</small>
                                 </div>
                                 <div class="mb-3">
                                     <label for="new_gender" class="form-label">Gender <span class="text-danger">*</span></label>
@@ -789,16 +784,13 @@
                                     <label for="zone" class="form-label">Zone <span class="text-danger">*</span></label>
                                     <select class="form-select" id="zone" name="zone" required>
                                         <option value="">Select Zone</option>
-                                        <option value="011">Zone 011</option>
-                                        <option value="021">Zone 021</option>
-                                        <option value="031">Zone 031</option>
-                                        <option value="041">Zone 041</option>
-                                        <option value="051">Zone 051</option>
-                                        <option value="061">Zone 061</option>
-                                        <option value="071">Zone 071</option>
-                                        <option value="081">Zone 081</option>
-                                        <option value="091">Zone 091</option>
-                                      
+                                        <option value="1A">1A</option>
+                                        <option value="1B">1B</option>
+                                        <option value="2A">2A</option>
+                                        <option value="2B">2B</option>
+                                        <option value="Z3">Z3</option>
+                                        <option value="Z4">Z4</option>
+                                        <option value="Z5">Z5</option>
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
@@ -1052,48 +1044,29 @@
                 });
             });
         }
-        // Auto-generate Account Number based on Zone, Day, and Card Number
-        const categoryCodeLookup = {
-            'residential': '12',
-            'government': '22',
-            'commercialindustrialc': '32',
-            'commercial/industrial c': '32',
-            'commercial c': '32',
-            'industrial': '32',
-            'commerciala': '33',
-            'commercial a': '33',
-            'commercial': '33',
-            'commercialb': '34',
-            'commercial b': '34',
-            'commerciald': '35',
-            'commercial d': '35',
-            'wholesale': '36',
-            'wholesale/bulk': '36',
-            'wholesale / bulk': '36',
-            'wholesalebulk': '36',
-            'whole sale/bulk': '36',
-            'whole sale bulk': '36'
-        };
+        function getCategoryToken(categorySelector) {
+            return ($(categorySelector).val() || '').toString().trim().toUpperCase();
+        }
 
-        function getCategoryCode(categoryValue, selectedOption) {
-            if (!categoryValue) {
-                return null;
+        function getZoneShort(zoneSelector) {
+            return ($(zoneSelector).val() || '').toString().trim().toUpperCase();
+        }
+
+        function generateAccountName(prefix) {
+            prefix = prefix || '';
+            const lastName = ($('#' + prefix + 'last_name').val() || '').trim().toUpperCase();
+            const firstName = ($('#' + prefix + 'first_name').val() || '').trim().toUpperCase();
+            const accountNo = ($('#' + prefix + 'account_no').val() || '').trim();
+            const categoryToken = getCategoryToken('#' + prefix + 'category');
+            const zoneShort = getZoneShort('#' + prefix + 'zone');
+
+            if (lastName && firstName && accountNo && categoryToken && zoneShort) {
+                $('#' + prefix + 'account_name').val(
+                    `${lastName}_${firstName}_(#${accountNo}_${categoryToken})__${zoneShort}`
+                );
+            } else {
+                $('#' + prefix + 'account_name').val('');
             }
-
-            // Prefer data attribute if present
-            const dataCode = selectedOption.data('code');
-            if (dataCode) {
-                return dataCode.toString();
-            }
-
-            // Fallback to normalized lookup
-            const normalized = categoryValue
-                .toString()
-                .trim()
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '');
-
-            return categoryCodeLookup[normalized] || null;
         }
 
         // Generate random cons_ctrl like _5GW0NGW59
@@ -1124,84 +1097,71 @@
                 const dd = String(today.getDate()).padStart(2, '0');
                 $txDate.val(today.getFullYear() + '-' + mm + '-' + dd);
             }
-            applyRateCodeRestrictions('#category', '#rate_code');
+            generateAccountName('');
         });
 
-        function generateAccountNumber() {
-            const zone = $('#zone').val(); // Get exact zone value from dropdown
-            const selectedCategory = $('#category option:selected');
-            const categoryValue = selectedCategory.val() || '';
-            const categoryCode = getCategoryCode(categoryValue, selectedCategory);
-            const cardNumberRaw = $('#card_number').val() || '';
-            const cardNumber = cardNumberRaw.toString().trim();
-            const trimmedZone = zone ? zone.toString().trim() : '';
-            
-            console.log('=== Account Number Generation ===');
-            console.log('Zone Value (exact):', trimmedZone);
-            console.log('Category Value:', categoryValue);
-            console.log('Category Code:', categoryCode);
-            console.log('Card Number Raw:', cardNumberRaw);
-            console.log('Card Number Trimmed:', cardNumber);
-            
-            if (trimmedZone && categoryCode && cardNumber) {
-                // Use sequence as entered (no padding)
-                const accountNumber = `${trimmedZone}-${categoryCode}-${cardNumber}`;
-                
-                console.log('Final Account Number:', accountNumber);
-                console.log('=================================');
-                
-                $('#account_no').val(accountNumber);
-            } else {
-                if (!trimmedZone) console.log('ERROR: Zone not selected');
-                if (!categoryCode) console.log('ERROR: Category not selected');
-                if (!cardNumber) console.log('ERROR: Card number not entered');
-                $('#account_no').val('');
-            }
+        function getRateCodeFromCategory(category) {
+            const map = {
+                'COM-A': 'A',
+                'COM-B': 'B',
+                'COM-C': 'C',
+                'INDUSTRIAL': 'INDUSTRIAL',
+                'RES': 'A',
+                'GOVT': 'B',
+                'GOVT-LGU': 'B'
+            };
+            return map[(category || '').toString().trim().toUpperCase()] || '';
         }
 
-        const rateCodeDisableRulesByCategory = {
-            'RESIDENTIAL': ['B', 'C', 'D'],
-            'GOVERNMENT': ['A', 'C', 'D'],
-            'COMMERCIAL/INDUSTRIAL C': ['A', 'B'],
-            'COMMERCIAL D': ['A', 'B']
-        };
+        let accountNoCheckTimer = null;
+        let accountNoAvailabilityRequest = null;
 
-        function applyRateCodeRestrictions(categorySelector, rateCodeSelector) {
-            const category = ($(categorySelector).val() || '').toString().trim().toUpperCase();
-            const disabledCodes = new Set(rateCodeDisableRulesByCategory[category] || []);
-            const $rateCode = $(rateCodeSelector);
+        function markAccountNoInvalid(message) {
+            const $input = $('#account_no');
+            $input.addClass('is-invalid');
+            $input.siblings('.invalid-feedback').text(message);
+        }
 
-            if (!$rateCode.length) {
-                return;
+        function clearAccountNoInvalid() {
+            const $input = $('#account_no');
+            $input.removeClass('is-invalid');
+            $input.siblings('.invalid-feedback').text('');
+        }
+
+        function checkAccountNoAvailability(accountNo) {
+            accountNo = (accountNo || '').toString().trim();
+            if (!accountNo) {
+                clearAccountNoInvalid();
+                return $.Deferred().resolve({ available: true }).promise();
             }
 
-            let selectedOptionStillAllowed = false;
+            if (accountNoAvailabilityRequest) {
+                accountNoAvailabilityRequest.abort();
+            }
 
-            $rateCode.find('option').each(function() {
-                const $option = $(this);
-                const code = ($option.val() || '').toString().trim().toUpperCase();
+            accountNoAvailabilityRequest = $.get('{{ route("consumer.check-account-no") }}', { account_no: accountNo });
 
-                if (!code) {
-                    $option.prop('disabled', false);
-                    return;
+            return accountNoAvailabilityRequest.then(function(response) {
+                if (response.available) {
+                    clearAccountNoInvalid();
+                } else {
+                    markAccountNoInvalid(response.message || 'This account number is already in use.');
                 }
-
-                const shouldDisable = disabledCodes.has(code);
-                $option.prop('disabled', shouldDisable);
-
-                if ($option.is(':selected') && !shouldDisable) {
-                    selectedOptionStillAllowed = true;
-                }
+                return response;
+            }).fail(function() {
+                return { available: true };
+            }).always(function() {
+                accountNoAvailabilityRequest = null;
             });
-
-            if (!selectedOptionStillAllowed) {
-                const firstAllowed = $rateCode.find('option').filter(function() {
-                    const value = ($(this).val() || '').toString().trim();
-                    return value !== '' && !$(this).prop('disabled');
-                }).first().val() || '';
-                $rateCode.val(firstAllowed);
-            }
         }
+
+        $('#account_no').on('input blur', function() {
+            clearTimeout(accountNoCheckTimer);
+            const value = $(this).val();
+            accountNoCheckTimer = setTimeout(function() {
+                checkAccountNoAvailability(value);
+            }, 400);
+        });
 
         function formatCurrency(value) {
             const amount = Number(value);
@@ -1468,45 +1428,15 @@
         }
         window.setBaseReadingLocked = setBaseReadingLocked;
         window.updateMeterReadingCard = updateMeterReadingCard;
-        
-        // Auto-generate Account Number for the EDIT modal when zone, category, or sequence changes
-        function generateEditAccountNumber() {
-            const zone = $('#edit_zone').val();
-            const selectedCategory = $('#edit_category option:selected');
-            const categoryValue = selectedCategory.val() || '';
-            const categoryCode = getCategoryCode(categoryValue, selectedCategory);
-            const cardNumberRaw = $('#edit_card_number').val() || '';
-            const cardNumber = cardNumberRaw.toString().trim();
-            const trimmedZone = zone ? zone.toString().trim() : '';
 
-            if (trimmedZone && categoryCode && cardNumber) {
-                const accountNumber = `${trimmedZone}-${categoryCode}-${cardNumber}`;
-                $('#edit_account_no').val(accountNumber);
-            } else {
-                $('#edit_account_no').val('');
-            }
-        }
-
-        // Trigger account number generation when zone, category, or card number changes (New Consumer)
-        $('#zone, #category, #card_number').on('change keyup input', function() {
-            console.log('Zone, Category, or Card Number changed');
-            generateAccountNumber();
-            if (this.id === 'category') {
-                applyRateCodeRestrictions('#category', '#rate_code');
-            }
+        $('#last_name, #first_name, #account_no, #category, #zone').on('change keyup input', function() {
+            generateAccountName('');
         });
 
-        // Trigger account number re-generation when zone, category, or sequence changes (Edit Consumer)
-        $(document).on('change keyup input', '#edit_zone, #edit_category, #edit_card_number', function() {
-            generateEditAccountNumber();
-            if (this.id === 'edit_category') {
-                applyRateCodeRestrictions('#edit_category', '#edit_rate_code');
-            }
+        $(document).on('change keyup input', '#edit_last_name, #edit_first_name, #edit_account_no, #edit_category, #edit_zone', function() {
+            generateAccountName('edit_');
         });
 
-        // Run once in case fields already have values (e.g., form repopulation)
-        generateAccountNumber();
-        applyRateCodeRestrictions('#category', '#rate_code');
         if (initialLatestBill) {
             updateLatestBillCard(initialLatestBill);
         } else {
@@ -1543,30 +1473,54 @@
             const $form = $(this);
             
             // Clear previous errors
-            $('.is-invalid').removeClass('is-invalid');
-            $('.invalid-feedback').text('');
+            $form.find('.is-invalid').removeClass('is-invalid');
+            $form.find('.invalid-feedback').text('');
             
             // Disable submit button
             $('#submitBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-1"></i>Saving...');
-            
+
+            generateAccountName('');
+
+            const trimmedAccountNo = ($form.find('#account_no').val() || '').toString().trim();
+            $form.find('#account_no').val(trimmedAccountNo);
+
+            checkAccountNoAvailability(trimmedAccountNo).done(function(availability) {
+                if (!availability.available) {
+                    $('#submitBtn').prop('disabled', false).html('<i class="fas fa-save me-1"></i>Save Consumer');
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Duplicate Account Number',
+                        text: availability.message || 'This account number is already assigned to another consumer.',
+                        confirmButtonColor: '#dc3545'
+                    });
+                    return;
+                }
+
+                submitNewConsumerForm($form, trimmedAccountNo);
+            });
+        });
+
+        function submitNewConsumerForm($form, trimmedAccountNo) {
             // Prepare data for consumer_zone table
             const consCtrl = $('#newConsumerModal').data('cons-ctrl') || generateConsCtrl();
             const formData = {
                 _token: $form.find('input[name="_token"]').val(),
                 transaction_date: $form.find('#transaction_date').val(),
                 install_date: $form.find('#installation_date').val(),
-                account_no: $form.find('#account_no').val(),
+                first_name: $form.find('#first_name').val(),
+                last_name: $form.find('#last_name').val(),
+                account_no: trimmedAccountNo,
                 account_name: $form.find('#account_name').val(),
                 gender: $form.find('#new_gender').val(),
                 address: $form.find('#address').val(),
                 zone_code: $form.find('#zone').val(),
-                category_code: $form.find('#category option:selected').data('code'),
+                category_code: $form.find('#category').val(),
                 meter_number: $form.find('#meter_number').val(),
                 meter_brand: $form.find('#meter_brand').val(),
-                rate_code: $form.find('#rate_code').val(),
+                rate_code: getRateCodeFromCategory($form.find('#category').val()),
                 status_code: $form.find('#new_status').val(),
                 sequence: $form.find('#card_number').val(),
-                cons_ctrl: consCtrl, // Auto-generated control number
+                cons_ctrl: consCtrl,
                 balance: 0.00,
                 consumer_deposit: 0.00,
                 installation_fee: 0.00,
@@ -1582,13 +1536,9 @@
                 success: function(response) {
                     console.log('Success:', response);
                     if (response.success) {
-                        // Close modal
                         $('#newConsumerModal').modal('hide');
-                        
-                        // Reset form
                         $('#newConsumerForm')[0].reset();
 
-                        // Avoid showing previous consumer's bill after reload (sessionStorage was keyed without validation)
                         try {
                             sessionStorage.removeItem('latestBill');
                         } catch (e) { /* ignore */ }
@@ -1600,7 +1550,6 @@
                             } catch (e) { /* ignore */ }
                         }
                         
-                        // Show success message with SweetAlert
                         Swal.fire({
                             icon: 'success',
                             title: 'Success!',
@@ -1608,7 +1557,6 @@
                             confirmButtonColor: '#28a745',
                             confirmButtonText: 'OK'
                         }).then((result) => {
-                            // Open this consumer explicitly — location.reload() kept ?account=... and hid the new record
                             const base = @json(route('consumer'));
                             if (created && created.account_no) {
                                 window.location.href = base + '?account=' + encodeURIComponent(created.account_no);
@@ -1621,28 +1569,25 @@
                 error: function(xhr) {
                     console.log('Error:', xhr);
                     if (xhr.status === 422) {
-    // Validation errors
-    const errors = xhr.responseJSON.errors;
+                        const errors = xhr.responseJSON.errors;
 
-    $.each(errors, function(field, messages) {
-        const input = $('[name="' + field + '"]');
-        input.addClass('is-invalid');
-        input.siblings('.invalid-feedback').text(messages[0]);
-    });
+                        $.each(errors, function(field, messages) {
+                            const input = $form.find('[name="' + field + '"]');
+                            input.addClass('is-invalid');
+                            input.siblings('.invalid-feedback').text(messages[0]);
+                        });
 
-    // Use first validation message in Swal (e.g. "Account number already exists.")
-    const firstMessage = errors.account_no && errors.account_no[0]
-        ? errors.account_no[0]
-        : (Object.values(errors)[0] && Object.values(errors)[0][0]) || 'Please check the form fields and try again.';
+                        const firstMessage = errors.account_no && errors.account_no[0]
+                            ? errors.account_no[0]
+                            : (Object.values(errors)[0] && Object.values(errors)[0][0]) || 'Please check the form fields and try again.';
 
-    Swal.fire({
-        icon: 'error',
-        title: 'Validation Error',
-        text: firstMessage,
-        confirmButtonColor: '#dc3545'
-    });
-} else {
-                        // Other errors
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Validation Error',
+                            text: firstMessage,
+                            confirmButtonColor: '#dc3545'
+                        });
+                    } else {
                         const message = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'Failed to create consumer';
                         Swal.fire({
                             icon: 'error',
@@ -1653,11 +1598,10 @@
                     }
                 },
                 complete: function() {
-                    // Re-enable submit button
                     $('#submitBtn').prop('disabled', false).html('<i class="fas fa-save me-1"></i>Save Consumer');
                 }
             });
-        });
+        }
         
         // Handle Cancel button click
         $('#cancelBtn').on('click', function() {
@@ -1688,12 +1632,13 @@
             
             // Clear auto-generated fields
             $('#account_no').val('');
+            $('#account_name').val('');
+            clearAccountNoInvalid();
             $('#display_cons_ctrl').val('');
             $('#transaction_date').val('');
             
             // Clear stored cons_ctrl
             $('#newConsumerModal').removeData('cons-ctrl');
-            applyRateCodeRestrictions('#category', '#rate_code');
             
             console.log('Form reset complete');
         }
@@ -2162,18 +2107,22 @@
                 $('#edit_category').val('');
                 const categoryCode = currentConsumer.category_code;
                 if (categoryCode) {
-                    $('#edit_category option').each(function() {
-                        if ($(this).data('code') == categoryCode) {
-                            $(this).prop('selected', true);
-                            return false;
-                        }
-                    });
+                    const $matchedCategory = $('#edit_category option').filter(function() {
+                        return $(this).data('code') == categoryCode || $(this).val() == categoryCode;
+                    }).first();
+                    if ($matchedCategory.length) {
+                        $matchedCategory.prop('selected', true);
+                    }
                 }
                 
                 $('#edit_status').val(currentConsumer.status_code || 'A');
-                $('#edit_rate_code').val(currentConsumer.rate_code || 'A');
-                applyRateCodeRestrictions('#edit_category', '#edit_rate_code');
-                $('#edit_account_name').val(currentConsumer.account_name || '');
+                $('#edit_last_name').val(currentConsumer.last_name || '');
+                $('#edit_first_name').val(currentConsumer.first_name || '');
+                if (currentConsumer.last_name && currentConsumer.first_name) {
+                    generateAccountName('edit_');
+                } else {
+                    $('#edit_account_name').val(currentConsumer.account_name || '');
+                }
                 $('#edit_gender').val(currentConsumer.gender || '');
                 
                 $('#edit_contact_number').val('');
@@ -2248,22 +2197,26 @@
 
             // Disable submit button
             $('#updateBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-1"></i>Updating...');
-            
+
+            generateAccountName('edit_');
+
             // Prepare data for consumer_zone table
             const updateData = {
                 _token: $('input[name="_token"]').val(),
                 _method: 'PUT',
                 transaction_date: $('#edit_transaction_date').val(),
                 install_date: $('#edit_installation_date').val(),
+                first_name: $('#edit_first_name').val(),
+                last_name: $('#edit_last_name').val(),
                 account_no: $('#edit_account_no').val(),
                 account_name: $('#edit_account_name').val(),
                 gender: $('#edit_gender').val(),
                 address: $('#edit_address').val(),
                 zone_code: $('#edit_zone').val(),
-                category_code: $('#edit_category option:selected').data('code') || $('#edit_category').val(),
+                category_code: $('#edit_category').val(),
                 meter_number: $('#edit_meter_number').val(),
                 meter_brand: $('#edit_meter_brand').val(),
-                rate_code: $('#edit_rate_code').val() || 'A',
+                rate_code: getRateCodeFromCategory($('#edit_category').val()),
                 status_code: $('#edit_status').val(),
                 sequence: $('#edit_card_number').val(),
                 bill_disc_percent: $('#edit_bill_disc_percent').val(),

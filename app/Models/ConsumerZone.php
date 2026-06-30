@@ -26,6 +26,8 @@ class ConsumerZone extends Model
      */
     protected $fillable = [
         'account_no',
+        'first_name',
+        'last_name',
         'account_name',
         'gender',
         'address',

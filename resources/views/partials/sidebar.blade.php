@@ -5,7 +5,7 @@
     <div class="sidebar-brand-icon">
       <img src="{{url('WDMS/img/logo/logo2.png')}}" alt="Logo" class="brand-logo">
     </div>
-    <div class="sidebar-brand-text">eHWD-IUMS</div>
+    <div class="sidebar-brand-text">eKWD-IUMS</div>
   </a>
   <div class="sidebar-divider-modern"></div>
 
@@ -37,6 +37,9 @@
       <div class="collapse-inner-modern">
            <a class="collapse-item" href="{{ route('consumer') }}">
           <i class="fas fa-circle small-icon"></i> Consumers
+        </a>
+        <a class="collapse-item" href="{{ route('consumer.import') }}">
+          <i class="fas fa-circle small-icon"></i> Import Consumer Master List
         </a>
         <a class="collapse-item" href="#">
           <i class="fas fa-circle small-icon"></i> Category/Routes

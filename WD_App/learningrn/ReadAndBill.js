@@ -1003,202 +1003,102 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     }
   }, [shouldSortCustomers]);
 
-  // Water billing calculation functions (include meter rental inside the bill)
-  // Category mapping: 12=Residential, 22=Government, 32=Industrial, 33=Commercial A,
-  // 34=Commercial B, 35=Commercial D, 36=Wholesale
-  const resolveCategoryId = (cat) => {
-    if (cat === null || cat === undefined) return null;
-    const raw = cat.toString().trim().toUpperCase();
-    if (!raw) return null;
-    // If numeric-like string, parse it
+  const METER_RENTAL = 20.0;
+  const MINIMUM_CHARGE = 253.0;
+
+  const resolveClassification = (categoryRaw) => {
+    const raw = (categoryRaw ?? '').toString().trim().toUpperCase();
+    if (!raw) return 'RESIDENTIAL';
+
+    const mapped = {
+      'COM-A': 'COMMERCIAL A',
+      'COM-B': 'COMMERCIAL B',
+      'COM-C': 'COMMERCIAL C',
+      'INDUSTRIAL': 'INDUSTRIAL',
+      'GOVT-LGU': 'GOVERNMENT',
+      'GOVT': 'GOVERNMENT',
+      'RES': 'RESIDENTIAL',
+      'RESIDENTIAL': 'RESIDENTIAL',
+    };
+    if (mapped[raw]) return mapped[raw];
+
     const num = parseInt(raw, 10);
-    if (!Number.isNaN(num)) return num;
-    // Map common text to IDs
-    if (raw.includes('RES')) return 12;
-    if (raw.includes('GOV')) return 22;
-    if (raw.includes('IND')) return 32;
-    if (raw.includes('COMA')) return 33;
-    if (raw.includes('COMB')) return 34;
-    if (raw.includes('COMD')) return 35;
-    if (raw.includes('COM')) return 32; // general commercial/industrial
-    if (raw.includes('WHOLESALE') || raw.includes('BULK')) return 36;
-    return null;
-  };
-
-  // Residential / Government
-  const computeResidential = (cu) => {
-    let total = 0;
-    const minCharge = 195.0;
-    const meterRental = 20;
-    if (cu <= 10) total = minCharge + meterRental;
-    else if (cu <= 20) total = minCharge + (cu - 10) * 21.6 + meterRental;
-    else if (cu <= 30) total = minCharge + 10 * 21.6 + (cu - 20) * 23.75 + meterRental;
-    else if (cu <= 40) total = minCharge + 10 * 21.6 + 10 * 23.75 + (cu - 30) * 26.1 + meterRental;
-    else total = minCharge + 10 * 21.6 + 10 * 23.75 + 10 * 26.1 + (cu - 40) * 28.5 + meterRental;
-    return total;
-  };
-
-  const computeGovernment = (cu) => computeResidential(cu);
-
-  // Rate Code C computation (for categories 32 and 33) - Tiered pricing
-  const computeRateCodeC = (cu) => {
-    let total = 0;
-    const minCharge = 390.0;
-    const meterRental = 20;
-    if (cu <= 10) {
-      total = minCharge + meterRental;
-    } else if (cu <= 20) {
-      // 11-20 cubic meters: minCharge + (cu - 10) * 43.20 + meterRental
-      total = minCharge + (cu - 10) * 43.20 + meterRental;
-    } else if (cu <= 30) {
-      // 21-30 cubic meters: minCharge + 10 * 43.20 + (cu - 20) * 47.50 + meterRental
-      total = minCharge + 10 * 43.20 + (cu - 20) * 47.50 + meterRental;
-    } else if (cu <= 40) {
-      // 31-40 cubic meters: minCharge + 10 * 43.20 + 10 * 47.50 + (cu - 30) * 52.20 + meterRental
-      total = minCharge + 10 * 43.20 + 10 * 47.50 + (cu - 30) * 52.20 + meterRental;
-    } else {
-      // 41+ cubic meters: minCharge + 10 * 43.20 + 10 * 47.50 + 10 * 52.20 + (cu - 40) * 57.00 + meterRental
-      total = minCharge + 10 * 43.20 + 10 * 47.50 + 10 * 52.20 + (cu - 40) * 57.00 + meterRental;
+    if (!Number.isNaN(num)) {
+      if (num === 12) return 'RESIDENTIAL';
+      if (num === 22) return 'GOVERNMENT';
+      if (num === 32) return 'INDUSTRIAL';
+      if (num === 33) return 'COMMERCIAL A';
+      if (num === 34) return 'COMMERCIAL B';
+      if (num === 35) return 'COMMERCIAL C';
+      if (num === 36) return 'WHOLESALE';
     }
-    return total;
+
+    if (raw.includes('IND')) return 'INDUSTRIAL';
+    if (raw.includes('WHOLESALE') || raw.includes('BULK')) return 'WHOLESALE';
+    if (raw.includes('COMA') || raw.includes('COMMERCIAL A')) return 'COMMERCIAL A';
+    if (raw.includes('COMB') || raw.includes('COMMERCIAL B')) return 'COMMERCIAL B';
+    if (raw.includes('COMC') || raw.includes('COMMERCIAL C')) return 'COMMERCIAL C';
+    if (raw.includes('COM')) return 'COMMERCIAL';
+    if (raw.includes('GOV')) return 'GOVERNMENT';
+    if (raw.includes('RES')) return 'RESIDENTIAL';
+
+    return 'RESIDENTIAL';
   };
 
-  // Rate Code D computation (for categories 32 and 33) - Tiered pricing
-  const computeRateCodeD = (cu) => {
-    let total = 0;
-    const minCharge = 243.75;
-    const meterRental = 20;
-    if (cu <= 10) {
-      total = minCharge + meterRental;
-    } else if (cu <= 20) {
-      // 11-20 cubic meters: minCharge + (cu - 10) * 27.00 + meterRental
-      total = minCharge + (cu - 10) * 27.00 + meterRental;
-    } else if (cu <= 30) {
-      // 21-30 cubic meters: minCharge + 10 * 27.00 + (cu - 20) * 29.65 + meterRental
-      total = minCharge + 10 * 27.00 + (cu - 20) * 29.65 + meterRental;
-    } else if (cu <= 40) {
-      // 31-40 cubic meters: minCharge + 10 * 27.00 + 10 * 29.65 + (cu - 30) * 32.60 + meterRental
-      total = minCharge + 10 * 27.00 + 10 * 29.65 + (cu - 30) * 32.60 + meterRental;
-    } else {
-      // 41+ cubic meters: minCharge + 10 * 27.00 + 10 * 29.65 + 10 * 32.60 + (cu - 40) * 35.60 + meterRental
-      total = minCharge + 10 * 27.00 + 10 * 29.65 + 10 * 32.60 + (cu - 40) * 35.60 + meterRental;
+  const classificationMultiplier = (classification) => {
+    const key = (classification ?? '').toString().trim().toUpperCase();
+    switch (key) {
+      case 'BULK':
+      case 'WHOLESALE':
+        return 3.0;
+      case 'INDUSTRIAL':
+      case 'COMMERCIAL':
+        return 2.0;
+      case 'COMMERCIAL A':
+      case 'COMMERCIAL_A':
+      case 'A':
+        return 1.75;
+      case 'COMMERCIAL B':
+      case 'COMMERCIAL_B':
+      case 'B':
+        return 1.5;
+      case 'COMMERCIAL C':
+      case 'COMMERCIAL_C':
+      case 'C':
+        return 1.25;
+      default:
+        return 1.0;
     }
-    return total;
   };
 
-  // Industrial / Commercial general (Category 32) - now based on rate code
-  const computeCommercialIndustrial = (cu, rateCode = null) => {
-    // Check rate code first
-    if (rateCode) { 
-      const rateCodeUpper = rateCode.toString().trim().toUpperCase();
-      if (rateCodeUpper === 'C') {
-        return computeRateCodeC(cu);
-      } else if (rateCodeUpper === 'D') {
-        return computeRateCodeD(cu);
-      }
-    }
-    // Fallback to old calculation if no rate code or invalid rate code
-    let total = 0;
-    const minCharge = 390.0;
-    const meterRental = 20;
-    if (cu <= 10) total = minCharge + meterRental;
-    else if (cu <= 20) total = minCharge + (cu - 10) * 43.2 + meterRental;
-    else if (cu <= 30) total = minCharge + 10 * 43.2 + (cu - 20) * 47.5 + meterRental;
-    else if (cu <= 40) total = minCharge + 10 * 43.2 + 10 * 47.5 + (cu - 30) * 52.2 + meterRental;
-    else total = minCharge + 10 * 43.2 + 10 * 47.5 + 10 * 52.2 + (cu - 40) * 57.0 + meterRental;
-    return total;
+  const computeResidentialBase = (cu) => {
+    if (cu <= 10) return MINIMUM_CHARGE;
+    if (cu <= 20) return MINIMUM_CHARGE + (cu - 10) * 27.0;
+    if (cu <= 30) return MINIMUM_CHARGE + (10 * 27.0) + (cu - 20) * 28.75;
+    if (cu <= 40) return MINIMUM_CHARGE + (10 * 27.0) + (10 * 28.75) + (cu - 30) * 30.55;
+    return MINIMUM_CHARGE + (10 * 27.0) + (10 * 28.75) + (10 * 30.55) + (cu - 40) * 32.4;
   };
 
-  // Commercial A (Category 33) - now based on rate code
-  const computeCommercialA = (cu, rateCode = null) => {
-    // Check rate code first
-    if (rateCode) {
-      const rateCodeUpper = rateCode.toString().trim().toUpperCase();
-      if (rateCodeUpper === 'C') {
-        return computeRateCodeC(cu);
-      } else if (rateCodeUpper === 'D') {
-        return computeRateCodeD(cu);
-      }
-    }
-    // Fallback to old calculation if no rate code or invalid rate code
-    let total = 0;
-    const minCharge = 341.25;
-    const meterRental = 20;
-    if (cu <= 10) total = minCharge + meterRental;
-    else if (cu <= 20) total = minCharge + (cu - 10) * 37.8 + meterRental;
-    else if (cu <= 30) total = minCharge + 10 * 37.8 + (cu - 20) * 41.55 + meterRental;
-    else if (cu <= 40) total = minCharge + 10 * 37.8 + 10 * 41.55 + (cu - 30) * 45.65 + meterRental;
-    else total = minCharge + 10 * 37.8 + 10 * 41.55 + 10 * 45.65 + (cu - 40) * 49.85 + meterRental;
-    return total;
+  // Commercial / Industrial (Category 32): residential base × multiplier + meter rental
+  const computeCommercialIndustrial = (cu, classification = 'INDUSTRIAL') => {
+    const residentialTotal = computeResidentialBase(cu);
+    const multiplier = classificationMultiplier(classification);
+    return (residentialTotal * multiplier) + METER_RENTAL;
   };
 
-  const computeCommercialB = (cu) => {
-    let total = 0;
-    const minCharge = 292.5;
-    const meterRental = 20;
-    if (cu <= 10) total = minCharge + meterRental;
-    else if (cu <= 20) total = minCharge + (cu - 10) * 32.4 + meterRental;
-    else if (cu <= 30) total = minCharge + 10 * 32.4 + (cu - 20) * 35.6 + meterRental;
-    else if (cu <= 40) total = minCharge + 10 * 32.4 + 10 * 35.6 + (cu - 30) * 39.15 + meterRental;
-    else total = minCharge + 10 * 32.4 + 10 * 35.6 + 10 * 39.15 + (cu - 40) * 42.75 + meterRental;
-    return total;
-  };
-
-  const computeCommercialD = (cu) => {
-    let total = 0;
-    const minCharge = 243.75;
-    const meterRental = 20;
-    if (cu <= 10) total = minCharge + meterRental;
-    else if (cu <= 20) total = minCharge + (cu - 10) * 27.0 + meterRental;
-    else if (cu <= 30) total = minCharge + 10 * 27.0 + (cu - 20) * 29.65 + meterRental;
-    else if (cu <= 40) total = minCharge + 10 * 27.0 + 10 * 29.65 + (cu - 30) * 32.6 + meterRental;
-    else total = minCharge + 10 * 27.0 + 10 * 29.65 + 10 * 32.6 + (cu - 40) * 35.6 + meterRental;
-    return total;
-  };
-
-  const computeWholesale = (cu) => {
-    let total = 0;
-    const minCharge = 585.0;
-    const meterRental = 20;
-    if (cu <= 10) total = minCharge + meterRental;
-    else if (cu <= 20) total = minCharge + (cu - 10) * 64.8 + meterRental;
-    else if (cu <= 30) total = minCharge + 10 * 64.8 + (cu - 20) * 71.25 + meterRental;
-    else if (cu <= 40) total = minCharge + 10 * 64.8 + 10 * 71.25 + (cu - 30) * 78.3 + meterRental;
-    else total = minCharge + 10 * 64.8 + 10 * 71.25 + 10 * 78.3 + (cu - 40) * 85.5 + meterRental;
-    return total;
-  };
-
-  const calculateBill = (consumption, categoryRaw, rateCode = null) => {
+  const calculateBill = (consumption, categoryRaw) => {
     const cu = parseInt(consumption, 10);
     if (Number.isNaN(cu) || cu < 0) return { bill: 0, includesMeterRental: true };
-    const catId = resolveCategoryId(categoryRaw);
+
+    const classification = resolveClassification(categoryRaw);
     let result = 0;
-    switch (catId) {
-      case 12:
-        result = computeResidential(cu);
-        break;
-      case 22:
-        result = computeGovernment(cu);
-        break;
-      case 32:
-        result = computeCommercialIndustrial(cu, rateCode);
-        break;
-      case 33:
-        result = computeCommercialA(cu, rateCode);
-        break;
-      case 34:
-        result = computeCommercialB(cu);
-        break;
-      case 35:
-        result = computeCommercialD(cu);
-        break;
-      case 36:
-        result = computeWholesale(cu);
-        break;
-      default:
-        // Fallback: treat as residential
-        result = computeResidential(cu);
+
+    if (classification === 'RESIDENTIAL' || classification === 'GOVERNMENT') {
+      result = computeResidentialBase(cu) + METER_RENTAL;
+    } else {
+      result = computeCommercialIndustrial(cu, classification);
     }
+
     return { bill: parseFloat(result.toFixed(2)), includesMeterRental: true };
   };
 
@@ -1213,8 +1113,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     }
     
     // Automatically set customer type based on category id (default residential)
-    const catId = resolveCategoryId(customer.category ?? '');
-    setCustomerType(catId && catId >= 32 ? 'commercial' : 'residential');
+    const classification = resolveClassification(customer.category ?? '');
+    setCustomerType(classification === 'RESIDENTIAL' || classification === 'GOVERNMENT' ? 'residential' : 'commercial');
 
     // Open Reading Entry directly on customer tap.
     const hasCurrent = customer.currentReading != null && customer.currentReading !== undefined;
@@ -1401,7 +1301,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       rateCode: customer.rateCode
     });
     
-    const { bill: currentBillCalc, includesMeterRental } = calculateBill(consumption, customer.category, customer.rateCode);
+    const { bill: currentBillCalc, includesMeterRental } = calculateBill(consumption, customer.category);
     
     // Debug billing calculation
     console.log('Billing Calculation:', {

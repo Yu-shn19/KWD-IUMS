@@ -11,6 +11,8 @@ return new class extends Migration {
             $table->id();
 
             $table->string('account_no')->unique();
+            $table->string('first_name');
+            $table->string('last_name');
             $table->string('account_name');
             $table->string('gender', 20)->nullable();
 

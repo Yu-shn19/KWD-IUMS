@@ -1371,52 +1371,9 @@ class BillingLookupService
         return $name;
     }
 
-    private function calculateWaterBill(float $consumption, ?string $category = null): float
+    private function calculateWaterBill(float $consumption, ?string $category = null, ?string $rateCode = null): float
     {
-        $cu = (int) $consumption;
-        $isCommercial = $category && strtolower($category) === 'commercial';
-
-        return $isCommercial ? $this->computeCommercial($cu) : $this->computeResidential($cu);
-    }
-
-    private function computeCommercial(int $cu): float
-    {
-        $minCharge = 243.75;
-
-        if ($cu <= 10) {
-            return $minCharge;
-        }
-        if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 27.0);
-        }
-        if ($cu <= 30) {
-            return $minCharge + (10 * 27.0) + (($cu - 20) * 29.69);
-        }
-        if ($cu <= 40) {
-            return $minCharge + (10 * 27.0) + (10 * 29.69) + (($cu - 30) * 32.62);
-        }
-
-        return $minCharge + (10 * 27.0) + (10 * 29.69) + (10 * 32.62) + (($cu - 40) * 35.62);
-    }
-
-    private function computeResidential(int $cu): float
-    {
-        $minCharge = 195.0;
-
-        if ($cu <= 10) {
-            return $minCharge;
-        }
-        if ($cu <= 20) {
-            return $minCharge + (($cu - 10) * 21.6);
-        }
-        if ($cu <= 30) {
-            return $minCharge + (10 * 21.6) + (($cu - 20) * 23.75);
-        }
-        if ($cu <= 40) {
-            return $minCharge + (10 * 21.6) + (10 * 23.75) + (($cu - 30) * 26.1);
-        }
-
-        return $minCharge + (10 * 21.6) + (10 * 23.75) + (10 * 26.1) + (($cu - 40) * 28.5);
+        return app(WaterBillingService::class)->calculate($consumption, $category, $rateCode);
     }
 
     private function resolveBillMonth(string $billMonthInput): ?Carbon
