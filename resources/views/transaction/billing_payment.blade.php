@@ -350,12 +350,12 @@
 
                 <div class="container-fluid py-4 payment-shell">
                     <div class="card shadow payment-card">
-                        <div class="card-header py-3 d-flex align-items-center justify-content-between">
+                        <div class="card-header py-3 d-flex align-items-center justify-content-between" data-tour="payment-header">
                             <div>
                                 <h5 class="mb-1 text-primary text-uppercase fw-bold">Payments and Collections</h5>
                                 <small class="text-muted">Record official receipts and update customer ledger balances.</small>
                             </div>
-                            <div class="d-flex flex-column flex-md-row gap-2">
+                            <div class="d-flex flex-column flex-md-row gap-2" data-tour="payment-header-fields">
                                 <div class="form-inline">
                                     <label class="mr-2 text-muted">Bill Month</label>
                                     <input type="text" class="form-control form-control-sm text-center font-weight-bold" id="billMonth" value="{{ $defaultBillMonth }}">
@@ -380,7 +380,7 @@
                             <div class="card-body">
                                 <div class="row">
                                     <div class="col-lg-5">
-                                        <div class="account-box mb-4">
+                                        <div class="account-box mb-4" data-tour="payment-account-box">
                                             <div class="form-section-title">Account Information</div>
                                             <div class="form-group" style="position: relative;">
                                                 <label class="text-muted small mb-2 d-flex align-items-center" style="font-weight: 600; color: #4b5563;">
@@ -438,7 +438,7 @@
 
                                     <div class="col-lg-7">
                                         <div class="form-section-title">Payment Breakdown</div>
-                                        <div class="payment-grid mb-4">
+                                        <div class="payment-grid mb-4" data-tour="payment-breakdown">
                                             <table class="table table-borderless mb-0">
                                                 <thead>
                                                     <tr>
@@ -595,7 +595,7 @@
                                             </table>
                                         </div>
 
-                                        <div class="totals-strip px-4 py-3 mb-4">
+                                        <div class="totals-strip px-4 py-3 mb-4" data-tour="payment-cash-strip">
                                             <div class="row align-items-center">
                                                 <div class="col-sm-4">
                                                     <label>Cash Tendered</label>
@@ -635,7 +635,7 @@
                                     <i class="fas fa-info-circle mr-1 text-primary"></i>
                                     <span id="formStatusText">Review all fields before saving. Totals are computed automatically.</span>
                                 </div>
-                                <div class="d-flex gap-2 align-items-center">
+                                <div class="d-flex gap-2 align-items-center" data-tour="payment-action-buttons">
                                     <button type="button" class="btn btn-outline-primary btn-soft mr-2" id="openBamSearchModalBtn" title="Search BAM No. in Sundries table">
                                         <i class="fas fa-search mr-1"></i>Search BAM No.
                                     </button>

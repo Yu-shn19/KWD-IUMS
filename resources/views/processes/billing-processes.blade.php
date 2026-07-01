@@ -57,7 +57,7 @@
                                                 <small class="text-muted">Enter an account number to display the account name and most recent downloaded bill.</small>
                                             </div>
                                         </div>
-                                        <form id="quickLookupForm" class="mb-0">
+                                        <form id="quickLookupForm" class="mb-0" data-tour="billing-quick-lookup">
                                             <div class="row align-items-end">
                                                 <div class="col-lg-4">
                                                     <div class="form-group mb-3">
@@ -112,7 +112,7 @@
                                         <div class="row">
                                             <!-- Process Configuration Section -->
                                             <div class="col-lg-4 mb-3">
-                                                <div class="card border h-100 shadow-sm">
+                                                <div class="card border h-100 shadow-sm" data-tour="billing-process-config">
                                                     <div class="card-body">
                                                         <h6 class="font-weight-bold text-dark mb-3 pb-2 border-bottom">
                                                             <i class="fas fa-sliders-h text-primary mr-2"></i>Process Configuration
@@ -200,7 +200,7 @@
                                             </div>
 
                                             <!-- Billing Dates Section (Hidden for Bill Printing and Generate Surcharge) -->
-                                            <div class="col-lg-4 mb-3" id="billingDatesSection">
+                                            <div class="col-lg-4 mb-3" id="billingDatesSection" data-tour="billing-dates-section">
                                                 <div class="card border h-100 shadow-sm">
                                                     <div class="card-body">
                                                         <h6 class="font-weight-bold text-dark mb-3 pb-2 border-bottom">
@@ -239,20 +239,20 @@
 
                                             <!-- Actions Section -->
                                             <div class="col-lg-4 mb-3">
-                                                <div class="card border h-100 shadow-sm">
+                                                <div class="card border h-100 shadow-sm" data-tour="billing-process-actions">
                                                     <div class="card-body">
                                                         <h6 class="font-weight-bold text-dark mb-3 pb-2 border-bottom">
                                                             <i class="fas fa-bolt text-primary mr-2"></i>Actions
                                                         </h6>
                                                         
                                                         <div class="mb-4">
-                                                            <button type="button" class="btn btn-success btn-block mb-2 font-weight-bold" style="padding: 12px;">
+                                                            <button type="button" class="btn btn-success btn-block mb-2 font-weight-bold" id="executeProcessBtn" style="padding: 12px;">
                                                                 <i class="fas fa-play mr-2"></i>Execute Process
                                                             </button>
-                                                            <button type="button" class="btn btn-primary btn-block mb-2" style="padding: 10px;">
+                                                            <button type="button" class="btn btn-primary btn-block mb-2" id="searchRecordsBtn" style="padding: 10px;">
                                                                 <i class="fas fa-search mr-2"></i>Search Records
                                                             </button>
-                                                            <button type="button" class="btn btn-warning btn-block mb-2" style="padding: 10px;">
+                                                            <button type="button" class="btn btn-warning btn-block mb-2" id="resetProcessFormBtn" style="padding: 10px;">
                                                                 <i class="fas fa-sync-alt mr-2"></i>Reset Form
                                                             </button>
                                                         </div>
@@ -274,7 +274,7 @@
                         <div class="row">
                             <div class="col-lg-12">
                                 <div class="card border-0 shadow">
-                                    <div class="card-header bg-white border-bottom py-3">
+                                    <div class="card-header bg-white border-bottom py-3" data-tour="billing-records-toolbar">
                                         <div class="d-flex justify-content-between align-items-center">
                                             <div class="d-flex align-items-center">
                                                 <div class="bg-primary rounded p-2 mr-3">

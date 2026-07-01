@@ -122,8 +122,10 @@
                 <span class="input-group-text flex-shrink-0">
                     <i class="fas fa-search"></i>
                 </span>
-                <input type="text" class="form-control" id="consumerSearch" placeholder="Search by Name, Account Number, Meter..." autocomplete="off">
-                <div id="consumerSuggestions" class="list-group" style="position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; max-height: 300px; overflow-y: auto; display: none; margin-top: 2px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-radius: 4px; background: white; border: 1px solid #ddd;"></div>
+                <div class="position-relative flex-grow-1" data-tour="consumer-search">
+                    <input type="text" class="form-control" id="consumerSearch" placeholder="Search by Name, Account Number, Meter..." autocomplete="off">
+                    <div id="consumerSuggestions" class="list-group" style="position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; max-height: 300px; overflow-y: auto; display: none; margin-top: 2px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-radius: 4px; background: white; border: 1px solid #ddd;"></div>
+                </div>
             </div>
         </div>
     </div>

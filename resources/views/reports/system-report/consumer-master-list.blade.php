@@ -189,7 +189,7 @@
                                                 <button type="button" class="btn btn-success btn-sm mr-2" id="exportReadingGuideExcelBtn">
                                                     <i class="fas fa-file-excel mr-1"></i>Export Excel
                                                 </button>
-                                                <button type="button" class="btn btn-info btn-sm" data-toggle="modal" data-target="#importDmModal" title="Upload Excel to add DM for multiple consumers (date: 2026-02-27)">
+                                                <button type="button" class="btn btn-info btn-sm" data-toggle="modal" data-target="#importDmModal" title="Upload Excel to add DM for multiple consumers">
                                                     <i class="fas fa-file-excel mr-1"></i>Upload DM (Excel)
                                                 </button>
                                             </div>
@@ -441,9 +441,13 @@
                     </button>
                 </div>
                 <div class="modal-body">
-                    <p class="text-muted small mb-3">Upload an Excel file with columns <strong>account_no</strong> and <strong>amount</strong>. All DMs will use date <strong>2026-02-27</strong>. Reference is auto-generated (6 digits) per row.</p>
+                    <p class="text-muted small mb-3">Upload an Excel file with columns <strong>account_no</strong> and <strong>amount</strong>. All DMs will use the date you select below. Reference is auto-generated (6 digits) per row.</p>
                     <form id="importDmForm">
                         @csrf
+                        <div class="form-group">
+                            <label for="importDmDate" class="font-weight-bold">DM Date <span class="text-danger">*</span></label>
+                            <input type="date" name="date" id="importDmDate" class="form-control" value="{{ now()->format('Y-m-d') }}" required>
+                        </div>
                         <div class="form-group">
                             <label for="importDmFile" class="font-weight-bold">Excel File <span class="text-danger">*</span></label>
                             <input type="file" name="file" id="importDmFile" class="form-control" accept=".xlsx,.xls,.csv" required>
@@ -661,7 +665,7 @@
                     $('#addDmConsumerZoneId').val(btn.data('consumer-zone-id'));
                     $('#addDmConsumerAccount').text(btn.data('account-no') || '--');
                     $('#addDmConsumerName').text(btn.data('account-name') || '--');
-                    $('#addDmDate').val('2026-02-27');
+                    $('#addDmDate').val('{{ now()->format('Y-m-d') }}');
                     $('#addDmAmount').val('');
                     $('#addDmReference').attr('placeholder', 'Auto-generated (6 digits) when saved').val('');
                 }
@@ -732,15 +736,26 @@
                 });
             });
 
+            // Upload DM (Excel): reset default date when modal opens
+            $('#importDmModal').on('show.bs.modal', function() {
+                $('#importDmDate').val('{{ now()->format('Y-m-d') }}');
+            });
+
             // Upload DM (Excel): submit
             $('#importDmSubmitBtn').on('click', function() {
                 var fileInput = $('#importDmFile')[0];
+                var date = $('#importDmDate').val();
+                if (!date) {
+                    Swal.fire({ icon: 'warning', title: 'Required', text: 'Please select a DM date.', confirmButtonColor: '#f0ad4e' });
+                    return;
+                }
                 if (!fileInput || !fileInput.files || !fileInput.files.length) {
                     Swal.fire({ icon: 'warning', title: 'Required', text: 'Please select an Excel file.', confirmButtonColor: '#f0ad4e' });
                     return;
                 }
                 var formData = new FormData();
                 formData.append('_token', $('#importDmForm input[name="_token"]').val());
+                formData.append('date', date);
                 formData.append('file', fileInput.files[0]);
                 var btn = $('#importDmSubmitBtn');
                 btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-1"></i>Importing...');

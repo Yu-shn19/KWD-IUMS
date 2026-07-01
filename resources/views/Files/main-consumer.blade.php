@@ -34,13 +34,13 @@
 
                         <!-- Action Buttons -->
                         <div class="d-flex align-items-center justify-content-center justify-content-md-end flex-wrap">
-                            <button type="button" class="btn btn-success btn-sm mr-1 mb-1" data-toggle="modal" data-target="#newConsumerModal" data-bs-toggle="modal" data-bs-target="#newConsumerModal">
+                            <button type="button" class="btn btn-success btn-sm mr-1 mb-1" data-toggle="modal" data-target="#newConsumerModal" data-bs-toggle="modal" data-bs-target="#newConsumerModal" data-tour="consumer-new-btn">
                                 <i class="fas fa-plus me-1"></i>New
                             </button>
-                            <button type="button" class="btn btn-primary btn-sm mr-1 mb-1" id="editConsumerBtn" disabled>
+                            <button type="button" class="btn btn-primary btn-sm mr-1 mb-1" id="editConsumerBtn" disabled data-tour="consumer-edit-btn">
                                 <i class="fas fa-edit me-1"></i>Edit
                             </button>
-                            <button type="button" class="btn btn-danger btn-sm mb-1" id="deleteConsumerBtn" disabled>
+                            <button type="button" class="btn btn-danger btn-sm mb-1" id="deleteConsumerBtn" disabled data-tour="consumer-delete-btn">
                                 <i class="fas fa-trash me-1"></i>Delete
                             </button>
                         </div>
@@ -320,7 +320,7 @@
                                 </div>
 
                                 <!-- Meter Reading Card -->
-                                <div class="col-lg-6">
+                                <div class="col-lg-6" data-tour="consumer-meter-reading-card">
                                     <div class="card shadow-sm border-0 h-100">
                                         <div class="card-header bg-primary text-white py-3">
                                             <h6 class="mb-0 fw-semibold">Meter Reading</h6>
@@ -328,7 +328,7 @@
                                         </div>
                                         <div class="card-body">
                                             <div class="row g-3">
-                                                <div class="col-md-6">
+                                                <div class="col-md-6" data-tour="consumer-current-reading">
                                                     <div class="card bg-light h-100">
                                                         <div class="card-body">
                                                             <h6 class="text-success">Current Reading</h6>
@@ -345,7 +345,7 @@
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <div class="col-md-6">
+                                                <div class="col-md-6" data-tour="consumer-previous-reading">
                                                     <div class="card bg-light h-100">
                                                         <div class="card-body">
                                                             <h6 class="text-info">Previous Reading</h6>
@@ -386,7 +386,7 @@
                                             @endphp
 
                                             @if($consumer)
-                                            <div class="card shadow-sm border mt-3 overflow-hidden {{ $hasReadingHistory ? 'base-reading-locked' : '' }}" id="meterReadingBaseBlock" data-has-history="{{ $hasReadingHistory ? '1' : '0' }}" style="border-left: 4px solid #0d6efd !important;">
+                                            <div class="card shadow-sm border mt-3 overflow-hidden {{ $hasReadingHistory ? 'base-reading-locked' : '' }}" id="meterReadingBaseBlock" data-tour="consumer-base-reading" data-has-history="{{ $hasReadingHistory ? '1' : '0' }}" style="border-left: 4px solid #0d6efd !important;">
                                                 <div class="card-body p-3 bg-white">
                                                     <div class="row g-3 align-items-start">
                                                         <div class="col-lg-7">
@@ -412,7 +412,7 @@
                                                             </div>
                                                         </div>
                                                         <div class="col-lg-5">
-                                                            <div class="rounded-3 border bg-light p-3 text-center h-100 d-flex flex-column justify-content-center">
+                                                            <div class="rounded-3 border bg-light p-3 text-center h-100 d-flex flex-column justify-content-center" data-tour="consumer-saved-base">
                                                                 <span class="text-uppercase small fw-semibold text-secondary" style="letter-spacing: .06em;">Saved base</span>
                                                                 <span class="display-6 fw-bold text-primary my-1 lh-1" id="meterReadingBaseSaved">{{ $baseReading !== null ? $baseReading : '—' }}</span>
                                                                 <span class="small text-secondary" id="meterReadingBaseSavedDate">

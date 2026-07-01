@@ -22,7 +22,7 @@
                     <!-- Tabs -->
                     <div class="row mb-3">
                         <div class="col-md-12">
-                            <ul class="nav nav-tabs">
+                            <ul class="nav nav-tabs" data-tour="meter-reading-tabs">
                                 <li class="nav-item">
                                     <a class="nav-link active" data-toggle="tab" href="#meterReaders">Meter Readers</a>
                                 </li>
@@ -142,7 +142,7 @@
                                                 <i class="fas fa-cog mr-2"></i>Actions
                                             </h6>
                                         </div>
-                                        <div class="card-body p-3">
+                                        <div class="card-body p-3" data-tour="meter-reading-actions">
                                             <button type="button" id="assignScheduleBtn" class="btn btn-success btn-block mb-2 shadow-sm" data-toggle="modal" data-target="#assignScheduleModal">
                                                 <i class="fas fa-user-plus mr-2"></i>Assign to Reader
                                             </button>

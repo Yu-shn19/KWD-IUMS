@@ -3,15 +3,15 @@
   <!-- Brand Section -->
   <a class="sidebar-brand" href="/">
     <div class="sidebar-brand-icon">
-      <img src="{{url('WDMS\img\logo\KlogoC.png')}}" alt="Logo" class="brand-logo">
+      <img src="{{ url('WDMS/img/logo/KlogoC.png') }}" alt="Logo" class="brand-logo">
     </div>
     <div class="sidebar-brand-text">eKWD-IUMS</div>
   </a>
   <div class="sidebar-divider-modern"></div>
 
   <!-- Dashboard -->
-  <li class="nav-item">
-    <a class="nav-link active-dashboard" href="/">
+  <li class="nav-item" id="sidebar-group-dashboard">
+    <a class="nav-link active-dashboard" href="/" id="sidebar-nav-dashboard" data-tour="nav-dashboard">
       <i class="fas fa-fw fa-home"></i>
       <span>Dashboard</span>
       <span class="nav-link-badge">Home</span>
@@ -26,16 +26,16 @@
   </div>
 
   <!-- Files Section -->
-  <li class="nav-item">
+  <li class="nav-item" id="sidebar-group-files">
     <a class="nav-link menu-link" href="#" data-toggle="collapse" data-target="#collapseBootstrap"
-      aria-expanded="false" aria-controls="collapseBootstrap">
+      aria-expanded="false" aria-controls="collapseBootstrap" id="sidebar-nav-files" data-tour="nav-files">
       <i class="far fa-fw fa-folder"></i>
-      <span>Files</span>
+      <span id="sidebar-label-files">Files</span>
       <i class="fas fa-chevron-right chevron-icon"></i>
     </a>
     <div id="collapseBootstrap" class="collapse" aria-labelledby="headingBootstrap" data-parent="#accordionSidebar">
       <div class="collapse-inner-modern">
-           <a class="collapse-item" href="{{ route('consumer') }}">
+           <a class="collapse-item" href="{{ route('consumer') }}" data-tour="nav-consumers">
           <i class="fas fa-circle small-icon"></i> Consumers
         </a>
         <a class="collapse-item" href="{{ route('consumer.import') }}">
@@ -58,11 +58,11 @@
   </li>
 
   <!-- Transactions Section -->
-  <li class="nav-item">
+  <li class="nav-item" id="sidebar-group-transactions">
     <a class="nav-link menu-link" href="#" data-toggle="collapse" data-target="#collapseForm"
-      aria-expanded="false" aria-controls="collapseForm">
+      aria-expanded="false" aria-controls="collapseForm" id="sidebar-nav-transactions" data-tour="nav-transactions">
       <i class="fas fa-fw fa-credit-card"></i>
-      <span>Transactions</span>
+      <span id="sidebar-label-transactions">Transactions</span>
       <i class="fas fa-chevron-right chevron-icon"></i>
     </a>
     <div id="collapseForm" class="collapse" aria-labelledby="headingForm" data-parent="#accordionSidebar">
@@ -73,7 +73,7 @@
         <a class="collapse-item" href="{{ route('billing-adjustment') }}">
           <i class="fas fa-circle small-icon"></i> Billing Adjustment
         </a>
-        <a class="collapse-item" href="{{ route('billing-payment') }}">
+        <a class="collapse-item" href="{{ route('billing-payment') }}" data-tour="nav-billing-payment">
           <i class="fas fa-circle small-icon"></i> Bill Payments/Collection
         </a>
         <a class="collapse-item" href="{{ route('collection.import') }}">
@@ -87,22 +87,22 @@
   </li>
 
   <!-- Process Section -->
-  <li class="nav-item">
+  <li class="nav-item" id="sidebar-group-process">
     <a class="nav-link menu-link" href="#" data-toggle="collapse" data-target="#collapseTable"
-      aria-expanded="false" aria-controls="collapseTable">
+      aria-expanded="false" aria-controls="collapseTable" id="sidebar-nav-process" data-tour="nav-process">
       <i class="fas fa-fw fa-cogs"></i>
-      <span>Process</span>
+      <span id="sidebar-label-process">Process</span>
       <i class="fas fa-chevron-right chevron-icon"></i>
     </a>
     <div id="collapseTable" class="collapse" aria-labelledby="headingTable" data-parent="#accordionSidebar">
       <div class="collapse-inner-modern">
-        <a class="collapse-item" href="/billing-processes">
+        <a class="collapse-item" href="/billing-processes" data-tour="nav-billing-process">
           <i class="fas fa-circle small-icon"></i> Billing Process
         </a>
-        <a class="collapse-item" href="/meter-reading">
+        <a class="collapse-item" href="/meter-reading" data-tour="nav-meter-reading">
           <i class="fas fa-circle small-icon"></i> Meter Reading Assignment
         </a>
-        <a class="collapse-item" href="{{ route('download-reading') }}">
+        <a class="collapse-item" href="{{ route('download-reading') }}" data-tour="nav-download-reading">
           <i class="fas fa-circle small-icon"></i> Download Reading
         </a>
         <a class="collapse-item" href="{{ route('disconnection.index') }}">
@@ -113,11 +113,11 @@
   </li>
 
   <!-- Reports Section -->
-  <li class="nav-item">
+  <li class="nav-item" id="sidebar-group-reports">
     <a class="nav-link menu-link" href="#" data-toggle="collapse" data-target="#collapseReport"
-      aria-expanded="false" aria-controls="collapseReport">
+      aria-expanded="false" aria-controls="collapseReport" id="sidebar-nav-reports" data-tour="nav-reports">
       <i class="fas fa-fw fa-chart-bar"></i>
-      <span>Reports</span>
+      <span id="sidebar-label-reports">Reports</span>
       <i class="fas fa-chevron-right chevron-icon"></i>
     </a>
     <div id="collapseReport" class="collapse" aria-labelledby="headingTable" data-parent="#accordionSidebar">
@@ -136,11 +136,11 @@
   </li>
 
   <!-- System Options Section -->
-  <li class="nav-item">
+  <li class="nav-item" id="sidebar-group-system-options">
     <a class="nav-link menu-link" href="#" data-toggle="collapse" data-target="#collapseOptions"
-      aria-expanded="false" aria-controls="collapseOptions">
+      aria-expanded="false" aria-controls="collapseOptions" id="sidebar-nav-system-options" data-tour="nav-system-options">
       <i class="fas fa-fw fa-sliders-h"></i>
-      <span>System Options</span>
+      <span id="sidebar-label-system-options">System Options</span>
       <i class="fas fa-chevron-right chevron-icon"></i>
     </a>
     <div id="collapseOptions" class="collapse" aria-labelledby="headingTable" data-parent="#accordionSidebar">
@@ -244,7 +244,10 @@
 
   /* Brand Section */
   .sidebar-brand {
-    padding: 1.5rem 1rem !important;
+    padding: 1.25rem 1rem !important;
+    height: auto !important;
+    min-height: unset !important;
+    overflow: visible !important;
     background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
     border-radius: 0 0 20px 0;
     box-shadow: 0 8px 24px rgba(59, 130, 246, 0.25);
@@ -262,10 +265,11 @@
   }
 
   .sidebar-brand-icon {
-    width: 50px;
-    height: 50px;
-    min-width: 50px;
-    min-height: 50px;
+    width: 52px;
+    height: 52px;
+    min-width: 52px;
+    min-height: 52px;
+    flex-shrink: 0;
     background: rgba(255, 255, 255, 0.95);
     border-radius: 50%;
     display: flex;
@@ -273,6 +277,7 @@
     justify-content: center;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     overflow: hidden;
+    padding: 4px;
   }
 
   .sidebar-brand-text {
@@ -283,10 +288,14 @@
     white-space: nowrap;
   }
 
-  .brand-logo {
+  .brand-logo,
+  .sidebar .sidebar-brand .sidebar-brand-icon img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    max-height: none !important;
+    object-fit: contain;
+    object-position: center;
+    display: block;
   }
 
   /* Divider */
