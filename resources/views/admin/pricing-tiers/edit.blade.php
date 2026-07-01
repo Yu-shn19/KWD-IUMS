@@ -220,6 +220,5 @@
             @include('partials.footer')
         </div>
     </div>
-    @include('partials.main-content')
 </body>
 </html>

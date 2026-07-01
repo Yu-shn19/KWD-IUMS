@@ -1118,6 +1118,7 @@ class ReportController extends Controller
             ->leftJoin(mr_col('downloaded_readings as dr'), mr_col('cp.reading_id'), '=', mr_col('dr.id'))
             ->leftJoin(mr_col('meter_reading_schedules as mrs'), mr_col('dr.schedule_id'), '=', mr_col('mrs.id'))
             ->leftJoin(mr_col('consumer_zone as cz'), mr_col('cp.consumer_zone_id'), '=', mr_col('cz.id'))
+            ->leftJoin(mr_col('lro_ledger as ll'), mr_col('cp.lro_ledger_id'), '=', mr_col('ll.id'))
             ->where(function ($q) {
                 $q->where(mr_col('cp.payment_amount'), '>', 0)
                   ->orWhere(mr_col('cp.remarks'), 'like', 'Cancelled OR#%');
@@ -1127,7 +1128,7 @@ class ReportController extends Controller
                 'cp.or_number',
                 DB::raw('COALESCE(cp.paid_at, cp.created_at) as paid_date'),
                 'cz.account_no as account_number',
-                'cz.account_name',
+                DB::raw('COALESCE(cz.account_name, ll.account_name) as account_name'),
                 'cz.zone_code as zone',
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
@@ -1331,6 +1332,7 @@ class ReportController extends Controller
             ->leftJoin(mr_col('downloaded_readings as dr'), mr_col('cp.reading_id'), '=', mr_col('dr.id'))
             ->leftJoin(mr_col('meter_reading_schedules as mrs'), mr_col('dr.schedule_id'), '=', mr_col('mrs.id'))
             ->leftJoin(mr_col('consumer_zone as cz'), mr_col('cp.consumer_zone_id'), '=', mr_col('cz.id'))
+            ->leftJoin(mr_col('lro_ledger as ll'), mr_col('cp.lro_ledger_id'), '=', mr_col('ll.id'))
             ->where(function ($q) {
                 $q->where(mr_col('cp.payment_amount'), '>', 0)
                   ->orWhere(mr_col('cp.remarks'), 'like', 'Cancelled OR#%');
@@ -1340,7 +1342,7 @@ class ReportController extends Controller
                 'cp.or_number',
                 DB::raw('COALESCE(cp.paid_at, cp.created_at) as paid_date'),
                 'cz.account_no as account_number',
-                'cz.account_name',
+                DB::raw('COALESCE(cz.account_name, ll.account_name) as account_name'),
                 'cz.zone_code as zone',
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',

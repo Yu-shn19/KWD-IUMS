@@ -257,9 +257,7 @@ class ConsumerController extends Controller
      */
     public function store(Request $request)
     {
-        $request->merge([
-            'account_no' => $this->normalizeAccountNo($request->input('account_no')),
-        ]);
+        $this->normalizeConsumerRequestInput($request);
 
         $validator = Validator::make($request->all(), [
             'install_date' => 'nullable|date',
@@ -669,11 +667,8 @@ class ConsumerController extends Controller
      */
       public function update(Request $request, ConsumerZone $consumer)
     {
+        $this->normalizeConsumerRequestInput($request);
         $billDiscChanged = $this->consumerBillDiscChangedFromRequest($request, $consumer);
-
-        $request->merge([
-            'account_no' => $this->normalizeAccountNo($request->input('account_no')),
-        ]);
 
         $rules = [
             'install_date' => 'nullable|date',
@@ -701,7 +696,7 @@ class ConsumerController extends Controller
             'bill_disc_updated_at' => 'nullable|date',
         ];
 
-        if ($billDiscChanged) {
+        if ($billDiscChanged && $this->isScDiscountPercent($request->input('bill_disc_percent'))) {
             $rules['bill_disc_updated_at'] = 'required|date';
         }
 
@@ -865,29 +860,40 @@ class ConsumerController extends Controller
         }
     }
 
- /**
-    * True when bill discount fields in request differ from stored values.
+    /**
+     * Normalize bill_disc_percent for comparison (null = None, SC DISCOUNT = senior discount).
+     */
+    private function normalizeBillDiscPercent($value): ?string
+    {
+        if ($value === '' || $value === null) {
+            return null;
+        }
+        $s = trim((string) $value);
+        if ($s === '') {
+            return null;
+        }
+        // Backward compatibility: treat numeric 5/5.00 as SC DISCOUNT.
+        if (is_numeric($s) && abs(((float) $s) - 5.0) < 0.001) {
+            return 'SC DISCOUNT';
+        }
+        if (strtoupper($s) === 'SC DISCOUNT') {
+            return 'SC DISCOUNT';
+        }
+
+        // Legacy non-SC values (e.g. "0", "10") match UI "None".
+        return null;
+    }
+
+    private function isScDiscountPercent($value): bool
+    {
+        return $this->normalizeBillDiscPercent($value) === 'SC DISCOUNT';
+    }
+
+    /**
+     * True when bill discount fields in request differ from stored values.
      */
     private function consumerBillDiscChangedFromRequest(Request $request, ConsumerZone $consumer): bool
     {
-        $normPercent = function ($v) {
-            if ($v === '' || $v === null) {
-                return null;
-            }
-            $s = trim((string) $v);
-            if ($s === '') {
-                return null;
-            }
-            // Backward compatibility: treat numeric 5/5.00 as SC DISCOUNT.
-            if (is_numeric($s) && abs(((float) $s) - 5.0) < 0.001) {
-                return 'SC DISCOUNT';
-            }
-            if (strtoupper($s) === 'SC DISCOUNT') {
-                return 'SC DISCOUNT';
-            }
-            return $s;
-        };
-
         $normAmount = function ($v) {
             if ($v === '' || $v === null) {
                 return null;
@@ -899,7 +905,8 @@ class ConsumerController extends Controller
             return round((float) $v, 4);
         };
 
-        $percentChanged = $normPercent($request->input('bill_disc_percent')) !== $normPercent($consumer->bill_disc_percent);
+        $percentChanged = $this->normalizeBillDiscPercent($request->input('bill_disc_percent'))
+            !== $this->normalizeBillDiscPercent($consumer->bill_disc_percent);
         $amountChanged = $request->has('bill_disc_amount')
             && $normAmount($request->input('bill_disc_amount')) !== $normAmount($consumer->bill_disc_amount);
 
@@ -1094,6 +1101,35 @@ class ConsumerController extends Controller
     private function normalizeAccountNo(?string $accountNo): string
     {
         return trim((string) ($accountNo ?? ''));
+    }
+
+    /**
+     * Convert empty strings to null for optional numeric fields so Laravel validation passes.
+     */
+    private function normalizeConsumerRequestInput(Request $request): void
+    {
+        $merge = [
+            'account_no' => $this->normalizeAccountNo($request->input('account_no')),
+        ];
+
+        foreach (['bill_disc_amount', 'latitude', 'longitude'] as $key) {
+            $value = $request->input($key);
+            if ($value === '' || $value === null) {
+                $merge[$key] = null;
+            }
+        }
+
+        $sequence = $request->input('sequence');
+        if ($sequence === '' || $sequence === null) {
+            $merge['sequence'] = null;
+        }
+
+        $billDiscPercent = $request->input('bill_disc_percent');
+        if ($billDiscPercent === '' || $billDiscPercent === null) {
+            $merge['bill_disc_percent'] = null;
+        }
+
+        $request->merge($merge);
     }
 
     private function accountNoIsTaken(string $accountNo, ?int $exceptConsumerId = null): bool

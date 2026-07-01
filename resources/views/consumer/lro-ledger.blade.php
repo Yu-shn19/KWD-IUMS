@@ -252,8 +252,7 @@ jQuery(document).ready(function($) {
             row.append('<td class="text-end">' + (transaction.debit || '') + '</td>');
             row.append('<td class="text-end">' + (transaction.credit || '') + '</td>');
             row.append('<td class="text-end">' + (transaction.balance || '0.00') + '</td>');
-            // Username column is fixed to FLORAME as requested
-            row.append('<td class="text-center">FLORAME</td>');
+            row.append('<td class="text-center">' + (transaction.username || '') + '</td>');
             tbody.append(row);
         });
     }

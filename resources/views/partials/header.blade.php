@@ -7,7 +7,7 @@
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta name="theme-color" content="#3b82f6">
   
-  <link href="{{url('WDMS/img/logo/logo.png')}}" rel="icon">
+  <link href="{{url('WDMS\img\logo\KlogoC.png')}}" rel="icon">
   <title>KIBLAWAN WATER DISTRICT-IUMS | Water Management System</title>
   
   <!-- Font Awesome -->

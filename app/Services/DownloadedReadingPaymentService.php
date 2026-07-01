@@ -52,8 +52,12 @@ class DownloadedReadingPaymentService
             $paymentData = $this->buildPaymentData($validated, $context, $change, $paidAt);
             $consumerPayment = $this->upsertConsumerPayment($validated, $context, $paymentData, $isUpdate);
 
-            if (!$isUpdate && !empty($validated['sundries']) && $context->consumerId) {
-                $this->validateSundryCharges($validated, $context->consumerId);
+            if (!$isUpdate && !empty($validated['sundries'])) {
+                if ($context->consumerId) {
+                    $this->validateSundryCharges($validated, $context->consumerId);
+                } else {
+                    $this->validateOthersLroCharges($validated);
+                }
             }
 
             $this->cancelDisconnectionOrdersIfNeeded($context, $consumerPayment);
@@ -96,8 +100,12 @@ class DownloadedReadingPaymentService
                 );
             }
 
-            if (!$isUpdate && !empty($validated['sundries']) && $context->consumerId) {
-                $this->createSundryCredits($validated, $context->consumerId, $paidAt);
+            if (!$isUpdate && !empty($validated['sundries'])) {
+                if ($context->consumerId) {
+                    $this->createSundryCredits($validated, $context->consumerId, $paidAt);
+                } else {
+                    $this->createOthersLroCredits($validated, $paidAt);
+                }
             }
 
             $result = [
@@ -226,8 +234,11 @@ class DownloadedReadingPaymentService
         float $change,
         Carbon $paidAt
     ): array {
+        $lroLedgerId = !$context->consumerId ? $this->resolvePrimaryLroLedgerId($validated) : null;
+
         return ConsumerPayment::filterTableAttributes([
             'consumer_zone_id' => $context->consumerId,
+            'lro_ledger_id' => $lroLedgerId,
             'payment_method' => $validated['payment_method'],
             'payment_amount' => round($validated['amount_due'], 2),
             'amount_tendered' => round($validated['amount_tendered'], 2),
@@ -844,6 +855,105 @@ class DownloadedReadingPaymentService
     /**
      * @param  array<string, mixed>  $validated
      */
+    private function resolvePrimaryLroLedgerId(array $validated): ?int
+    {
+        foreach ($validated['sundries'] ?? [] as $sundry) {
+            $chargeId = (int) ($sundry['lro_ledger_id'] ?? 0);
+            if ($chargeId > 0) {
+                return $chargeId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function validateOthersLroCharges(array $validated): void
+    {
+        foreach ($validated['sundries'] ?? [] as $sundry) {
+            $sundryAmount = round((float) ($sundry['amount'] ?? 0), 2);
+            if ($sundryAmount <= 0) {
+                continue;
+            }
+
+            $chargeId = (int) ($sundry['lro_ledger_id'] ?? 0);
+            if ($chargeId <= 0) {
+                throw new \InvalidArgumentException('Each Others payment must reference an unpaid LRO charge (lro_ledger_id).');
+            }
+
+            $charge = LROLedger::query()
+                ->where('id', $chargeId)
+                ->where('type', 'Others')
+                ->first();
+
+            if (!$charge) {
+                throw new \InvalidArgumentException('Others LRO charge not found.');
+            }
+
+            if (strcasecmp(trim((string) ($charge->ledger ?? '')), 'LRO') !== 0) {
+                throw new \InvalidArgumentException('Others charge must belong to the LRO ledger.');
+            }
+
+            if (strcasecmp(trim((string) ($charge->type ?? '')), 'Others') !== 0) {
+                throw new \InvalidArgumentException('Charge must be an LRO Others entry.');
+            }
+
+            if (strcasecmp(trim((string) ($charge->status ?? '')), 'Approved') !== 0) {
+                throw new \InvalidArgumentException('Others LRO charge is not approved or is already paid.');
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function createOthersLroCredits(array $validated, Carbon $paidAt): void
+    {
+        $orNumber = trim((string) ($validated['official_receipt_number'] ?? ''));
+
+        foreach ($validated['sundries'] as $sundry) {
+            $sundryAmount = round((float) ($sundry['amount'] ?? 0), 2);
+            if ($sundryAmount <= 0) {
+                continue;
+            }
+
+            $chargeId = (int) ($sundry['lro_ledger_id'] ?? 0);
+            if ($chargeId <= 0) {
+                continue;
+            }
+
+            $charge = LROLedger::query()
+                ->where('id', $chargeId)
+                ->where('type', 'Others')
+                ->where('status', 'Approved')
+                ->first();
+
+            if (!$charge) {
+                continue;
+            }
+
+            LROLedger::create(LROLedger::filterTableAttributes([
+                'consumer_zone_id' => null,
+                'account_name' => $charge->account_name,
+                'type' => 'CM',
+                'date' => $paidAt->format('Y-m-d'),
+                'bam_no' => $charge->bam_no,
+                'amount' => $sundryAmount,
+                'ledger' => 'LRO',
+                'acct_code' => $charge->acct_code,
+                'remarks' => SundryLedgerRemarks::paymentRemark($orNumber, $chargeId),
+                'status' => 'Posted',
+                'paid_at' => $paidAt,
+                'username' => \App\Support\AuthUsername::formatted(),
+            ]));
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
     private function validateSundryCharges(array $validated, int $consumerId): void
     {
         foreach ($validated['sundries'] ?? [] as $sundry) {
@@ -914,6 +1024,7 @@ class DownloadedReadingPaymentService
                 'remarks' => SundryLedgerRemarks::paymentRemark($orNumber, $chargeId),
                 'status' => 'Posted',
                 'paid_at' => $paidAt,
+                'username' => \App\Support\AuthUsername::formatted(),
             ]));
         }
     }

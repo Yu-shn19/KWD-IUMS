@@ -6,6 +6,7 @@ use App\Models\BillingAdjustment;
 use App\Models\ConsumerLedger;
 use App\Models\ConsumerZone;
 use App\Models\LROLedger;
+use App\Support\AuthUsername;
 use App\Support\SundryAccountCodes;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -716,17 +717,25 @@ class BillingAdjustmentController extends Controller
         }
 
         $lroStatus = $this->resolveLroLedgerStatus($validated['status'] ?? $entry->status);
+        $entryType = $validated['type'] ?? $entry->type;
+        $othersFields = LROLedger::resolveOthersFields(
+            $entryType,
+            $consumerZone?->id ?? $entry->consumer_zone_id,
+            $validated['account_name'] ?? $validated['name'] ?? null
+        );
 
         $entry->update($this->buildLroLedgerAttributes(array_merge([
-            'type'            => $validated['type']            ?? $entry->type,
+            'type'            => $entryType,
             'ledger'          => 'LRO',
             'date'            => !empty($validated['date'])    ? $validated['date'] : $entry->date,
-            'consumer_zone_id'=> $consumerZone?->id ?? $entry->consumer_zone_id,
+            'consumer_zone_id'=> $othersFields['consumer_zone_id'],
+            'account_name'    => $othersFields['account_name'],
             'bam_no'          => $validated['bam_no']          ?? $entry->bam_no,
             'amount'          => isset($validated['amount'])   ? (float) $validated['amount'] : $entry->amount,
             'acct_code'       => $validated['acct_code']       ?? $entry->acct_code,
             'remarks'         => $validated['remarks']         ?? $entry->remarks,
             'correct_reading' => isset($validated['correct_reading']) ? (float) $validated['correct_reading'] : $entry->correct_reading,
+            'username'        => trim((string) ($entry->username ?? '')) !== '' ? $entry->username : $this->authUsername(),
         ], $lroStatus)));
 
         return response()->json([
@@ -784,15 +793,22 @@ class BillingAdjustmentController extends Controller
 
             $statusRaw = $validated['status'] ?? 'Pending';
             $bamNo = $validated['bam_no'] ?? $this->generateBamNumber();
+            $entryType = $validated['type'] ?? SundryAccountCodes::defaultChargeType($validated['acct_code'] ?? null);
+            $othersFields = LROLedger::resolveOthersFields(
+                $entryType,
+                $consumerZone?->id,
+                $validated['account_name'] ?? $validated['name'] ?? null
+            );
 
             if ($this->shouldPostToLroLedger($statusRaw)) {
                 $lroStatus = $this->resolveLroLedgerStatus($statusRaw);
 
                 $entry = LROLedger::create($this->buildLroLedgerAttributes(array_merge([
-                    'type' => $validated['type'] ?? SundryAccountCodes::defaultChargeType($validated['acct_code'] ?? null),
+                    'type' => $entryType,
                     'ledger' => 'LRO',
                     'date' => !empty($validated['date']) ? $validated['date'] : null,
-                    'consumer_zone_id' => $consumerZone?->id,
+                    'consumer_zone_id' => $othersFields['consumer_zone_id'],
+                    'account_name' => $othersFields['account_name'],
                     'bam_no' => $bamNo,
                     'amount' => (float) ($validated['amount'] ?? 0),
                     'acct_code' => $validated['acct_code'] ?? null,
@@ -1384,9 +1400,7 @@ class BillingAdjustmentController extends Controller
 
     private function authUsername(): string
     {
-        $user = auth();
-
-        return $user?->name ?? 'SYSTEM';
+        return AuthUsername::formatted();
     }
 
     /**
@@ -1437,10 +1451,14 @@ class BillingAdjustmentController extends Controller
 
     /**
      * Build lro_ledger attributes, keeping only columns that exist on the table.
-     * account_no / account_name are resolved from consumer_zone via consumer_zone_id.
+     * account_name is stored on lro_ledger for Type=Others only.
      */
     private function buildLroLedgerAttributes(array $data): array
     {
+        if (empty($data['username'])) {
+            $data['username'] = $this->authUsername();
+        }
+
         return LROLedger::filterTableAttributes($data);
     }
 }

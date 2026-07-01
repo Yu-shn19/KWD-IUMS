@@ -14,6 +14,7 @@ class LROLedger extends Model
 
     protected $fillable = [
         'consumer_zone_id',
+        'account_name',
         'type',
         'ledger',
         'date',
@@ -21,6 +22,7 @@ class LROLedger extends Model
         'amount',
         'acct_code',
         'remarks',
+        'username',
         'status',
         'correct_reading',
         'paid_at',
@@ -53,6 +55,12 @@ class LROLedger extends Model
 
     public function getAccountNameAttribute(): ?string
     {
+        if (strcasecmp((string) ($this->attributes['type'] ?? ''), 'Others') === 0) {
+            $stored = trim((string) ($this->attributes['account_name'] ?? ''));
+
+            return $stored !== '' ? $stored : null;
+        }
+
         if ($this->relationLoaded('consumerZone') && $this->consumerZone) {
             return $this->consumerZone->account_name;
         }
@@ -62,6 +70,27 @@ class LROLedger extends Model
         }
 
         return null;
+    }
+
+    /**
+     * For Type=Others: store manual name, no consumer link.
+     * For CM/DM: link consumer_zone_id, account_name stays null.
+     */
+    public static function resolveOthersFields(string $type, ?int $consumerZoneId, ?string $accountName): array
+    {
+        if (strcasecmp($type, 'Others') === 0) {
+            $name = trim((string) ($accountName ?? ''));
+
+            return [
+                'consumer_zone_id' => null,
+                'account_name' => $name !== '' ? $name : null,
+            ];
+        }
+
+        return [
+            'consumer_zone_id' => $consumerZoneId,
+            'account_name' => null,
+        ];
     }
 
     /** @deprecated Use account_no via consumer_zone_id */
@@ -103,7 +132,7 @@ class LROLedger extends Model
     }
 
     /**
-     * Keep only attributes that exist on lro_ledger (account/name live on consumer_zone).
+     * Keep only attributes that exist on lro_ledger.
      */
     public static function filterTableAttributes(array $data): array
     {

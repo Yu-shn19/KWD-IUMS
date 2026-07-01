@@ -3168,7 +3168,7 @@ class BillingProcessController extends Controller
     {
         $reference = $this->generateUniqueDmReference($date);
         $debit = round($amount, 2);
-        $username = Auth::check() ? (Auth::user()->name ?? 'SYSTEM') : 'SYSTEM';
+        $username = \App\Support\AuthUsername::formatted();
         $dateTime = Carbon::parse($date)->startOfDay();
         $currentBalance = $consumer->getLedgerBalance();
         $newBalance = round($currentBalance + $debit, 2);
@@ -3445,9 +3445,13 @@ class BillingProcessController extends Controller
         try {
             $validated = $request->validate([
                 'or_number' => 'required|string|max:50',
+                'transaction_date' => 'nullable|date',
             ]);
 
             $orNumber = trim((string) $validated['or_number']);
+            $paidAt = !empty($validated['transaction_date'])
+                ? Carbon::parse($validated['transaction_date'])->setTimeFromTimeString(now()->format('H:i:s'))
+                : now();
             if ($orNumber === '') {
                 return response()->json([
                     'success' => false,
@@ -3487,7 +3491,7 @@ class BillingProcessController extends Controller
                 'amount_tendered' => 0,
                 'change_amount' => 0,
                 'or_number' => $orNumber,
-                'paid_at' => null,
+                'paid_at' => $paidAt,
                 'remarks' => $remarksValue,
                 'created_by' => $this->getFormattedUserName(),
             ]));

@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Register - Water District System</title>
+  <title>Register - Kiblawan Water District System</title>
   <!-- Bootstrap 5 CDN -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     body {
       height: 100vh;
-      background: url('{{ asset('WDMS/img/logo/hero.jpg') }}') no-repeat center center/cover;
+      background: url('{{ asset('WDMS\img\logo\KlogoC.png') }}') no-repeat center center/cover;
       display: flex;
       justify-content: center;
       align-items: center;

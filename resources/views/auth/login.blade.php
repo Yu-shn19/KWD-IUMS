@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Hagonoy Water District - Integrated Utility Management System">
-  <title>Login - HagonoyWD-IUMS</title>
-  <link rel="icon" href="{{ url('WDMS/img/logo/logo.png') }}">
+  <meta name="description" content="KIBLAWAN WATER DISTRICT-IUMS | Water Management System">
+  <title>Login - KiblawanWD-IUMS</title>
+  <link rel="icon" href="{{ url('WDMS\img\logo\KlogoC.png') }}">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -349,7 +349,7 @@
     <div class="login-card">
       <div class="login-header">
         <div class="logo-wrap">
-          <img src="{{ url('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District Logo">
+          <img src="{{ url('WDMS\img\logo\KlogoC.png') }}" alt="Kiblawan Water District Logo">
         </div>
         <h1>KIBLAWAN WATER DISTRICT</h1>
         <p>Integrated Utility Management System</p>
@@ -410,7 +410,7 @@
       </div>
 
       <div class="login-footer">
-        <span>&copy; {{ date('Y') }} Hagonoy Water District. All rights reserved.</span>
+        <span>&copy; {{ date('Y') }} Kiblawan Water District. All rights reserved.</span>
       </div>
     </div>
 

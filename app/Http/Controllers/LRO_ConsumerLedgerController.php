@@ -3,10 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Imports\LROLedgerImport;
+use App\Models\BillingAdjustment;
 use App\Models\ConsumerZone;
 use App\Models\LROLedger;
+use App\Support\AuthUsername;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -256,6 +259,20 @@ class LRO_ConsumerLedgerController extends Controller
             ->orderBy(mr_col('id'), 'asc')
             ->get();
 
+        $bamNos = $fromSingular->pluck('bam_no')
+            ->map(fn ($bamNo) => trim((string) $bamNo))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $billingUsernamesByBam = $bamNos->isEmpty()
+            ? collect()
+            : BillingAdjustment::query()
+                ->whereIn('bam_no', $bamNos)
+                ->whereNotNull('username')
+                ->where('username', '!=', '')
+                ->pluck('username', 'bam_no');
+
         foreach ($fromSingular as $ledger) {
             $amount = (float) ($ledger->amount ?? 0);
             $typeUpper = strtoupper((string) ($ledger->type ?? ''));
@@ -263,6 +280,7 @@ class LRO_ConsumerLedgerController extends Controller
             $credit = $typeUpper === 'CM' ? $amount : 0;
             $d = $ledger->date ?? null;
             $sortDate = $d ? Carbon::parse($d) : Carbon::parse('1970-01-01');
+            $resolvedUsername = $this->resolveLroLedgerUsername($ledger, $billingUsernamesByBam);
             $rawRows[] = [
                 'sort_date' => $sortDate,
                 'sort_id' => (int) $ledger->id,
@@ -273,6 +291,7 @@ class LRO_ConsumerLedgerController extends Controller
                 'date_display' => $d ? Carbon::parse($d)->format('m/d/Y') : '',
                 'summary_key' => $ledger->acct_code ?: ($ledger->type ?? ''),
                 'summary_title' => $ledger->reference ?? $ledger->remarks ?? ($ledger->acct_code ?: $ledger->type ?? ''),
+                'username' => $resolvedUsername,
             ];
         }
 
@@ -322,6 +341,7 @@ class LRO_ConsumerLedgerController extends Controller
                         'date_display' => $d ? Carbon::parse($d)->format('m/d/Y') : '',
                         'summary_key' => $ledger->acct_group ?? $ledger->cba_type ?? '',
                         'summary_title' => $ledger->cba_remarks ?? $ledger->acct_group ?? $ledger->cba_type ?? '',
+                        'username' => property_exists($ledger, 'username') ? ($ledger->username ?? '') : '',
                     ];
                 }
             }
@@ -354,7 +374,7 @@ class LRO_ConsumerLedgerController extends Controller
                 'debit' => $debit > 0 ? number_format($debit, 2) : '',
                 'credit' => $credit > 0 ? number_format($credit, 2) : '',
                 'balance' => number_format($runningBalance, 2),
-                'username' => '',
+                'username' => \App\Support\AuthUsername::displayFirstName($row['username'] ?? ''),
             ];
 
             $summaryKey = $row['summary_key'];
@@ -409,5 +429,34 @@ class LRO_ConsumerLedgerController extends Controller
         }
 
         return response()->json($response);
+    }
+
+    /**
+     * Resolve LRO ledger username for display; backfill missing values when possible.
+     */
+    private function resolveLroLedgerUsername(LROLedger $ledger, $billingUsernamesByBam): string
+    {
+        $stored = trim((string) ($ledger->username ?? ''));
+
+        if ($stored === '') {
+            $bamNo = trim((string) ($ledger->bam_no ?? ''));
+            if ($bamNo !== '' && $billingUsernamesByBam->has($bamNo)) {
+                $fromBa = trim((string) $billingUsernamesByBam->get($bamNo));
+                if ($fromBa !== '') {
+                    $stored = $fromBa;
+                    $ledger->forceFill(['username' => $fromBa])->saveQuietly();
+                }
+            }
+        }
+
+        if ($stored === '' && Auth::check() && $ledger->created_at && Carbon::parse($ledger->created_at)->isToday()) {
+            $current = AuthUsername::formatted();
+            if ($current !== 'SYSTEM') {
+                $stored = $current;
+                $ledger->forceFill(['username' => $current])->saveQuietly();
+            }
+        }
+
+        return $stored !== '' ? AuthUsername::displayFirstName($stored) : '';
     }
 }

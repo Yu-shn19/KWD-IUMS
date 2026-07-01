@@ -257,9 +257,8 @@
                                 <div class="bam-col" style="min-width: 140px;">
                                     <label class="form-label">Status</label>
                                     <select class="form-control form-control-sm" name="status" id="bamStatus">
-                                        <option value="Pending" selected>Pending</option>
-                                        <option value="Approved">Approved</option>
-                                        <option value="Posted">Paid</option>
+                                        <option value="Approved" Selected>Approved</option>
+                                        <option value="Pending" >Pending</option>
                                         <option value="Cancelled">Cancelled</option>
                                     </select>
                                 </div>
@@ -378,7 +377,7 @@
                                                 <td><span class="badge {{ $typeBadgeClass }}">{{ $item->type ?? 'CM' }}</span></td>
                                                 <td>{{ $item->acct_code ?? '-' }}</td>
                                                 <td>{{ $isOthers ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '') }}</td>
-                                                <td>{{ $isOthers ? '' : ($item->consumerZone->account_name ?? $item->account_name ?? '-') }}</td>
+                                                <td>{{ $isOthers ? ($item->account_name ?? '-') : ($item->consumerZone->account_name ?? $item->account_name ?? '-') }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount ?? 0, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
                                                 <td><span class="badge badge-{{ ($item->status ?? 'Pending') === 'Approved' ? 'success' : (($item->status ?? 'Pending') === 'Posted' ? 'primary' : (($item->status ?? 'Pending') === 'Cancelled' ? 'danger' : 'secondary')) }}">{{ ($item->status ?? 'Pending') === 'Posted' ? 'Paid' : ($item->status ?? 'Pending') }}</span></td>
@@ -610,7 +609,7 @@
             bamSetVal('bamAcctCode', entry.acct_code || '');
             bamSetVal('bamAcctCodeDisplay', entry.acct_code || '');
             bamSetVal('bamRemarks', entry.remarks || '');
-            bamSetSelected('bamStatus', entry.status || 'Pending');
+            bamSetSelected('bamStatus', entry.status || 'Approved');
             bamSetVal('bamCorrectReading', entry.correct_reading !== null && entry.correct_reading !== undefined ? entry.correct_reading : '0');
             bamApplyTypeRules();
             bamApplySundryRules();
@@ -630,7 +629,7 @@
             bamSetVal('bamAcctCodeDisplay', '');
             document.getElementById('bamAcctCodeDisplay').placeholder = '— Select Acct Code —';
             bamSetVal('bamRemarks', '');
-            bamSetSelected('bamStatus', 'Pending');
+            bamSetSelected('bamStatus', 'Approved');
             bamSetVal('bamCorrectReading', '0');
             // Clear edit-mode IDs so next save is treated as new
             bamSetVal('bamLroId', '');

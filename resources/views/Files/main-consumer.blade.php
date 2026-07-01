@@ -189,7 +189,7 @@
                                             <div class="mb-3 mb-md-0">
                                                 <label class="form-label">OSCA ID #</label>
                                                 <input type="text" class="form-control form-control-sm" id="oscaIdNumber"
-                                                    value="{{ $oscaDisplay }}">
+                                                    value="{{ $oscaDisplay }}" readonly>
                                             </div>
                                             @endif
                                             </div>
@@ -1052,6 +1052,34 @@
             return ($(zoneSelector).val() || '').toString().trim().toUpperCase();
         }
 
+        /** Map server validation keys to Edit Consumer form field ids. */
+        const editValidationFieldIds = {
+            zone_code: 'zone',
+            category_code: 'category',
+            status_code: 'status',
+            install_date: 'installation_date',
+            sequence: 'card_number',
+        };
+
+        function resolveEditFormInput(field) {
+            const id = editValidationFieldIds[field] || field;
+            return $('#edit_' + id);
+        }
+
+        function firstValidationMessage(errors) {
+            if (!errors || typeof errors !== 'object') {
+                return 'Please check the form fields and try again.';
+            }
+            const keys = Object.keys(errors);
+            for (let i = 0; i < keys.length; i++) {
+                const msgs = errors[keys[i]];
+                if (msgs && msgs[0]) {
+                    return msgs[0];
+                }
+            }
+            return 'Please check the form fields and try again.';
+        }
+
         function generateAccountName(prefix) {
             prefix = prefix || '';
             const lastName = ($('#' + prefix + 'last_name').val() || '').trim().toUpperCase();
@@ -1194,7 +1222,12 @@
             const n = parseFloat(s);
             if (Number.isFinite(n) && Math.abs(n - 5) < 0.001) return SC_DISCOUNT_PERCENT;
             if (s.toUpperCase() === 'SC DISCOUNT') return SC_DISCOUNT_PERCENT;
-            return s;
+            // Legacy non-SC values match UI "None".
+            return null;
+        }
+
+        function isEditScDiscountSelected() {
+            return normBillDiscPercentVal($('#edit_bill_disc_percent').val()) === SC_DISCOUNT_PERCENT;
         }
 
         function normBillDiscAmountVal(v) {
@@ -1224,10 +1257,10 @@
         }
 
         function refreshEditBillDiscDateUi() {
-            const dirty = isEditBillDiscDirty();
+            const showDate = isEditScDiscountSelected() && isEditBillDiscDirty();
             const $wrap = $('#edit_bill_disc_updated_at_wrap');
             const $input = $('#edit_bill_disc_updated_at');
-            if (dirty) {
+            if (showDate) {
                 $wrap.show();
                 $input.prop('required', true);
             } else {
@@ -1248,16 +1281,10 @@
                     $('#edit_bill_disc_amount').val('');
                 }
                 refreshEditBillDiscDateUi();
-            } else if (id === 'billDiscPercent') {
-                if (v === SC_DISCOUNT_PERCENT) {
-                    $('#billDiscAmount').val(formatPlainAmount(SC_DISCOUNT_AMOUNT));
-                } else {
-                    $('#billDiscAmount').val(formatPlainAmount(0));
-                }
             }
         }
 
-        $(document).on('change', '#billDiscPercent, #edit_bill_disc_percent', function() {
+        $(document).on('change', '#edit_bill_disc_percent', function() {
             applyBillDiscSelectChange($(this));
         });
 
@@ -1769,9 +1796,18 @@
             const billDiscPercentNum = parseFloat(billDiscPercentStr);
             const isScBillDisc = billDiscPercentStr.toUpperCase() === 'SC DISCOUNT'
                 || (Number.isFinite(billDiscPercentNum) && Math.abs(billDiscPercentNum - 5) < 0.001);
-            const billDiscAmountValue = parseFloat(consumer.bill_disc_amount ?? 0);
-            const displayDiscAmount = isScBillDisc ? SC_DISCOUNT_AMOUNT : (Number.isFinite(billDiscAmountValue) ? billDiscAmountValue : 0);
-            const formattedBillDiscAmount = formatPlainAmount(displayDiscAmount);
+            const oscaIdRaw = String(consumer.osca_id_no || consumer.osca_id || '').trim();
+            const oscaDateDisplay = consumer.bill_disc_updated_at
+                ? formatBillDiscUpdatedAtDisplay(consumer.bill_disc_updated_at)
+                : null;
+            const oscaDisplay = oscaIdRaw !== ''
+                ? (oscaDateDisplay ? oscaIdRaw + ' - ' + oscaDateDisplay : oscaIdRaw)
+                : '';
+            const oscaDisplaySafe = oscaDisplay
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
             const remarkRaw = consumer.remark || consumer.remarks || '';
             const remarkSafe = String(remarkRaw)
                 .replace(/&/g, '&amp;')
@@ -1824,23 +1860,13 @@
                             <input type="text" class="form-control form-control-sm" id="displayCategory"
                                 value="${consumer.category_code || ''}" readonly>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label" for="billDiscPercent">Bill Disc (%)</label>
-                            <select class="form-control form-control-sm" id="billDiscPercent" name="bill_disc_percent">
-                                <option value="" ${!isScBillDisc ? 'selected' : ''}>None</option>
-                                <option value="SC DISCOUNT" ${isScBillDisc ? 'selected' : ''}>SC DISCOUNT</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label" for="billDiscAmount">Bill Disc Amount</label>
-                            <input type="text" class="form-control form-control-sm" id="billDiscAmount" readonly
-                                value="${formattedBillDiscAmount}">
-                        </div>
+                        ${isScBillDisc ? `
                         <div class="mb-3 mb-md-0">
                             <label class="form-label">OSCA ID #</label>
                             <input type="text" class="form-control form-control-sm" id="oscaIdNumber"
-                                value="${consumer.osca_id_no || consumer.osca_id || ''}">
+                                value="${oscaDisplaySafe}" readonly>
                         </div>
+                        ` : ''}
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -2180,7 +2206,7 @@
             $('.is-invalid').removeClass('is-invalid');
             $('.invalid-feedback').text('');
             
-            if (isEditBillDiscDirty()) {
+            if (isEditScDiscountSelected() && isEditBillDiscDirty()) {
                 const bdu = $('#edit_bill_disc_updated_at').val();
                 if (!bdu) {
                     $('#edit_bill_disc_updated_at').addClass('is-invalid');
@@ -2219,13 +2245,20 @@
                 rate_code: getRateCodeFromCategory($('#edit_category').val()),
                 status_code: $('#edit_status').val(),
                 sequence: $('#edit_card_number').val(),
-                bill_disc_percent: $('#edit_bill_disc_percent').val(),
-                bill_disc_amount: $('#edit_bill_disc_amount').val(),
+                bill_disc_percent: $('#edit_bill_disc_percent').val() || null,
                 osca_id_no: $('#edit_osca_id_no').val(),
                 remark: $('#edit_remark').val()
                 // Note: cons_ctrl is not updated during edit to preserve the original value
             };
-            if (isEditBillDiscDirty()) {
+            const billDiscAmtRaw = $('#edit_bill_disc_amount').val();
+            if (billDiscAmtRaw !== '' && billDiscAmtRaw != null) {
+                updateData.bill_disc_amount = billDiscAmtRaw;
+            }
+            const sequenceRaw = $('#edit_card_number').val();
+            if (sequenceRaw !== '' && sequenceRaw != null) {
+                updateData.sequence = sequenceRaw;
+            }
+            if (isEditScDiscountSelected() && isEditBillDiscDirty()) {
                 updateData.bill_disc_updated_at = $('#edit_bill_disc_updated_at').val();
             }
             
@@ -2267,17 +2300,17 @@
                         const errors = xhr.responseJSON.errors;
                         
                         $.each(errors, function(field, messages) {
-                            const input = $('#edit_' + field);
+                            const input = resolveEditFormInput(field);
                             if (input.length) {
                                 input.addClass('is-invalid');
                                 input.siblings('.invalid-feedback').text(messages[0]);
                             }
                         });
-                        
+
                         Swal.fire({
                             icon: 'error',
                             title: 'Validation Error',
-                            text: 'Please check the form fields and try again.',
+                            text: firstValidationMessage(errors),
                             confirmButtonColor: '#dc3545'
                         });
                     } else {

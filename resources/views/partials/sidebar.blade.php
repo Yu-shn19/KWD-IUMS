@@ -3,7 +3,7 @@
   <!-- Brand Section -->
   <a class="sidebar-brand" href="/">
     <div class="sidebar-brand-icon">
-      <img src="{{url('WDMS/img/logo/logo2.png')}}" alt="Logo" class="brand-logo">
+      <img src="{{url('WDMS\img\logo\KlogoC.png')}}" alt="Logo" class="brand-logo">
     </div>
     <div class="sidebar-brand-text">eKWD-IUMS</div>
   </a>

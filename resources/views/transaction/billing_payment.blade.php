@@ -394,10 +394,6 @@
                                                 </div>
                                                 <div id="accountSuggestions" class="list-group" style="position: absolute; z-index: 1000; width: 100%; max-height: 300px; overflow-y: auto; display: none;">
                                                 </div>
-                                                <small id="accountLookupStatus" class="d-block mt-2 small text-muted" aria-hidden="false">
-                                                    <i class="fas fa-info-circle mr-1"></i>
-                                                    Enter account number or account name to load billing data.
-                                                </small>
                                             </div>
                                         
                                             <div class="form-group">
@@ -2728,17 +2724,16 @@
                         accountNameField.value = '';
                     }
                     
-                    // Show suggestions and run lookup as user types (2+ characters)
+                    // Show suggestions only while typing (no auto full lookup)
                     if (value.length >= 2) {
                         debouncedSuggestions(value);
-                        debouncedLookup();
                     } else {
                         if (suggestionsDropdown) {
                             suggestionsDropdown.style.display = 'none';
                         }
                     }
                     
-                    // Reset lastLookupKey to allow new search
+                    // Reset lastLookupKey so Enter / suggestion click can load fresh data
                     lastLookupKey = null;
                 });
 
@@ -2754,15 +2749,11 @@
                     performLookup();
                 });
                 
-                accountNumberField.addEventListener('blur', (e) => {
-                    // Hide suggestions after a short delay to allow click events
+                accountNumberField.addEventListener('blur', () => {
+                    // Hide suggestions after a short delay to allow click on a list item
                     setTimeout(() => {
                         if (suggestionsDropdown) {
                             suggestionsDropdown.style.display = 'none';
-                        }
-                        // Perform lookup if there's a value
-                        if (accountNumberField.value.trim()) {
-                            debouncedLookup();
                         }
                     }, 200);
                 });
@@ -2911,13 +2902,19 @@
                 if (!confirmResult.isConfirmed) return;
 
                 try {
+                    const transactionDate = (transactionDateField && transactionDateField.value)
+                        ? transactionDateField.value.trim()
+                        : '';
                     const response = await fetch(cancelledOrEndpoint, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('input[name="_token"]')?.value
                         },
-                        body: JSON.stringify({ or_number: orNumber })
+                        body: JSON.stringify({
+                            or_number: orNumber,
+                            transaction_date: transactionDate
+                        })
                     });
                     const result = await response.json();
 

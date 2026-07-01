@@ -25,6 +25,7 @@ class ConsumerPayment extends Model
     protected $fillable = [
         'reading_id',
         'consumer_zone_id',
+        'lro_ledger_id',
         'payment_method',
         'payment_amount',
         'senior_citizen_discount',
@@ -104,9 +105,17 @@ class ConsumerPayment extends Model
         return $this->account_no;
     }
 
-    /** Account name via consumer_zone relationship (not stored on consumer_payments). */
+    /** Account name via consumer_zone, or lro_ledger for Others payments. */
     public function getAccountNameAttribute(): ?string
     {
+        if ($this->lro_ledger_id) {
+            $ledger = $this->relationLoaded('lroLedger')
+                ? $this->lroLedger
+                : $this->lroLedger()->first();
+
+            return $ledger?->account_name;
+        }
+
         if ($this->relationLoaded('consumerZone') && $this->consumerZone) {
             return $this->consumerZone->account_name;
         }
@@ -116,6 +125,11 @@ class ConsumerPayment extends Model
         }
 
         return null;
+    }
+
+    public function lroLedger()
+    {
+        return $this->belongsTo(LROLedger::class, 'lro_ledger_id');
     }
 
     public function consumerZone()

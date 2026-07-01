@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\BillingAdjustment;
 use App\Models\ConsumerZone;
 use App\Models\LROLedger;
+use App\Support\AuthUsername;
 use Illuminate\Http\Request;
 
 if (!function_exists(__NAMESPACE__ . '\mr_col')) {
@@ -61,9 +62,16 @@ class LroLedgerController extends Controller
 
         $arType = $validated['ar_type'] ?? $validated['ar'] ?? $validated['ledger'] ?? 'LRO';
         $statusRaw = $validated['status'] ?? 'Pending';
+        $entryType = $validated['type'] ?? 'CM';
+        $othersFields = LROLedger::resolveOthersFields(
+            $entryType,
+            $consumerZoneId,
+            $validated['account_name'] ?? $validated['name'] ?? null
+        );
         $payload = [
-            'consumer_zone_id' => $consumerZoneId,
-            'type' => $validated['type'] ?? 'CM',
+            'consumer_zone_id' => $othersFields['consumer_zone_id'],
+            'account_name' => $othersFields['account_name'],
+            'type' => $entryType,
             'date' => !empty($validated['date']) ? $validated['date'] : null,
             'bam_no' => $validated['bam_no'] ?? $validated['reference'] ?? null,
             'amount' => (float) ($validated['amount'] ?? 0),
@@ -79,7 +87,9 @@ class LroLedgerController extends Controller
                 ? ['status' => 'Posted', 'paid_at' => now()]
                 : ['status' => 'Approved', 'paid_at' => null];
 
-            $entry = LROLedger::create(LROLedger::filterTableAttributes(array_merge($payload, $lroStatus)));
+            $entry = LROLedger::create(LROLedger::filterTableAttributes(array_merge($payload, $lroStatus, [
+                'username' => AuthUsername::formatted(),
+            ])));
 
             return response()->json([
                 'success' => true,
@@ -99,7 +109,7 @@ class LroLedgerController extends Controller
             'remarks' => $validated['remarks'] ?? null,
             'status' => strcasecmp(trim($statusRaw), 'Cancelled') === 0 ? 'Cancelled' : 'Pending',
             'connect_reading' => isset($validated['correct_reading']) ? (int) $validated['correct_reading'] : 0,
-            'username' => auth()->user()?->name ?? 'SYSTEM',
+            'username' => AuthUsername::formatted(),
         ]);
 
         return response()->json([
