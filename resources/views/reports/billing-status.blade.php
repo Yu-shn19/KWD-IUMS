@@ -22,7 +22,7 @@
 
                     <div class="row mb-3">
                         <div class="col-lg-12">
-                            <form method="get" action="{{ route('billing-status') }}" class="form-inline float-right">
+                            <form method="get" action="{{ route('billing-status') }}" class="form-inline float-right" data-tour="billing-status-filter">
                                 <label class="mr-2 mb-0">Bill month:</label>
                                 <input type="month" name="bill_month" class="form-control form-control-sm mr-2" value="{{ request('bill_month', now()->format('Y-m')) }}" style="max-width: 160px;">
                                 <button type="submit" class="btn btn-primary btn-sm">
@@ -35,7 +35,7 @@
                     <!-- Billing Status Table -->
                     <div class="row">
                         <div class="col-lg-12">
-                            <div class="card mb-4">
+                            <div class="card mb-4" data-tour="billing-status-table">
                                 <div class="card-body p-0">
                                     <div class="table-responsive">
                                         <table class="table table-bordered table-hover mb-0">

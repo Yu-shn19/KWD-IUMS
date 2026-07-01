@@ -173,7 +173,7 @@
                         </div>
                     </div>
 
-                    <div class="row">
+                    <div class="row" data-tour="report-cards">
                         @foreach ($reportCards as $report)
                             <div class="col-xl-4 col-md-6 mb-4">
                                 <a href="{{ route($report['route']) }}" class="report-card">

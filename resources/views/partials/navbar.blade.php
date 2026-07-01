@@ -256,6 +256,61 @@ use Illuminate\Support\Facades\Storage;
             </svg>
           </button>
           <ul class="navbar-nav ml-auto">
+            <li class="nav-item dropdown no-arrow mx-1">
+              <a class="nav-link" href="#" id="tourHelpBtn" role="button" data-toggle="dropdown"
+                aria-haspopup="true" aria-expanded="false" title="Help, tours & quick options">
+                <i class="fas fa-question-circle fa-fw"></i>
+              </a>
+              <div class="dropdown-menu dropdown-menu-right shadow animated--grow-in tour-help-dropdown"
+                aria-labelledby="tourHelpBtn">
+                <h6 class="dropdown-header">System Guides</h6>
+                <a class="dropdown-item" href="#" id="tourPageBtn">
+                  <i class="fas fa-map-signs mr-2"></i>Tour this page
+                </a>
+                <a class="dropdown-item" href="#" id="tourNavBtn">
+                  <i class="fas fa-compass mr-2"></i>Navigation overview
+                </a>
+
+                <div class="dropdown-divider"></div>
+                <h6 class="dropdown-header">Quick Options</h6>
+                @php $activeRoute = Route::currentRouteName() ?? ''; @endphp
+                <a class="dropdown-item quick-option-item {{ in_array($activeRoute, ['home', 'dashboard']) ? 'active' : '' }}" href="{{ route('home') }}">
+                  <i class="fas fa-home mr-2"></i>Dashboard
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'consumer' ? 'active' : '' }}" href="{{ route('consumer') }}">
+                  <i class="fas fa-users mr-2"></i>Consumers
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'billing-processes' ? 'active' : '' }}" href="{{ route('billing-processes') }}">
+                  <i class="fas fa-file-invoice-dollar mr-2"></i>Billing Process
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'meter-reading' ? 'active' : '' }}" href="{{ route('meter-reading') }}">
+                  <i class="fas fa-tachometer-alt mr-2"></i>Meter Reading
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'download-reading' ? 'active' : '' }}" href="{{ route('download-reading') }}">
+                  <i class="fas fa-cloud-download-alt mr-2"></i>Download Reading
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'disconnection.index' ? 'active' : '' }}" href="{{ route('disconnection.index') }}">
+                  <i class="fas fa-plug mr-2"></i>Disconnection
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'billing-payment' ? 'active' : '' }}" href="{{ route('billing-payment') }}">
+                  <i class="fas fa-money-bill-wave mr-2"></i>Bill Payments
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'billing-adjustment' ? 'active' : '' }}" href="{{ route('billing-adjustment') }}">
+                  <i class="fas fa-sliders-h mr-2"></i>Billing Adjustment
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'billing-status' ? 'active' : '' }}" href="{{ route('billing-status') }}">
+                  <i class="fas fa-chart-pie mr-2"></i>Billing Status
+                </a>
+                <a class="dropdown-item quick-option-item {{ $activeRoute === 'systemreport' ? 'active' : '' }}" href="{{ route('systemreport') }}">
+                  <i class="fas fa-chart-bar mr-2"></i>System Reports
+                </a>
+
+                <div class="dropdown-divider"></div>
+                <a class="dropdown-item text-muted" href="#" id="tourResetBtn">
+                  <i class="fas fa-redo mr-2"></i>Reset all tours
+                </a>
+              </div>
+            </li>
             <li class="nav-item dropdown no-arrow">
               <a class="nav-link dropdown-toggle" href="#" id="searchDropdown" role="button" data-toggle="dropdown"
               aria-haspopup="true" aria-expanded="false">

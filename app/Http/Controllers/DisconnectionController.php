@@ -68,13 +68,15 @@ class DisconnectionController extends Controller
             $viewTab = 'candidates';
         }
 
-        $doZoneCode = mr_col('zone_code');
+        $czZoneCode = mr_col('zone_code');
         $doCreatedAt = mr_col('created_at');
         $doStatus = mr_col('status');
 
-        $applySharedOrderFilters = function ($query) use ($ordersZone, $ordersDisconnector, $ordersDateSaved, $doZoneCode, $doCreatedAt): void {
+        $applySharedOrderFilters = function ($query) use ($ordersZone, $ordersDisconnector, $ordersDateSaved, $czZoneCode, $doCreatedAt): void {
             if ($ordersZone !== '') {
-                $query->where($doZoneCode, $ordersZone);
+                $query->whereHas('consumerZone', function (Builder $q) use ($ordersZone, $czZoneCode): void {
+                    $q->where($czZoneCode, $ordersZone);
+                });
             }
             if ($ordersDisconnector !== '') {
                 $query->where('disconnector_id', (int) $ordersDisconnector);
@@ -97,7 +99,7 @@ class DisconnectionController extends Controller
         }
 
         $ordersQuery = DisconnectionOrder::query()
-            ->with(['disconnector'])
+            ->with(['disconnector', 'consumerZone'])
             ->orderByDesc($doCreatedAt);
         $applySharedOrderFilters($ordersQuery);
         if ($statusForSavedAssignedTab !== '') {
@@ -107,18 +109,22 @@ class DisconnectionController extends Controller
 
         // Disconnected Only tab: always disconnected rows, same zone / disconnector / date filters.
         $disconnectedQuery = DisconnectionOrder::query()
-            ->with(['disconnector'])
+            ->with(['disconnector', 'consumerZone'])
             ->where($doStatus, 'disconnected')
             ->orderByDesc($doCreatedAt);
         $applySharedOrderFilters($disconnectedQuery);
         $disconnectedOrdersList = $disconnectedQuery->limit(500)->get();
 
-        $ordersZoneOptions = DisconnectionOrder::query()
-            ->whereNotNull($doZoneCode)
-            ->where($doZoneCode, '!=', '')
+        $ordersZoneOptions = ConsumerZone::query()
+            ->whereIn(
+                mr_col('id'),
+                DisconnectionOrder::query()->select(DisconnectionOrder::consumerZoneIdColumn())->distinct()
+            )
+            ->whereNotNull($czZoneCode)
+            ->where($czZoneCode, '!=', '')
             ->distinct()
-            ->orderBy($doZoneCode)
-            ->pluck($doZoneCode);
+            ->orderBy($czZoneCode)
+            ->pluck($czZoneCode);
 
         return [
             'ordersList' => $ordersList,

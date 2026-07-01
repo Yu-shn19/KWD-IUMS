@@ -311,7 +311,7 @@
 </div>
 
 {{-- KPI Cards --}}
-<div class="row mb-3">
+<div class="row mb-3" data-tour="dashboard-kpis">
     @forelse ($cards as $card)
         @php
             $value = $card['value'] ?? 0;
@@ -381,7 +381,7 @@
 </div>
 
 {{-- Charts --}}
-<div class="row">
+<div class="row" data-tour="dashboard-charts">
     <div class="col-xl-8 col-lg-7 mb-4">
         <div class="panel h-100">
             <div class="panel-header">

@@ -11,7 +11,7 @@
                 @include('partials.navbar')
                 
                 <div class="container-fluid" id="container-wrapper">
-                    <div class="d-sm-flex align-items-center justify-content-between mb-4">
+                    <div class="d-sm-flex align-items-center justify-content-between mb-4" data-tour="download-reading-header">
                         <h1 class="h3 mb-0 text-gray-800">Realtime Reading Posting</h1>
                         <button class="btn btn-sm btn-info" onclick="window.location.reload()">
                             <i class="fas fa-sync-alt mr-1"></i>Refresh
@@ -41,7 +41,7 @@
                                 </div>
                                 <div class="card-body">
                                     @if($readers->count() > 0)
-                                        <div class="mb-3">
+                                        <div class="mb-3" data-tour="download-reader-search">
                                             <label class="small font-weight-bold">Search Meter Reader</label>
                                             <div class="input-group input-group-sm" style="max-width: 320px;">
                                                 <input type="text" class="form-control" id="readerSearchName" placeholder="Search by reader name...">
@@ -98,7 +98,7 @@
                                                             </td>
                                                             <td class="text-center">
                                                                 @if($totalRoutes > 0)
-                                                                    <button class="btn btn-sm btn-primary view-details-btn" 
+                                                                    <button class="btn btn-sm btn-primary view-details-btn" data-tour="download-view-routes" 
                                                                             data-reader-id="{{ $reader->id }}"
                                                                             data-reader-name="{{ strtoupper($reader->last_name) }}, {{ strtoupper($reader->first_name) }}"
                                                                             data-reader-email="{{ $reader->email }}">

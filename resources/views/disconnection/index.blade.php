@@ -142,7 +142,7 @@
                 <!-- Container Fluid-->
                 <div class="container-fluid" id="container-wrapper">
                     <!-- Page Header -->
-                    <div class="d-sm-flex align-items-center justify-content-between mb-4">
+                    <div class="d-sm-flex align-items-center justify-content-between mb-4" data-tour="disconnection-header">
                         <div>
                             <h1 class="h3 mb-1 text-dark font-weight-bold">Disconnection Management</h1>
                             <p class="text-muted mb-0 small">
@@ -166,7 +166,7 @@
                     </div>
 
                     <!-- Filter Card -->
-                    <div class="card shadow mb-4">
+                    <div class="card shadow mb-4" data-tour="disconnection-filters">
                         <div class="card-header py-3">
                             <h6 class="m-0 font-weight-bold text-primary">
                                 <i class="fas fa-filter mr-2"></i>Filters
@@ -242,7 +242,7 @@
                         </div>
                     </div>
 
-                    <ul class="nav nav-tabs mb-3" role="tablist">
+                    <ul class="nav nav-tabs mb-3" role="tablist" data-tour="disconnection-tabs">
                         <li class="nav-item">
                             <a class="nav-link {{ ($viewTab ?? 'candidates') === 'candidates' ? 'active' : '' }}" data-toggle="tab" href="#candidatesTab" role="tab">
                                 <i class="fas fa-list mr-1"></i> Candidates
@@ -303,7 +303,7 @@
                                         A daily job also syncs the current billing month to disconnector lists when appropriate.
                                     </p>
 
-                                    <div class="row mb-3">
+                                    <div class="row mb-3" data-tour="disconnection-candidate-actions">
                                         <div class="col-md-12">
                                             <button type="button" class="btn btn-outline-secondary btn-sm" id="printListBtn" title="Print the list for current filters (respects search)">
                                                 <i class="fas fa-print"></i> Print List

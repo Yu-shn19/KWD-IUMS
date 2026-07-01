@@ -3200,15 +3200,16 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Bulk DM upload via Excel. File must have columns: account_no, amount. Date is fixed to 2026-02-27.
+     * Bulk DM upload via Excel. File must have columns: account_no, amount. Date is set by the user.
      */
     public function storeDmLedgerImport(Request $request)
     {
         $request->validate([
             'file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+            'date' => 'required|date',
         ]);
 
-        $fixedDate = '2026-02-27';
+        $dmDate = Carbon::parse($request->date)->format('Y-m-d');
         $imported = 0;
         $failed = 0;
         $errors = [];
@@ -3318,18 +3319,18 @@ class BillingProcessController extends Controller
 
                 // Strict: duplicate in DB â€“ consumer already has a DM for this date
                 $alreadyExists = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
-                    ->where(mr_col('date'), $fixedDate)
+                    ->where(mr_col('date'), $dmDate)
                     ->where(mr_col('trans'), 'DM')
                     ->exists();
                 if ($alreadyExists) {
-                    $errors[] = "Row {$rowNum}: Duplicate â€“ [{$accountNo}] already has a DM for {$fixedDate}.";
+                    $errors[] = "Row {$rowNum}: Duplicate â€“ [{$accountNo}] already has a DM for {$dmDate}.";
                     $failed++;
                     continue;
                 }
 
                 try {
                     DB::beginTransaction();
-                    $this->createOneDmLedgerEntry($consumer, $fixedDate, $amountVal);
+                    $this->createOneDmLedgerEntry($consumer, $dmDate, $amountVal);
                     DB::commit();
                     $imported++;
                     $processedInThisFile[$accountNo] = $rowNum;
