@@ -10,18 +10,27 @@ export const API_CONFIG = {
     timeout: 10000,
   },
   
-  xampp: {
-    baseURL: 'https://hagonoywaterdistrict.com/api',
+  // Laragon Apache (virtual host / http://kwd-iums.test or similar)
+  laragon: {
+    baseURL: 'http://127.0.0.1/api',
     timeout: 10000,
   },
   
+  // php artisan serve on this PC — use LAN IP so phones/emulators can reach it
   artisan: {
-    baseURL: 'https://hagonoywaterdistrict.com/api', 
-    timeout: 10000,
+    baseURL: 'http://192.168.1.8:8000/api',
+    timeout: 15000,
+  },
+
+  // Android emulator → host machine localhost
+  android_emulator: {
+    baseURL: 'http://10.0.2.2:8000/api',
+    timeout: 15000,
   },
 };
 
-export const CURRENT_ENV = 'production'; 
+// Point WD_App at the local Laravel main system (artisan serve)
+export const CURRENT_ENV = 'artisan';
 
 
 export const getApiConfig = () => {

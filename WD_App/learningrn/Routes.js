@@ -276,7 +276,7 @@ export default function Routes({ onBack }) {
         <View style={styles.headerContent}>
           <View style={styles.logoContainer}>
             <Image 
-              source={require('./assets/HWD New Logo.png')} 
+              source={require('./assets/KlogoC.png')} 
               style={styles.logoImage}
               resizeMode="contain"
             />

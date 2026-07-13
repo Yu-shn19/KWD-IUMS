@@ -1,6 +1,4 @@
-
-import * as SQLite from 'expo-sqlite';
-import { config } from '../constant';
+import { getSharedDb } from './sqliteDb';
 import { getLocalDateYYYYMMDD } from '../utils/dateUtils';
 
 const TABLE = 'read_and_bill';
@@ -9,8 +7,7 @@ export const STATUS_SAVED_OFFLINE = 'saved_offline';
 const FAILED_RETRY_BASE_DELAY_MS = 5000;
 const FAILED_RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
 
-let db = null;
-let dbOpenPromise = null;
+let tableReady = false;
 
 async function ensureTable(conn) {
   await conn.execAsync(`
@@ -34,26 +31,15 @@ async function ensureTable(conn) {
     `UPDATE ${TABLE} SET status = ? WHERE status IN ('pending', 'failed')`,
     [STATUS_SAVED_OFFLINE]
   );
+  tableReady = true;
 }
 
 async function getDb() {
-  if (db) return db;
-  if (dbOpenPromise) return dbOpenPromise;
-  dbOpenPromise = (async () => {
-    try {
-      
-      const opts = { useNewConnection: true };
-      const opened = await SQLite.openDatabaseAsync(config.dbName, opts);
-      if (!opened) throw new Error('Database open returned null');
-      db = opened;
-      await ensureTable(db);
-      return db;
-    } catch (e) {
-      dbOpenPromise = null;
-      throw e;
-    }
-  })();
-  return dbOpenPromise;
+  const conn = await getSharedDb();
+  if (!tableReady) {
+    await ensureTable(conn);
+  }
+  return conn;
 }
 
 

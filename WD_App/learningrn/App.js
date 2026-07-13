@@ -218,7 +218,7 @@ export default function App() {
           <View style={styles.logoContainer}>
             <View style={styles.logoCircle}>
               <Image 
-                source={require('./assets/HWD New Logo.png')} 
+                source={require('./assets/KlogoC.png')} 
                 style={styles.logoImage}
                 resizeMode="contain"
               />

@@ -4,7 +4,7 @@
     "slug": "learningrn",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/HWD New Logo.png",
+    "icon": "./assets/KlogoC.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -17,7 +17,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/HWD New Logo.png",
+        "foregroundImage": "./assets/KlogoC.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,

@@ -2,9 +2,8 @@
  * SQLite-backed cache for assigned routes / assignments (replaces AsyncStorage routes_list).
  * Buckets: reader meter routes vs disconnector assignments so they do not overwrite each other.
  */
-import * as SQLite from 'expo-sqlite';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { config } from '../constant';
+import { getSharedDb } from './sqliteDb';
 
 const TABLE = 'routes_cache';
 const LEGACY_ROUTES_KEY = 'routes_list';
@@ -13,31 +12,22 @@ const MIGRATION_FLAG_KEY = 'routes_sqlite_migrated_v1';
 export const ROUTES_BUCKET_READER = 'reader';
 export const ROUTES_BUCKET_DISCONNECTOR = 'disconnector';
 
-let db = null;
-let dbOpenPromise = null;
+let tableReady = false;
 let migrationPromise = null;
 
 async function getDb() {
-  if (db) return db;
-  if (dbOpenPromise) return dbOpenPromise;
-  dbOpenPromise = (async () => {
-    const opts = { useNewConnection: true };
-    const opened = await SQLite.openDatabaseAsync(config.dbName, opts);
-    if (!opened) throw new Error('Database open returned null');
-    db = opened;
-    await db.execAsync(`
+  const conn = await getSharedDb();
+  if (!tableReady) {
+    await conn.execAsync(`
       CREATE TABLE IF NOT EXISTS ${TABLE} (
         bucket TEXT PRIMARY KEY NOT NULL,
         payload TEXT NOT NULL,
         updated_at TEXT
       )
     `);
-    return db;
-  })().catch((e) => {
-    dbOpenPromise = null;
-    throw e;
-  });
-  return dbOpenPromise;
+    tableReady = true;
+  }
+  return conn;
 }
 
 /**
@@ -83,6 +73,7 @@ async function migrateFromAsyncStorageOnce() {
       await AsyncStorage.setItem(MIGRATION_FLAG_KEY, '1');
     } catch (e) {
       console.error('routes SQLite migration:', e);
+      migrationPromise = null; // allow retry on next call
     }
   })();
   return migrationPromise;
