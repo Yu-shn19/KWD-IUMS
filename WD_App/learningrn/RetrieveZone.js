@@ -368,7 +368,7 @@ export default function RetrieveZone({ onBack, userData }) {
   const buildReceiptDataFromItem = (item) => {
     const account = item.account_number ?? item.account_no ?? item.accountNumber ?? '—';
     const name = item.account_name ?? item.name ?? item.consumer_name ?? '—';
-    const zone = item.zone ?? selectedZone ?? '081';
+    const zone = item.zone ?? selectedZone ?? '1A';
     const readingDateRaw = item.bill_date ?? item.reading_date ?? item.reading_date_date ?? selectedDate ?? '';
     const parseDate = (d) => {
       if (!d) return null;

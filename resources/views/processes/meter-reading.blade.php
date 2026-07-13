@@ -275,15 +275,9 @@
                             </label>
                             <select class="form-control" id="assignZone" style="font-size: 14px;" required>
                                 <option value="">-- Select Zone --</option>
-                                <option value="011">Zone 011</option>
-                                <option value="021">Zone 021</option>
-                                <option value="031">Zone 031</option>
-                                <option value="041">Zone 041</option>
-                                <option value="051">Zone 051</option>
-                                <option value="061">Zone 061</option>
-                                <option value="071">Zone 071</option>
-                                <option value="081">Zone 081</option>
-                                <option value="091">Zone 091</option>
+                                @foreach(($zones ?? collect(\App\Models\ConsumerZone::defaultZoneCodes())) as $zoneCode)
+                                    <option value="{{ $zoneCode }}">Zone {{ $zoneCode }}</option>
+                                @endforeach
                             </select>
                             <small id="zoneInfo" class="form-text"></small>
                         </div>
@@ -426,15 +420,9 @@
                             </label>
                             <select class="form-control" id="downloadZone">
                                 <option value="">-- All Zones --</option>
-                                <option value="011">Zone 011</option>
-                                <option value="021">Zone 021</option>
-                                <option value="031">Zone 031</option>
-                                <option value="041">Zone 041</option>
-                                <option value="051">Zone 051</option>
-                                <option value="061">Zone 061</option>
-                                <option value="071">Zone 071</option>
-                                <option value="081">Zone 081</option>
-                                <option value="091">Zone 091</option>
+                                @foreach(($zones ?? collect(\App\Models\ConsumerZone::defaultZoneCodes())) as $zoneCode)
+                                    <option value="{{ $zoneCode }}">Zone {{ $zoneCode }}</option>
+                                @endforeach
                             </select>
                             <small class="form-text text-muted">Leave empty to download all zones</small>
                         </div>
@@ -611,22 +599,19 @@
                 });
         }
 
-        // Load zones for unassign
+        // Load zones for unassign (same list as assign — from consumer_zone)
+        const billingZoneCodes = @json(($zones ?? collect(\App\Models\ConsumerZone::defaultZoneCodes()))->values());
+
         function loadZonesForUnassign() {
-            // Simply populate with all zones manually for unassign
             const select = document.getElementById('unassignZone');
-            select.innerHTML = `
-                <option value="">-- Select Zone --</option>
-                <option value="011">Zone 011</option>
-                <option value="021">Zone 021</option>
-                <option value="031">Zone 031</option>
-                <option value="041">Zone 041</option>
-                <option value="051">Zone 051</option>
-                <option value="061">Zone 061</option>
-                <option value="071">Zone 071</option>
-                <option value="081">Zone 081</option>
-                <option value="091">Zone 091</option>
-            `;
+            if (!select) return;
+            select.innerHTML = '<option value="">-- Select Zone --</option>';
+            (billingZoneCodes || []).forEach(function(z) {
+                const opt = document.createElement('option');
+                opt.value = z;
+                opt.textContent = 'Zone ' + z;
+                select.appendChild(opt);
+            });
         }
 
         // When modal opens

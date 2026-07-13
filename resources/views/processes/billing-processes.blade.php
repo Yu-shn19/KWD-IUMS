@@ -63,7 +63,7 @@
                                                     <div class="form-group mb-3">
                                                         <label for="quickLookupAccount" class="font-weight-bold text-dark small mb-2">Account Number</label>
                                                         <div class="input-group">
-                                                            <input type="text" class="form-control text-uppercase" id="quickLookupAccount" placeholder="051-12-1820">
+                                                            <input type="text" class="form-control text-uppercase" id="quickLookupAccount" placeholder="e.g. 2099">
                                                             <div class="input-group-append">
                                                                 <button type="submit" class="btn btn-outline-primary" id="quickLookupButton">
                                                                     <i class="fas fa-search mr-1"></i>Lookup
@@ -138,7 +138,7 @@
                                                             <label for="multipleConsumersAccounts" class="font-weight-bold text-dark small mb-2">
                                                                 Account Numbers <span class="text-danger">*</span>
                                                             </label>
-                                                            <textarea class="form-control" id="multipleConsumersAccounts" rows="4" placeholder="Enter one account per line or comma-separated&#10;e.g. 031-12-1460&#10;031-12-1461&#10;071-00001" style="font-size: 14px;"></textarea>
+                                                            <textarea class="form-control" id="multipleConsumersAccounts" rows="4" placeholder="Enter one account per line or comma-separated&#10;e.g. 2099&#10;2100&#10;2101" style="font-size: 14px;"></textarea>
                                                             <small class="text-muted">One account per line or comma-separated. All will be prepared together and can be saved and assigned to one reader.</small>
                                                         </div>
                                                         <!-- Single Consumer Account (only for Single Consumer preparation) -->
@@ -146,7 +146,7 @@
                                                             <label for="singleConsumerAccount" class="font-weight-bold text-dark small mb-2">
                                                                 Account Number <span class="text-danger">*</span>
                                                             </label>
-                                                            <input type="text" class="form-control" id="singleConsumerAccount" placeholder="e.g. 011-00001" style="font-size: 14px;">
+                                                            <input type="text" class="form-control" id="singleConsumerAccount" placeholder="e.g. 2099" style="font-size: 14px;">
                                                             <small class="text-muted">Consumer account to prepare meter reading for</small>
                                                         </div>
 
@@ -157,16 +157,9 @@
                                                             </label>
                                                             <select class="form-control" id="zoneSelect" style="font-size: 14px;">
                                                                 <option value="">-- Select Zone --</option>
-                                                                <option value="011">Zone 011</option>
-                                                                <option value="021">Zone 021</option>
-                                                                <option value="031">Zone 031</option>
-                                                                <option value="041">Zone 041</option>
-                                                                <option value="051">Zone 051</option>
-                                                                <option value="061">Zone 061</option>
-                                                                <option value="071">Zone 071</option>
-                                                                <option value="081">Zone 081</option>
-                                                                <option value="091">Zone 091</option>
-                                                            
+                                                                @foreach(($zones ?? collect(\App\Models\ConsumerZone::defaultZoneCodes())) as $zoneCode)
+                                                                    <option value="{{ $zoneCode }}">Zone {{ $zoneCode }}</option>
+                                                                @endforeach
                                                             </select>
                                                         </div>
 
@@ -418,15 +411,9 @@
                                                         <label class="small font-weight-bold text-dark mb-1">Zone</label>
                                                         <select class="form-control form-control-sm" id="scheduleFilterZone" style="min-width: 120px;">
                                                             <option value="all">All Zones</option>
-                                                            <option value="011">011</option>
-                                                            <option value="021">021</option>
-                                                            <option value="031">031</option>
-                                                            <option value="041">041</option>
-                                                            <option value="051">051</option>
-                                                            <option value="061">061</option>
-                                                            <option value="071">071</option>
-                                                            <option value="081">081</option>
-                                                            <option value="091">091</option>
+                                                            @foreach(($zones ?? collect(\App\Models\ConsumerZone::defaultZoneCodes())) as $zoneCode)
+                                                                <option value="{{ $zoneCode }}">{{ $zoneCode }}</option>
+                                                            @endforeach
                                                         </select>
                                                     </div>
                                                     <div class="col-auto">
@@ -698,7 +685,43 @@
         </div>
 
         <script>
-            // Display current date
+            // Display current date + keep zone dropdowns aligned with consumer_zone (1A, 1B, 2A, …)
+            const billingZoneCodes = @json(($zones ?? collect(\App\Models\ConsumerZone::defaultZoneCodes()))->values());
+
+            function populateBillingZoneSelects(zones) {
+                const list = (zones && zones.length) ? zones : (billingZoneCodes || []);
+                const zoneSelect = document.getElementById('zoneSelect');
+                const scheduleZone = document.getElementById('scheduleFilterZone');
+
+                if (zoneSelect) {
+                    const current = zoneSelect.value;
+                    zoneSelect.innerHTML = '<option value="">-- Select Zone --</option>';
+                    list.forEach(function(z) {
+                        const opt = document.createElement('option');
+                        opt.value = z;
+                        opt.textContent = 'Zone ' + z;
+                        zoneSelect.appendChild(opt);
+                    });
+                    if (current && Array.prototype.some.call(zoneSelect.options, function(o) { return o.value === current; })) {
+                        zoneSelect.value = current;
+                    }
+                }
+
+                if (scheduleZone) {
+                    const current = scheduleZone.value;
+                    scheduleZone.innerHTML = '<option value="all">All Zones</option>';
+                    list.forEach(function(z) {
+                        const opt = document.createElement('option');
+                        opt.value = z;
+                        opt.textContent = z;
+                        scheduleZone.appendChild(opt);
+                    });
+                    if (current && Array.prototype.some.call(scheduleZone.options, function(o) { return o.value === current; })) {
+                        scheduleZone.value = current;
+                    }
+                }
+            }
+
             document.addEventListener('DOMContentLoaded', function() {
                 const options = { year: 'numeric', month: 'long', day: 'numeric' };
                 const currentDate = new Date().toLocaleDateString('en-US', options);
@@ -706,6 +729,20 @@
                 if (currentDateElement) {
                     currentDateElement.textContent = currentDate;
                 }
+
+                populateBillingZoneSelects(billingZoneCodes);
+
+                fetch('{{ route("billing-processes.zones") }}', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data && data.success && Array.isArray(data.data) && data.data.length) {
+                        populateBillingZoneSelects(data.data);
+                    }
+                })
+                .catch(function() { /* keep server-rendered zones */ });
             });
 
             // Handle Process Type Selection - Show/Hide Fields
@@ -2213,6 +2250,24 @@
                 })
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
+                    if (data.distinct_zones && zoneSel) {
+                        var currentZone = zoneSel.value;
+                        var known = {};
+                        Array.prototype.forEach.call(zoneSel.options, function(o) {
+                            if (o.value && o.value !== 'all') known[o.value] = true;
+                        });
+                        (data.distinct_zones || []).forEach(function(z) {
+                            if (!z || known[z]) return;
+                            known[z] = true;
+                            var opt = document.createElement('option');
+                            opt.value = z;
+                            opt.textContent = z;
+                            zoneSel.appendChild(opt);
+                        });
+                        if (currentZone && Array.prototype.some.call(zoneSel.options, function(o) { return o.value === currentZone; })) {
+                            zoneSel.value = currentZone;
+                        }
+                    }
                     if (data.distinct_bill_months && monthSel) {
                         var currentVal = monthSel.value;
                         monthSel.innerHTML = '<option value="all">All</option>';

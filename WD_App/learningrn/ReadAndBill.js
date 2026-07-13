@@ -1337,7 +1337,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       previous_reading_date: periodStartRaw,
       previousReadingDate: periodStartRaw,
       scheduleReadingDate: periodEndRaw,
-      zone: customer.zone || '081',
+      zone: customer.zone || '1A',
       consumerType: customer.category || (customerType === 'commercial' ? 'Commercial' : 'Residential'),
       sequence: getConsumerSeriesForReceipt(customer),
       accountNumber: customer.accountNumber ?? customer.account_number ?? customer.account_no ?? '—',

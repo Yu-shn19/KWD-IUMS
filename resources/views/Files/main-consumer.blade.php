@@ -596,13 +596,9 @@
                                     <label for="edit_zone" class="form-label">Zone <span class="text-danger">*</span></label>
                                     <select class="form-select" id="edit_zone" name="zone" required>
                                         <option value="">Select Zone</option>
-                                        <option value="1A">1A</option>
-                                        <option value="1B">1B</option>
-                                        <option value="2A">2A</option>
-                                        <option value="2B">2B</option>
-                                        <option value="Z3">Z3</option>
-                                        <option value="Z4">Z4</option>
-                                        <option value="Z5">Z5</option>
+                                        @foreach(($zones ?? \App\Models\ConsumerZone::distinctZoneCodes()) as $zoneCode)
+                                            <option value="{{ $zoneCode }}">{{ $zoneCode }}</option>
+                                        @endforeach
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
@@ -784,13 +780,9 @@
                                     <label for="zone" class="form-label">Zone <span class="text-danger">*</span></label>
                                     <select class="form-select" id="zone" name="zone" required>
                                         <option value="">Select Zone</option>
-                                        <option value="1A">1A</option>
-                                        <option value="1B">1B</option>
-                                        <option value="2A">2A</option>
-                                        <option value="2B">2B</option>
-                                        <option value="Z3">Z3</option>
-                                        <option value="Z4">Z4</option>
-                                        <option value="Z5">Z5</option>
+                                        @foreach(($zones ?? \App\Models\ConsumerZone::distinctZoneCodes()) as $zoneCode)
+                                            <option value="{{ $zoneCode }}">{{ $zoneCode }}</option>
+                                        @endforeach
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>

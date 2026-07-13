@@ -137,7 +137,7 @@
                                     <div class="form-group row mb-2">
                                         <label class="col-sm-5 col-form-label text-muted small">Zone:</label>
                                         <div class="col-sm-7">
-                                            <input type="text" class="form-control form-control-sm" value="031" readonly>
+                                            <input type="text" class="form-control form-control-sm" value="2A" readonly>
                                         </div>
                                     </div>
                                     <div class="form-group row mb-2">

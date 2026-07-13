@@ -140,6 +140,11 @@ class MeterReadingSchedule extends Model
 
     public function getZoneAttribute(): ?string
     {
+        // Prefer selected/joined column when present (e.g. cz.zone_code as zone)
+        if (array_key_exists('zone', $this->attributes) && $this->attributes['zone'] !== null && $this->attributes['zone'] !== '') {
+            return (string) $this->attributes['zone'];
+        }
+
         return $this->relationLoaded('consumerZone')
             ? ($this->consumerZone->zone_code ?? null)
             : ($this->consumerZone()->value('zone_code'));
@@ -148,9 +153,7 @@ class MeterReadingSchedule extends Model
     public function scopeForZoneCode(Builder $query, string $zone): Builder
     {
         return $query->whereHas('consumerZone', function (Builder $q) use ($zone) {
-            $q->where('zone_code', $zone)
-                ->orWhereRaw('LPAD(TRIM(COALESCE(zone_code, "")), 3, "0") = ?', [$zone])
-                ->orWhereRaw('TRIM(LEADING "0" FROM zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
+            ConsumerZone::applyZoneCodeConstraint($q, $zone, 'zone_code');
         });
     }
 

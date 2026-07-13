@@ -76,6 +76,7 @@ class ConsumerController extends Controller
 
         $latestBill = null;
         $meterReading = null;
+        $zones = ConsumerZone::distinctZoneCodes();
 
         if ($consumer) {
             $consumer->setAttribute(
@@ -86,7 +87,7 @@ class ConsumerController extends Controller
             $meterReading = $this->getLatestMeterReading($consumer->account_no);
         }
 
-        return view('Files.main-consumer', compact('consumer', 'latestBill', 'meterReading'));
+        return view('Files.main-consumer', compact('consumer', 'latestBill', 'meterReading', 'zones'));
     }
 
     /**
@@ -339,8 +340,9 @@ class ConsumerController extends Controller
         );
         $latestBill = $this->getLatestBillFromDownloadedReadings($consumer->account_no);
         $meterReading = $this->getLatestMeterReading($consumer->account_no);
+        $zones = ConsumerZone::distinctZoneCodes();
 
-        return view('Files.main-consumer', compact('consumer', 'latestBill', 'meterReading'));
+        return view('Files.main-consumer', compact('consumer', 'latestBill', 'meterReading', 'zones'));
     }
 
    /**

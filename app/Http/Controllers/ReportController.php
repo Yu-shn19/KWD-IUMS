@@ -1170,11 +1170,7 @@ class ReportController extends Controller
 
         // Apply zone filter
         if ($zone && $zone !== '') {
-            $query->where(function($q) use ($zone) {
-                $q->where(mr_col('cz.zone_code'), $zone)
-                  ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
-                  ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
-            });
+            ConsumerZone::applyZoneCodeConstraint($query, $zone, 'cz.zone_code');
         }
 
         // Apply collector filter
@@ -1384,11 +1380,7 @@ class ReportController extends Controller
 
         // Zone filter
         if ($zone && $zone !== '') {
-            $query->where(function ($q) use ($zone) {
-                $q->where(mr_col('cz.zone_code'), $zone)
-                  ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
-                  ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
-            });
+            ConsumerZone::applyZoneCodeConstraint($query, $zone, 'cz.zone_code');
         }
 
         // Collector filter
@@ -2603,11 +2595,7 @@ class ReportController extends Controller
                         ->orWhere(mr_col('cp.remarks'), 'like', 'Cancelled OR#%');
                 });
             if ($zoneRoute !== '') {
-                $q->where(function ($w) use ($zoneRoute) {
-                    $w->where(mr_col('cz.zone_code'), $zoneRoute)
-                        ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zoneRoute])
-                        ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zoneRoute]);
-                });
+                ConsumerZone::applyZoneCodeConstraint($q, $zoneRoute, 'cz.zone_code');
             }
 
             return $q;
@@ -2848,9 +2836,7 @@ class ReportController extends Controller
                 });
             })
             ->when($zoneRoute !== '', function ($q) use ($zoneRoute) {
-                $q->where(mr_col('cz.zone_code'), $zoneRoute)
-                    ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zoneRoute])
-                    ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zoneRoute]);
+                ConsumerZone::applyZoneCodeConstraint($q, $zoneRoute, 'cz.zone_code');
             })
             ->groupBy(mr_col('cz.id'), mr_col('cz.account_no'), mr_col('cz.account_name'), mr_col('cz.zone_code'))
             ->havingRaw('SUM(COALESCE(dr.consumption, 0)) > 0')

@@ -56,7 +56,28 @@ class BillingProcessController extends Controller
      */
     public function index()
     {
-        return view('processes.billing-processes');
+        return view('processes.billing-processes', [
+            'zones' => ConsumerZone::distinctZoneCodes(),
+        ]);
+    }
+
+    /**
+     * Distinct zone codes from consumer_zone for Billing Processes dropdowns.
+     */
+    public function getZones()
+    {
+        return response()->json([
+            'success' => true,
+            'data' => ConsumerZone::distinctZoneCodes()->values(),
+        ]);
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Query\Builder  $query
+     */
+    private function applyZoneCodeFilter($query, string $zone, string $column = 'cz.zone_code'): void
+    {
+        ConsumerZone::applyZoneCodeConstraint($query, $zone, $column);
     }
 
     
@@ -136,11 +157,12 @@ class BillingProcessController extends Controller
                 ], 422);
             }
             // Zone-only: only ACTIVE consumers (exclude disconnected / inactive)
-            $consumers = ConsumerZone::query()->where(mr_col('zone_code'), $zone)
+            $consumersQuery = ConsumerZone::query()
                 ->whereIn(DB::raw('UPPER(TRIM(COALESCE(status_code, "")))'), ['A', 'ACTIVE'])
                 ->orderBy(mr_col('sequence'))
-                ->orderBy(mr_col('account_no'))
-                ->get();
+                ->orderBy(mr_col('account_no'));
+            $this->applyZoneCodeFilter($consumersQuery, $zone, 'zone_code');
+            $consumers = $consumersQuery->get();
         }
 
         $existingCount = 0;
@@ -1141,7 +1163,7 @@ class BillingProcessController extends Controller
             }
 
             if ($zone) {
-                $query->where(mr_col('zone_code'), $zone);
+                $this->applyZoneCodeFilter($query, $zone, 'zone_code');
             }
 
             $consumers = $query->get();
@@ -1365,12 +1387,8 @@ class BillingProcessController extends Controller
                 'dr.current_bill as downloaded_current_bill',
             ])
             ->where(function ($query) use ($zone) {
-                $query->whereNotNull(mr_col('cz.zone_code'))
-                    ->where(function ($qq) use ($zone) {
-                        $qq->where(mr_col('cz.zone_code'), $zone)
-                            ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
-                            ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                    });
+                $query->whereNotNull(mr_col('cz.zone_code'));
+                $this->applyZoneCodeFilter($query, $zone, 'cz.zone_code');
             })
             ->whereDate('dr.reading_date', $readingDate)
             ->orderByDesc(mr_col('dr.id'))
@@ -1439,7 +1457,7 @@ class BillingProcessController extends Controller
             ->orderByAccountNumberTail();
 
         if ($zone && $zone !== 'all') {
-            $query->where(mr_col('cz.zone_code'), $zone);
+            $this->applyZoneCodeFilter($query, $zone, 'cz.zone_code');
         }
 
         return $query->get()->map(function (MeterReadingSchedule $item) {
@@ -1555,7 +1573,7 @@ class BillingProcessController extends Controller
         $query = MeterReadingSchedule::query()
             ->joinConsumerZone()
             ->select(
-                'cz.zone_code as zone',
+                'cz.zone_code as batch_zone',
                 'meter_reading_schedules.bill_month',
                 'meter_reading_schedules.bill_date',
                 'meter_reading_schedules.due_date',
@@ -1571,7 +1589,7 @@ class BillingProcessController extends Controller
             );
 
         if ($zoneFilter && $zoneFilter !== '' && $zoneFilter !== 'all') {
-            $query->where(mr_col('cz.zone_code'), $zoneFilter);
+            $this->applyZoneCodeFilter($query, $zoneFilter, 'cz.zone_code');
         }
 
         if ($billMonthFilter && $billMonthFilter !== '' && $billMonthFilter !== 'all') {
@@ -1586,8 +1604,10 @@ class BillingProcessController extends Controller
 
         $batches = $query->get()
             ->map(function ($row) {
+                $zoneCode = $row->batch_zone ?? null;
+
                 return [
-                    'zone' => $row->zone,
+                    'zone' => $zoneCode !== null && $zoneCode !== '' ? (string) $zoneCode : null,
                     'bill_month' => $row->bill_month ? Carbon::parse($row->bill_month)->format('Y-m-d') : null,
                     'bill_date' => $row->bill_date ? Carbon::parse($row->bill_date)->format('Y-m-d') : null,
                     'due_date' => $row->due_date ? Carbon::parse($row->due_date)->format('Y-m-d') : null,
@@ -1603,16 +1623,30 @@ class BillingProcessController extends Controller
             ->whereNotNull(mr_col('meter_reading_schedules.bill_month'))
             ->distinct();
         if ($zoneFilter && $zoneFilter !== '' && $zoneFilter !== 'all') {
-            $distinctMonthsQuery->where(mr_col('cz.zone_code'), $zoneFilter);
+            $this->applyZoneCodeFilter($distinctMonthsQuery, $zoneFilter, 'cz.zone_code');
         }
         $distinct_bill_months = $distinctMonthsQuery->orderBy(mr_col('meter_reading_schedules.bill_month'), 'desc')->pluck(mr_col('bill_month'))->map(function ($d) {
             return $d ? Carbon::parse($d)->format('Y-m-d') : null;
         })->filter()->values()->toArray();
 
+        $distinct_zones = MeterReadingSchedule::query()
+            ->joinConsumerZone()
+            ->whereNotNull(mr_col('cz.zone_code'))
+            ->where(mr_col('cz.zone_code'), '!=', '')
+            ->distinct()
+            ->orderBy(mr_col('cz.zone_code'))
+            ->pluck(mr_col('cz.zone_code'))
+            ->map(fn ($z) => trim((string) $z))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
         return response()->json([
             'success' => true,
             'data' => $batches,
             'distinct_bill_months' => $distinct_bill_months,
+            'distinct_zones' => $distinct_zones,
         ]);
     }
     /**
@@ -1867,12 +1901,8 @@ class BillingProcessController extends Controller
             ->leftJoin(mr_col('consumer_payments as cp'), mr_col('cp.reading_id'), '=', mr_col('dr.id'))
             ->select($selectColumns)
             ->where(function ($query) use ($zone) {
-                $query->whereNotNull(mr_col('cz.zone_code'))
-                    ->where(function ($qq) use ($zone) {
-                        $qq->where(mr_col('cz.zone_code'), $zone)
-                            ->orWhereRaw('LPAD(cz.zone_code, 3, "0") = ?', [$zone])
-                            ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
-                    });
+                $query->whereNotNull(mr_col('cz.zone_code'));
+                $this->applyZoneCodeFilter($query, $zone, 'cz.zone_code');
             })
             ->whereDate('dr.reading_date', $readingDateYmd)
             ->orderBy(mr_col('mrs.sedr_number'))
@@ -2058,9 +2088,7 @@ class BillingProcessController extends Controller
                 ->leftJoin(mr_col('downloaded_readings as dr'), mr_col('dr.schedule_id'), '=', mr_col('meter_reading_schedules.id'))
                 ->joinConsumerZone()
                 ->where(function ($q) use ($zone) {
-                    $q->where(mr_col('cz.zone_code'), $zone)
-                        ->orWhereRaw('LPAD(TRIM(cz.zone_code), 3, "0") = ?', [$zone])
-                        ->orWhereRaw('TRIM(LEADING "0" FROM cz.zone_code) = TRIM(LEADING "0" FROM ?)', [$zone]);
+                    $this->applyZoneCodeFilter($q, $zone, 'cz.zone_code');
                 })
                 ->whereDate('meter_reading_schedules.bill_date', $billDate->format('Y-m-d'))
                 ->whereNotNull(mr_col('meter_reading_schedules.due_date'))
@@ -2246,10 +2274,7 @@ class BillingProcessController extends Controller
 
             // Apply zone filter (schedule zone or consumer_zone.zone_code)
             if ($zone && $zone !== '' && $zone !== 'All Zones') {
-                $query->where(function ($q) use ($zone) {
-                    $q->where(mr_col('cz.zone_code'), $zone)
-                        ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
-                });
+                $this->applyZoneCodeFilter($query, $zone, 'cz.zone_code');
             }
 
             // Apply bill month filter by penalty due_date (or bill_month from schedule)
@@ -2742,10 +2767,7 @@ class BillingProcessController extends Controller
             );
 
         if ($zone && $zone !== '' && $zone !== 'All Zones') {
-            $query->where(function ($q) use ($zone) {
-                $q->where(mr_col('cz.zone_code'), $zone)
-                    ->orWhereRaw('LPAD(TRIM(COALESCE(cz.zone_code, "")), 3, "0") = ?', [$zone]);
-            });
+            $this->applyZoneCodeFilter($query, $zone, 'cz.zone_code');
         }
 
         if ($month && $month !== '') {

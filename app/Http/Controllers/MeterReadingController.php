@@ -287,7 +287,8 @@ class MeterReadingController extends Controller
         return view('processes.meter-reading', [
             'readers' => $readers,
             'readerAssignments' => $readerAssignments,
-            'totalAssignments' => count($readerAssignments)
+            'totalAssignments' => count($readerAssignments),
+            'zones' => ConsumerZone::distinctZoneCodes(),
         ]);
     }
 

@@ -216,4 +216,62 @@ class ConsumerZone extends Model
 
         return $disconnectedAt ? Carbon::parse($disconnectedAt) : null;
     }
+
+    /**
+     * Fallback when consumer_zone has no zone_code rows yet (new zoning: 1A–Z5).
+     *
+     * @return list<string>
+     */
+    public static function defaultZoneCodes(): array
+    {
+        return ['1A', '1B', '2A', '2B', 'Z3', 'Z4', 'Z5'];
+    }
+
+    /**
+     * Distinct zone_code values from consumer_zone for dropdowns/filters.
+     *
+     * @return \Illuminate\Support\Collection<int, string>
+     */
+    public static function distinctZoneCodes()
+    {
+        $zones = static::query()
+            ->whereNotNull('zone_code')
+            ->where('zone_code', '!=', '')
+            ->distinct()
+            ->orderBy('zone_code')
+            ->pluck('zone_code')
+            ->map(fn ($z) => trim((string) $z))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($zones->isEmpty()) {
+            return collect(static::defaultZoneCodes());
+        }
+
+        return $zones;
+    }
+
+    /**
+     * Match zone_code for new alphanumeric zones (1A, Z3) and legacy padded numeric codes.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Query\Builder  $query
+     */
+    public static function applyZoneCodeConstraint($query, string $zone, string $column = 'zone_code'): void
+    {
+        $zone = trim($zone);
+        if ($zone === '') {
+            return;
+        }
+
+        $query->where(function ($q) use ($zone, $column) {
+            $q->where($column, $zone)
+                ->orWhereRaw('UPPER(TRIM(' . $column . ')) = ?', [strtoupper($zone)]);
+
+            if (!preg_match('/[A-Za-z]/', $zone)) {
+                $q->orWhereRaw('LPAD(TRIM(COALESCE(' . $column . ', "")), 3, "0") = ?', [$zone])
+                    ->orWhereRaw('TRIM(LEADING "0" FROM ' . $column . ') = TRIM(LEADING "0" FROM ?)', [$zone]);
+            }
+        });
+    }
 }

@@ -179,10 +179,10 @@ export default function Receipt({ onBack, data }) {
     readingDate: '2025-01-15',
     dueDate: '2025-02-15',
     periodCovered: '2025-01-15 / 2025-02-15',
-    zone: '081',
+    zone: '2A',
     consumerType: 'Residential',
     sequence: '2982',
-    accountNumber: '081-12-2982',
+    accountNumber: '2099',
     customer: {
       name: 'Juan Dela Cruz',
       address: '123 Main Street, Barangay Sample, Hagonoy, Davao Del Sur',

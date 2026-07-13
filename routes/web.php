@@ -235,6 +235,7 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
 
     //  Billing processes page routes
     Route::get('/billing-processes', [BillingProcessController::class, 'index'])->name('billing-processes');
+    Route::get('/billing-processes/zones', [BillingProcessController::class, 'getZones'])->name('billing-processes.zones');
     Route::post('/billing-processes/prepare-meter-reading', [BillingProcessController::class, 'prepareMeterReading'])->name('billing-processes.prepare-meter-reading');
     Route::post('/billing-processes/save-schedules', [BillingProcessController::class, 'saveMeterReadingSchedules'])->name('billing-processes.save-schedules');
     Route::get('/billing-processes/schedules', [BillingProcessController::class, 'getSchedules'])->name('billing-processes.get-schedules');
@@ -280,7 +281,9 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
 
     // penalty-report page route
     Route::get('/penalty-report', function () {
-        return view('reports.system-report.penalty-report');
+        return view('reports.system-report.penalty-report', [
+            'zones' => \App\Models\ConsumerZone::distinctZoneCodes(),
+        ]);
     })->name('penalty-report');
 
     // Penalty routes
@@ -341,7 +344,9 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
 
     // Adjustment Report page route
     Route::get('/adjustment-report', function () {
-        return view('reports.system-report.adjustment-report');
+        return view('reports.system-report.adjustment-report', [
+            'zones' => \App\Models\ConsumerZone::distinctZoneCodes(),
+        ]);
     })->name('adjustment-report');
 
     // User Management routes

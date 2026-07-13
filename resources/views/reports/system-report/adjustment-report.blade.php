@@ -50,15 +50,9 @@
                                             <label class="small font-weight-bold mb-1">Zone / Route</label>
                                             <select class="form-control form-control-sm">
                                                 <option value="">All Zones</option>
-                                                <option>011</option>
-                                                <option>021</option>
-                                                <option>031</option>
-                                                <option>041</option>
-                                                <option>051</option>
-                                                <option>061</option>
-                                                <option>071</option>
-                                                <option>081</option>
-                                                <option>091</option>
+                                                @foreach(($zones ?? \App\Models\ConsumerZone::distinctZoneCodes()) as $zoneCode)
+                                                    <option value="{{ $zoneCode }}">{{ $zoneCode }}</option>
+                                                @endforeach
                                             </select>
                                         </div>
 
