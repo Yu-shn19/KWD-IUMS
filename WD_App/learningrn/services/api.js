@@ -694,6 +694,16 @@ export const disconnectorAPI = {
 };
 
 // Error handler
+// Pricing tiers (same source as MeterReadingApiController::calculateWaterBill)
+export const pricingTiersAPI = {
+  getAll: async (token = null) => {
+    return apiRequest('/pricing-tiers', {
+      method: 'GET',
+      token,
+    });
+  },
+};
+
 export const handleAPIError = (error, customMessage = null) => {
   const message = customMessage || error.message || 'An error occurred. Please try again.';
   
@@ -727,6 +737,7 @@ export default {
   routesAPI,
   readerDownloadedReadingsAPI,
   disconnectorAPI,
+  pricingTiersAPI,
   handleAPIError,
   handleAPISuccess
 };

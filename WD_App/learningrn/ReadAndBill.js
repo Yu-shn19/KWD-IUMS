@@ -27,6 +27,8 @@ import { networkStatus, syncManager } from './services/offlineQueue';
 import * as readingsLocalService from './services/readingsLocalService';
 import PrinterSelector from './components/PrinterSelector';
 import { getReadingDateFromMeterSchedule } from './utils/dateUtils';
+import { calculateWaterBill, resolveClassification, METER_RENTAL } from './utils/waterBilling';
+import { loadPricingTiers } from './services/pricingTiersService';
 
 const KEYPAD_KEYS = ['1','2','3','4','5','6','7','8','9','.','0','⌫'];
 const SQLITE_EXPORT_DIR_URI_KEY = 'sqlite_export_directory_uri';
@@ -236,9 +238,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [pricingTiers, setPricingTiers] = useState([]);
 
   const scrollViewRef = useRef(null);
-  const isOnlineRef = useRef(true); 
+  const isOnlineRef = useRef(true);
+  const pricingTiersRef = useRef([]);
 
   
   useEffect(() => {
@@ -248,6 +252,22 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
 
     return () => clearTimeout(debounceTimer);
   }, [searchTerm]);
+
+  // Load pricing tiers (API + offline cache) — same source as MeterReadingApiController
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const tiers = await loadPricingTiers();
+      if (!cancelled) {
+        setPricingTiers(tiers);
+        pricingTiersRef.current = tiers;
+        console.log('💰 Pricing tiers loaded:', tiers.length);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let unsubscribe = null;
@@ -1003,103 +1023,15 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     }
   }, [shouldSortCustomers]);
 
-  const METER_RENTAL = 20.0;
-  const MINIMUM_CHARGE = 253.0;
+  const METER_MAINTENANCE_CHARGE = METER_RENTAL;
 
-  const resolveClassification = (categoryRaw) => {
-    const raw = (categoryRaw ?? '').toString().trim().toUpperCase();
-    if (!raw) return 'RESIDENTIAL';
-
-    const mapped = {
-      'COM-A': 'COMMERCIAL A',
-      'COM-B': 'COMMERCIAL B',
-      'COM-C': 'COMMERCIAL C',
-      'INDUSTRIAL': 'INDUSTRIAL',
-      'GOVT-LGU': 'GOVERNMENT',
-      'GOVT': 'GOVERNMENT',
-      'RES': 'RESIDENTIAL',
-      'RESIDENTIAL': 'RESIDENTIAL',
-    };
-    if (mapped[raw]) return mapped[raw];
-
-    const num = parseInt(raw, 10);
-    if (!Number.isNaN(num)) {
-      if (num === 12) return 'RESIDENTIAL';
-      if (num === 22) return 'GOVERNMENT';
-      if (num === 32) return 'INDUSTRIAL';
-      if (num === 33) return 'COMMERCIAL A';
-      if (num === 34) return 'COMMERCIAL B';
-      if (num === 35) return 'COMMERCIAL C';
-      if (num === 36) return 'WHOLESALE';
-    }
-
-    if (raw.includes('IND')) return 'INDUSTRIAL';
-    if (raw.includes('WHOLESALE') || raw.includes('BULK')) return 'WHOLESALE';
-    if (raw.includes('COMA') || raw.includes('COMMERCIAL A')) return 'COMMERCIAL A';
-    if (raw.includes('COMB') || raw.includes('COMMERCIAL B')) return 'COMMERCIAL B';
-    if (raw.includes('COMC') || raw.includes('COMMERCIAL C')) return 'COMMERCIAL C';
-    if (raw.includes('COM')) return 'COMMERCIAL';
-    if (raw.includes('GOV')) return 'GOVERNMENT';
-    if (raw.includes('RES')) return 'RESIDENTIAL';
-
-    return 'RESIDENTIAL';
-  };
-
-  const classificationMultiplier = (classification) => {
-    const key = (classification ?? '').toString().trim().toUpperCase();
-    switch (key) {
-      case 'BULK':
-      case 'WHOLESALE':
-        return 3.0;
-      case 'INDUSTRIAL':
-      case 'COMMERCIAL':
-        return 2.0;
-      case 'COMMERCIAL A':
-      case 'COMMERCIAL_A':
-      case 'A':
-        return 1.75;
-      case 'COMMERCIAL B':
-      case 'COMMERCIAL_B':
-      case 'B':
-        return 1.5;
-      case 'COMMERCIAL C':
-      case 'COMMERCIAL_C':
-      case 'C':
-        return 1.25;
-      default:
-        return 1.0;
-    }
-  };
-
-  const computeResidentialBase = (cu) => {
-    if (cu <= 10) return MINIMUM_CHARGE;
-    if (cu <= 20) return MINIMUM_CHARGE + (cu - 10) * 27.0;
-    if (cu <= 30) return MINIMUM_CHARGE + (10 * 27.0) + (cu - 20) * 28.75;
-    if (cu <= 40) return MINIMUM_CHARGE + (10 * 27.0) + (10 * 28.75) + (cu - 30) * 30.55;
-    return MINIMUM_CHARGE + (10 * 27.0) + (10 * 28.75) + (10 * 30.55) + (cu - 40) * 32.4;
-  };
-
-  // Commercial / Industrial (Category 32): residential base × multiplier + meter rental
-  const computeCommercialIndustrial = (cu, classification = 'INDUSTRIAL') => {
-    const residentialTotal = computeResidentialBase(cu);
-    const multiplier = classificationMultiplier(classification);
-    return (residentialTotal * multiplier) + METER_RENTAL;
-  };
-
-  const calculateBill = (consumption, categoryRaw) => {
-    const cu = parseInt(consumption, 10);
-    if (Number.isNaN(cu) || cu < 0) return { bill: 0, includesMeterRental: true };
-
-    const classification = resolveClassification(categoryRaw);
-    let result = 0;
-
-    if (classification === 'RESIDENTIAL' || classification === 'GOVERNMENT') {
-      result = computeResidentialBase(cu) + METER_RENTAL;
-    } else {
-      result = computeCommercialIndustrial(cu, classification);
-    }
-
-    return { bill: parseFloat(result.toFixed(2)), includesMeterRental: true };
+  const calculateBill = (consumption, categoryRaw, rateCode = null) => {
+    return calculateWaterBill(
+      consumption,
+      categoryRaw,
+      rateCode,
+      pricingTiersRef.current?.length ? pricingTiersRef.current : pricingTiers
+    );
   };
 
   const handleCustomerSelect = (customer) => {
@@ -1113,7 +1045,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     }
     
     // Automatically set customer type based on category id (default residential)
-    const classification = resolveClassification(customer.category ?? '');
+    const classification = resolveClassification(
+      customer.category ?? '',
+      customer.rateCode ?? customer.rate_code ?? null
+    );
     setCustomerType(classification === 'RESIDENTIAL' || classification === 'GOVERNMENT' ? 'residential' : 'commercial');
 
     // Open Reading Entry directly on customer tap.
@@ -1301,22 +1236,29 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       rateCode: customer.rateCode
     });
     
-    const { bill: currentBillCalc, includesMeterRental } = calculateBill(consumption, customer.category);
+    const { bill: currentBillCalc, includesMeterRental, source: billSource } = calculateBill(
+      consumption,
+      customer.category,
+      customer.rateCode ?? customer.rate_code ?? null
+    );
     
     // Debug billing calculation
     console.log('Billing Calculation:', {
       consumption: consumption,
       category: customer.category,
-      rateCode: customer.rateCode,
+      rateCode: customer.rateCode ?? customer.rate_code,
       calculatedBill: currentBillCalc,
-      includesMeterRental: includesMeterRental
+      includesMeterRental: includesMeterRental,
+      source: billSource,
     });
     
-    // Always show 20.00 as maintenance charge separately
-    const meterMaintenanceCharge = 20.00;
+    // Always show meter maintenance separately (matches API ledger "others" = 20)
+    const meterMaintenanceCharge = METER_MAINTENANCE_CHARGE;
     
-    // If the calculated bill includes the maintenance charge, subtract it to show separately
-    const currentBillOnly = includesMeterRental ? Math.max(0, currentBillCalc - 20.00) : currentBillCalc;
+    // Server current_bill is water-only; older local calc included meter rental
+    const currentBillOnly = includesMeterRental
+      ? Math.max(0, currentBillCalc - meterMaintenanceCharge)
+      : currentBillCalc;
     
     const totalCurrent = currentBillOnly + meterMaintenanceCharge;
     // Arrears from API = balance only
@@ -1505,6 +1447,76 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     );
   };
 
+  const getAccountFromReadingData = (readingData) => {
+    const c = readingData?.customer || {};
+    return (
+      c.accountNumber ||
+      c.account_number ||
+      readingData?.account_number ||
+      readingData?.accountNumber ||
+      null
+    );
+  };
+
+  /**
+   * Resolve a live meter_reading_schedules.id for upload.
+   * Pending SQLite rows can hold stale schedule IDs from another environment/DB.
+   */
+  const resolveScheduleIdForUpload = async (readingData, token, readerId) => {
+    const currentId = readingData?.schedule_id;
+    const account = getAccountFromReadingData(readingData);
+    const normalizeAcct = (v) => String(v ?? '').trim();
+
+    const findInList = (list) => {
+      if (!account || !Array.isArray(list)) return null;
+      const target = normalizeAcct(account);
+      const match = list.find((r) => {
+        const acct = normalizeAcct(r.account_number ?? r.accountNumber);
+        return acct && acct === target;
+      });
+      const sid = match ? getScheduleIdFromRecord(match) : null;
+      const n = Number(sid);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+
+    // Prefer fresh API schedules (this server's IDs). Local cache may still hold
+    // stale IDs from production / another database after switching API hosts.
+    if (token && readerId && account) {
+      try {
+        const response = await routesAPI.getRoutes({ reader_id: readerId }, token);
+        const list = Array.isArray(response?.schedules)
+          ? response.schedules
+          : Array.isArray(response?.data)
+            ? response.data
+            : [];
+        const fromApi = findInList(list);
+        if (fromApi != null) {
+          try {
+            await routesStorage.saveRoutes(
+              list.map((route) => ({
+                ...route,
+                reader_id: readerId,
+                readerId: readerId,
+              }))
+            );
+          } catch (_) {}
+          return fromApi;
+        }
+      } catch (e) {
+        console.warn('Could not rematch schedule_id from API:', e?.message || e);
+      }
+    }
+
+    try {
+      const cached = (await routesStorage.getRoutes()) || [];
+      const fromCache = findInList(cached);
+      if (fromCache != null) return fromCache;
+    } catch (_) {}
+
+    const n = Number(currentId);
+    return Number.isFinite(n) && n > 0 ? n : currentId;
+  };
+
   // Upload reading to server (used by both manual submit and auto-sync)
   const uploadReadingToServer = async (readingData) => {
     try {
@@ -1513,6 +1525,29 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       
       if (!token || !userData) {
         return { success: false, message: 'No authentication token' };
+      }
+
+      let scheduleId = readingData.schedule_id;
+      try {
+        const resolved = await resolveScheduleIdForUpload(readingData, token, userData.id);
+        if (resolved != null && Number(resolved) !== Number(scheduleId)) {
+          console.log(
+            `🔄 Remapped stale schedule_id ${scheduleId} → ${resolved} for account ${getAccountFromReadingData(readingData) || '?'}`
+          );
+          const pendingId = await readingsLocalService.getPendingIdByScheduleId(scheduleId);
+          if (pendingId != null) {
+            await readingsLocalService.updatePendingReading(pendingId, {
+              ...readingData,
+              schedule_id: resolved,
+            });
+          }
+          scheduleId = resolved;
+          readingData = { ...readingData, schedule_id: resolved };
+        } else if (resolved != null) {
+          scheduleId = resolved;
+        }
+      } catch (remapErr) {
+        console.warn('schedule_id rematch skipped:', remapErr?.message || remapErr);
       }
 
       const apiConfig = getApiConfig();
@@ -1527,7 +1562,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          schedule_id: readingData.schedule_id,
+          schedule_id: scheduleId,
+          account_number: getAccountFromReadingData(readingData) || undefined,
           current_reading: readingData.current_reading,
           reading_date: readingData.reading_date,
           reader_notes: readingData.reader_notes || '',
@@ -1545,13 +1581,20 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       }
       // Only treat as success when server returns 2xx AND success: true (offline queue removed only then)
       if (!uploadResponse.ok) {
+        const msg = uploadResult?.message || `Server error ${uploadResponse.status}`;
+        // Clearer message when schedule does not exist on this server/DB
+        if (uploadResponse.status === 422 || /schedule id is invalid/i.test(String(msg))) {
+          return {
+            success: false,
+            message: `Schedule #${scheduleId} not found on this server. Pull fresh routes, then re-save the reading. (${msg})`,
+          };
+        }
         return {
           success: false,
-          message: uploadResult?.message || `Server error ${uploadResponse.status}`,
+          message: msg,
         };
       }
       if (uploadResult && uploadResult.success) {
-        const scheduleId = readingData.schedule_id;
         try {
           const stored = (await routesStorage.getRoutes()) || [];
           const updatedStored = stored.map((r) =>

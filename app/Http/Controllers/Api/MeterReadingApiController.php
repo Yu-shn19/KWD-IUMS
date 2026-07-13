@@ -253,13 +253,14 @@ class MeterReadingApiController extends Controller
     }
 
     /**
-     * Submit meter reading from mobile app
+     * Submit meter reading from mobile app.
+     * Writes meter_reading_schedules + downloaded_readings (and ledger when present).
      */
     public function submitReading(Request $request)
     {
-        // Log incoming request for debugging
         Log::info('📥 Submit Reading Request Received', [
             'schedule_id' => $request->input('schedule_id'),
+            'account_number' => $request->input('account_number'),
             'current_reading' => $request->input('current_reading'),
             'reader_id' => $request->input('reader_id'),
             'ip' => $request->ip(),
@@ -267,172 +268,192 @@ class MeterReadingApiController extends Controller
         ]);
 
         $request->validate([
-            'schedule_id' => 'required|exists:meter_reading_schedules,id',
+            'schedule_id' => 'nullable|integer',
+            'account_number' => 'nullable|string|max:50',
             'current_reading' => 'required|integer|min:0',
             'reading_date' => 'nullable|date',
             'reader_notes' => 'nullable|string',
             'reader_id' => 'required|exists:users,id'
         ]);
 
+        if (!$request->filled('schedule_id') && !$request->filled('account_number')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'schedule_id or account_number is required'
+            ], 422);
+        }
+
         try {
-            $schedule = MeterReadingSchedule::with('consumerZone')->find($request->schedule_id);
-            Log::info('📋 Schedule Found', [
-                'schedule_id' => $schedule->id,
-                'account_number' => $schedule->account_number,
-                'previous_reading' => $schedule->previous_reading
-            ]);
+            return DB::transaction(function () use ($request) {
+                $schedule = $this->resolveScheduleForSubmit($request);
 
-            // Verify this schedule belongs to the requesting reader (if assigned_reader_id is set)
-            // Allow unassigned schedules or schedules with null assigned_reader_id to be updated by any reader
-            if ($schedule->assigned_reader_id && $schedule->assigned_reader_id != $request->reader_id) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'You are not authorized to update this schedule'
-                ], 403);
-            }
+                if (!$schedule) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'The selected schedule id is invalid. No matching meter_reading_schedules row found for this reader/account on this server.'
+                    ], 422);
+                }
 
-            // Calculate consumption
-            $currentReading = (int) $request->current_reading;
-            $previousReading = (int) ($schedule->previous_reading ?? 0);
-            $consumption = max(0, $currentReading - $previousReading);
-
-            // Get rate_code from consumer_zone
-            $rateCode = null;
-            $consumer = $schedule->consumerZone;
-            if (!$consumer && $schedule->consumer_zone_id) {
-                $consumer = \App\Models\ConsumerZone::find($schedule->consumer_zone_id);
-            }
-
-            if ($consumer) {
-                $rateCode = $consumer->rate_code;
-            }
-
-            // Calculate current_bill based on consumption, category, and rate_code
-            // This matches the mobile app logic exactly
-            $currentBill = $this->calculateWaterBill($consumption, $schedule->category, $rateCode);
-            // Round to 2 decimal places to match mobile app precision
-            $currentBill = round($currentBill, 2);
-
-            // STEP 1: Update main system first (meter_reading_schedules)
-            // This is the source of truth for the web interface and billing system
-            $schedule->update(MeterReadingSchedule::filterTableAttributes([
-                'current_reading' => $currentReading,
-                'reading_date' => $request->reading_date ?? now(),
-                'consumption' => $consumption,
-                'current_bill' => $currentBill,
-                'status' => 'Completed',
-            ]));
-
-            // STEP 2: After main system update succeeds, save to downloaded_readings
-            // This table is for mobile app tracking and offline persistence
-            $reader = User::find($request->reader_id);
-            
-            $downloadedPayload = [
-                'consumer_zone_id' => $schedule->consumer_zone_id,
-                'previous_reading' => $previousReading,
-                'current_reading' => $currentReading,
-                'consumption' => $consumption,
-                'current_bill' => $currentBill,
-                'reading_date' => $request->reading_date ?? now(),
-                'status' => 'completed',
-                'reader_notes' => $request->reader_notes,
-                'prepared_by' => $this->formatName($reader),
-            ];
-            if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
-                $downloadedPayload['completed_at'] = now();
-            }
-
-            DownloadedReading::updateOrCreate(
-                [
+                Log::info('📋 Schedule Found', [
                     'schedule_id' => $schedule->id,
-                    'reader_id' => $request->reader_id,
-                ],
-                $downloadedPayload
-            );
+                    'account_number' => $schedule->account_number,
+                    'previous_reading' => $schedule->previous_reading,
+                    'resolved_from' => (int) $request->input('schedule_id') === (int) $schedule->id
+                        ? 'schedule_id'
+                        : 'account_number'
+                ]);
 
-            // STEP 3: Update the ConsumerLedger entry with actual reading data
-            // Reuse the consumer we already looked up for rate_code
+                // Verify this schedule belongs to the requesting reader (if assigned_reader_id is set)
+                if ($schedule->assigned_reader_id && (int) $schedule->assigned_reader_id !== (int) $request->reader_id) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'You are not authorized to update this schedule'
+                    ], 403);
+                }
 
-            if ($consumer) {
-                // Find the existing ledger entry for this schedule
-                $ledgerEntry = ConsumerLedger::query()
-                    ->where(mr_col('consumer_zone_id'), $consumer->id)
-                    ->where(mr_col('schedule_id'), $schedule->id)
-                    ->whereIn(mr_col('trans'), ['BILL', 'BILLING']) // Accept both formats
-                    ->first();
+                $currentReading = (int) $request->current_reading;
+                $previousReading = (int) ($schedule->previous_reading ?? 0);
+                $consumption = max(0, $currentReading - $previousReading);
 
-                if ($ledgerEntry) {
-                    // Get the previous balance (before this entry)
-                    $previousEntry = ConsumerLedger::query()
+                $rateCode = null;
+                $consumer = $schedule->consumerZone;
+                if (!$consumer && $schedule->consumer_zone_id) {
+                    $consumer = \App\Models\ConsumerZone::find($schedule->consumer_zone_id);
+                }
+                if ($consumer) {
+                    $rateCode = $consumer->rate_code;
+                }
+
+                $currentBill = round(
+                    $this->calculateWaterBill($consumption, $schedule->category, $rateCode),
+                    2
+                );
+
+                // STEP 1: meter_reading_schedules
+                $schedule->update(MeterReadingSchedule::filterTableAttributes([
+                    'current_reading' => $currentReading,
+                    'reading_date' => $request->reading_date ?? now(),
+                    'consumption' => $consumption,
+                    'current_bill' => $currentBill,
+                    'status' => 'Completed',
+                ]));
+                $schedule->refresh();
+
+                // STEP 2: downloaded_readings
+                $reader = User::find($request->reader_id);
+
+                $downloadedPayload = [
+                    'consumer_zone_id' => $schedule->consumer_zone_id,
+                    'previous_reading' => $previousReading,
+                    'current_reading' => $currentReading,
+                    'consumption' => $consumption,
+                    'current_bill' => $currentBill,
+                    'reading_date' => $request->reading_date ?? now(),
+                    'status' => 'completed',
+                    'reader_notes' => $request->reader_notes,
+                    'prepared_by' => $this->formatName($reader),
+                ];
+                if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
+                    $downloadedPayload['completed_at'] = now();
+                }
+
+                $downloaded = DownloadedReading::updateOrCreate(
+                    [
+                        'schedule_id' => $schedule->id,
+                        'reader_id' => $request->reader_id,
+                    ],
+                    $downloadedPayload
+                );
+
+                // STEP 3: consumer_ledgers (when BILL/BILLING row exists)
+                if ($consumer) {
+                    $ledgerEntry = ConsumerLedger::query()
                         ->where(mr_col('consumer_zone_id'), $consumer->id)
-                        ->where(mr_col('id'), '<', $ledgerEntry->id)
-                        ->orderBy(mr_col('id'), 'desc')
+                        ->where(mr_col('schedule_id'), $schedule->id)
+                        ->whereIn(mr_col('trans'), ['BILL', 'BILLING'])
                         ->first();
-                    
-                    $previousBalance = $previousEntry ? (float)$previousEntry->balance : (float)($consumer->balance ?? 0);
-                    
-                    // Calculate new values
-                    $others = 20.00; // Water Maintenance Charge
-                    $debit = $currentBill + $others;
-                    $newBalance = $previousBalance + $debit;
-                    
-                    // Update the ledger entry with actual reading data
-                    // Now that reading is completed, add the water maintenance charge
-                    $ledgerEntry->update([
-                        'trans' => 'BILLING', // Ensure it's 'BILLING' format
-                        'reference' => $schedule->sedr_number ?? $ledgerEntry->reference, // Update reference if available
-                        'reading' => $currentReading,
-                        'volume' => $consumption,
-                        'billamount' => $currentBill,
-                        'others' => $others, // Water Maintenance Charge - only added after reading is completed
-                        'debit' => $debit,
-                        'balance' => $newBalance,
-                        'txtime' => now()
-                    ]);
 
-                    // Recalculate balances for all subsequent entries
-                    $subsequentEntries = ConsumerLedger::query()
-                        ->where(mr_col('consumer_zone_id'), $consumer->id)
-                        ->where(mr_col('id'), '>', $ledgerEntry->id)
-                        ->orderBy(mr_col('id'), 'asc')
-                        ->get();
-                    
-                    $runningBalance = $newBalance;
-                    foreach ($subsequentEntries as $entry) {
-                        $entryDebit = (float)($entry->debit ?? 0);
-                        $entryCredit = (float)($entry->credit ?? 0);
-                        $runningBalance = $runningBalance + $entryDebit - $entryCredit;
-                        $entry->update(['balance' => $runningBalance]);
+                    if ($ledgerEntry) {
+                        $previousEntry = ConsumerLedger::query()
+                            ->where(mr_col('consumer_zone_id'), $consumer->id)
+                            ->where(mr_col('id'), '<', $ledgerEntry->id)
+                            ->orderBy(mr_col('id'), 'desc')
+                            ->first();
+
+                        $previousBalance = $previousEntry
+                            ? (float) $previousEntry->balance
+                            : (float) ($consumer->balance ?? 0);
+
+                        $others = 20.00;
+                        $debit = $currentBill + $others;
+                        $newBalance = $previousBalance + $debit;
+
+                        $ledgerEntry->update([
+                            'trans' => 'BILLING',
+                            'reference' => $schedule->sedr_number ?? $ledgerEntry->reference,
+                            'reading' => $currentReading,
+                            'volume' => $consumption,
+                            'billamount' => $currentBill,
+                            'others' => $others,
+                            'debit' => $debit,
+                            'balance' => $newBalance,
+                            'txtime' => now()
+                        ]);
+
+                        $subsequentEntries = ConsumerLedger::query()
+                            ->where(mr_col('consumer_zone_id'), $consumer->id)
+                            ->where(mr_col('id'), '>', $ledgerEntry->id)
+                            ->orderBy(mr_col('id'), 'asc')
+                            ->get();
+
+                        $runningBalance = $newBalance;
+                        foreach ($subsequentEntries as $entry) {
+                            $entryDebit = (float) ($entry->debit ?? 0);
+                            $entryCredit = (float) ($entry->credit ?? 0);
+                            $runningBalance = $runningBalance + $entryDebit - $entryCredit;
+                            $entry->update(['balance' => $runningBalance]);
+                        }
                     }
                 }
-            }
 
-            Log::info('✅ Reading Submitted Successfully', [
-                'schedule_id' => $schedule->id,
-                'account_number' => $schedule->account_number,
-                'current_reading' => $schedule->current_reading,
-                'consumption' => $schedule->consumption,
-                'current_bill' => $currentBill,
-                'status' => $schedule->status
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Meter reading submitted successfully',
-                'schedule' => [
-                    'id' => $schedule->id,
+                Log::info('✅ Reading Submitted Successfully', [
+                    'schedule_id' => $schedule->id,
+                    'downloaded_reading_id' => $downloaded->id,
                     'account_number' => $schedule->account_number,
                     'current_reading' => $schedule->current_reading,
                     'consumption' => $schedule->consumption,
+                    'current_bill' => $currentBill,
                     'status' => $schedule->status
-                ]
-            ]);
+                ]);
 
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Meter reading submitted successfully',
+                    'schedule' => [
+                        'id' => $schedule->id,
+                        'account_number' => $schedule->account_number,
+                        'current_reading' => $schedule->current_reading,
+                        'consumption' => $schedule->consumption,
+                        'current_bill' => $schedule->current_bill,
+                        'status' => $schedule->status
+                    ],
+                    'downloaded_reading' => [
+                        'id' => $downloaded->id,
+                        'schedule_id' => $downloaded->schedule_id,
+                        'reader_id' => $downloaded->reader_id,
+                        'current_reading' => $downloaded->current_reading,
+                        'consumption' => $downloaded->consumption,
+                        'current_bill' => $downloaded->current_bill,
+                        'status' => $downloaded->status,
+                    ]
+                ]);
+            });
         } catch (\Exception $e) {
             Log::error('❌ Error Submitting Reading', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'schedule_id' => $request->schedule_id ?? 'N/A',
+                'account_number' => $request->account_number ?? 'N/A',
                 'reader_id' => $request->reader_id ?? 'N/A'
             ]);
 
@@ -441,6 +462,51 @@ class MeterReadingApiController extends Controller
                 'message' => 'Error submitting reading: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Resolve schedule by id, or rematch by account_number for this reader
+     * (handles stale mobile schedule IDs after switching databases/hosts).
+     */
+    private function resolveScheduleForSubmit(Request $request): ?MeterReadingSchedule
+    {
+        $scheduleId = $request->input('schedule_id');
+        $readerId = (int) $request->input('reader_id');
+        $account = trim((string) $request->input('account_number', ''));
+
+        if ($scheduleId) {
+            $byId = MeterReadingSchedule::with('consumerZone')->find($scheduleId);
+            if ($byId) {
+                return $byId;
+            }
+        }
+
+        if ($account === '') {
+            return null;
+        }
+
+        $query = MeterReadingSchedule::with('consumerZone')
+            ->where(mr_col('assigned_reader_id'), $readerId)
+            ->whereHas('consumerZone', function ($q) use ($account) {
+                $q->where(mr_col('account_no'), $account);
+            })
+            ->whereIn(mr_col('status'), ['Assigned', 'In Progress', 'Completed'])
+            ->orderByDesc(mr_col('bill_month'))
+            ->orderByDesc(mr_col('id'));
+
+        $matched = $query->first();
+        if ($matched) {
+            return $matched;
+        }
+
+        // Last resort: any schedule for this account (unassigned / other statuses)
+        return MeterReadingSchedule::with('consumerZone')
+            ->whereHas('consumerZone', function ($q) use ($account) {
+                $q->where(mr_col('account_no'), $account);
+            })
+            ->orderByDesc(mr_col('bill_month'))
+            ->orderByDesc(mr_col('id'))
+            ->first();
     }
 
     /**

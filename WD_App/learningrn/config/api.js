@@ -22,14 +22,14 @@ export const API_CONFIG = {
     timeout: 15000,
   },
 
-  // Android emulator → host machine localhost
+  
   android_emulator: {
     baseURL: 'http://10.0.2.2:8000/api',
     timeout: 15000,
   },
 };
 
-// Point WD_App at the local Laravel main system (artisan serve)
+
 export const CURRENT_ENV = 'artisan';
 
 

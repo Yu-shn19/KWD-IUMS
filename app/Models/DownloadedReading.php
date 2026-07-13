@@ -20,6 +20,7 @@ class DownloadedReading extends Model
         'reader_notes',
         'prepared_by',
         'paid_at',
+        'completed_at',
     ];
 
     protected $casts = [

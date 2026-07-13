@@ -3,7 +3,7 @@
  * Buckets: reader meter routes vs disconnector assignments so they do not overwrite each other.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSharedDb } from './sqliteDb';
+import { withSharedDb } from './sqliteDb';
 
 const TABLE = 'routes_cache';
 const LEGACY_ROUTES_KEY = 'routes_list';
@@ -12,22 +12,25 @@ const MIGRATION_FLAG_KEY = 'routes_sqlite_migrated_v1';
 export const ROUTES_BUCKET_READER = 'reader';
 export const ROUTES_BUCKET_DISCONNECTOR = 'disconnector';
 
-let tableReady = false;
+let ensureTablePromise = null;
 let migrationPromise = null;
 
-async function getDb() {
-  const conn = await getSharedDb();
-  if (!tableReady) {
-    await conn.execAsync(`
-      CREATE TABLE IF NOT EXISTS ${TABLE} (
-        bucket TEXT PRIMARY KEY NOT NULL,
-        payload TEXT NOT NULL,
-        updated_at TEXT
-      )
-    `);
-    tableReady = true;
+async function ensureRoutesTable(conn) {
+  if (!ensureTablePromise) {
+    ensureTablePromise = (async () => {
+      await conn.execAsync(`
+        CREATE TABLE IF NOT EXISTS ${TABLE} (
+          bucket TEXT PRIMARY KEY NOT NULL,
+          payload TEXT NOT NULL,
+          updated_at TEXT
+        )
+      `);
+    })().catch((e) => {
+      ensureTablePromise = null;
+      throw e;
+    });
   }
-  return conn;
+  return ensureTablePromise;
 }
 
 /**
@@ -40,40 +43,41 @@ async function migrateFromAsyncStorageOnce() {
       const done = await AsyncStorage.getItem(MIGRATION_FLAG_KEY);
       if (done === '1') return;
 
-      const conn = await getDb();
-      const countRows = await conn.getAllAsync(`SELECT COUNT(*) as c FROM ${TABLE}`);
-      const hasAnyBucket = (countRows[0] && countRows[0].c > 0) || false;
+      await withSharedDb(async (conn) => {
+        await ensureRoutesTable(conn);
+        const countRows = await conn.getAllAsync(`SELECT COUNT(*) as c FROM ${TABLE}`);
+        const hasAnyBucket = (countRows[0] && countRows[0].c > 0) || false;
 
-      const raw = await AsyncStorage.getItem(LEGACY_ROUTES_KEY);
+        const raw = await AsyncStorage.getItem(LEGACY_ROUTES_KEY);
 
-      // Import legacy AsyncStorage only when SQLite has no rows yet (avoid clobbering newer SQLite data)
-      if (!hasAnyBucket && raw != null && raw !== '') {
-        let arr = [];
-        try {
-          const parsed = JSON.parse(raw);
-          arr = Array.isArray(parsed) ? parsed : [];
-        } catch (_) {
-          arr = [];
+        if (!hasAnyBucket && raw != null && raw !== '') {
+          let arr = [];
+          try {
+            const parsed = JSON.parse(raw);
+            arr = Array.isArray(parsed) ? parsed : [];
+          } catch (_) {
+            arr = [];
+          }
+          const now = new Date().toISOString();
+          const json = JSON.stringify(arr);
+          await conn.runAsync(
+            `INSERT OR REPLACE INTO ${TABLE} (bucket, payload, updated_at) VALUES (?, ?, ?)`,
+            [ROUTES_BUCKET_READER, json, now]
+          );
+          await conn.runAsync(
+            `INSERT OR REPLACE INTO ${TABLE} (bucket, payload, updated_at) VALUES (?, ?, ?)`,
+            [ROUTES_BUCKET_DISCONNECTOR, json, now]
+          );
         }
-        const now = new Date().toISOString();
-        const json = JSON.stringify(arr);
-        await conn.runAsync(
-          `INSERT OR REPLACE INTO ${TABLE} (bucket, payload, updated_at) VALUES (?, ?, ?)`,
-          [ROUTES_BUCKET_READER, json, now]
-        );
-        await conn.runAsync(
-          `INSERT OR REPLACE INTO ${TABLE} (bucket, payload, updated_at) VALUES (?, ?, ?)`,
-          [ROUTES_BUCKET_DISCONNECTOR, json, now]
-        );
-      }
 
-      if (raw != null) {
-        await AsyncStorage.removeItem(LEGACY_ROUTES_KEY);
-      }
-      await AsyncStorage.setItem(MIGRATION_FLAG_KEY, '1');
+        if (raw != null) {
+          await AsyncStorage.removeItem(LEGACY_ROUTES_KEY);
+        }
+        await AsyncStorage.setItem(MIGRATION_FLAG_KEY, '1');
+      });
     } catch (e) {
       console.error('routes SQLite migration:', e);
-      migrationPromise = null; // allow retry on next call
+      migrationPromise = null;
     }
   })();
   return migrationPromise;
@@ -81,37 +85,43 @@ async function migrateFromAsyncStorageOnce() {
 
 export async function getRoutes(bucket = ROUTES_BUCKET_READER) {
   await migrateFromAsyncStorageOnce();
-  const conn = await getDb();
-  const rows = await conn.getAllAsync(
-    `SELECT payload FROM ${TABLE} WHERE bucket = ? LIMIT 1`,
-    [bucket]
-  );
-  if (!rows || rows.length === 0) return [];
-  try {
-    const parsed = JSON.parse(rows[0].payload);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_) {
-    return [];
-  }
+  return withSharedDb(async (conn) => {
+    await ensureRoutesTable(conn);
+    const rows = await conn.getAllAsync(
+      `SELECT payload FROM ${TABLE} WHERE bucket = ? LIMIT 1`,
+      [bucket]
+    );
+    if (!rows || rows.length === 0) return [];
+    try {
+      const parsed = JSON.parse(rows[0].payload);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  });
 }
 
 export async function saveRoutes(bucket, routes) {
   await migrateFromAsyncStorageOnce();
-  const conn = await getDb();
-  const json = JSON.stringify(Array.isArray(routes) ? routes : []);
-  const now = new Date().toISOString();
-  await conn.runAsync(
-    `INSERT OR REPLACE INTO ${TABLE} (bucket, payload, updated_at) VALUES (?, ?, ?)`,
-    [bucket, json, now]
-  );
-  return true;
+  return withSharedDb(async (conn) => {
+    await ensureRoutesTable(conn);
+    const json = JSON.stringify(Array.isArray(routes) ? routes : []);
+    const now = new Date().toISOString();
+    await conn.runAsync(
+      `INSERT OR REPLACE INTO ${TABLE} (bucket, payload, updated_at) VALUES (?, ?, ?)`,
+      [bucket, json, now]
+    );
+    return true;
+  });
 }
 
 export async function clearRoutes(bucket = ROUTES_BUCKET_READER) {
   await migrateFromAsyncStorageOnce();
-  const conn = await getDb();
-  await conn.runAsync(`DELETE FROM ${TABLE} WHERE bucket = ?`, [bucket]);
-  return true;
+  return withSharedDb(async (conn) => {
+    await ensureRoutesTable(conn);
+    await conn.runAsync(`DELETE FROM ${TABLE} WHERE bucket = ?`, [bucket]);
+    return true;
+  });
 }
 
 export default {
