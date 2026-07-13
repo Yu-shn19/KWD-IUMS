@@ -397,14 +397,14 @@ export default function RetrieveZone({ onBack, userData }) {
     const consumption = item.consumption != null ? Number(item.consumption) : (currReading >= prevReading ? currReading - prevReading : 0);
     // Same rule as Read and Bill: high consumption when current > previous AND consumption >= 10
     const isHighConsumption = currReading > prevReading && consumption >= 10;
-    const currentBillNum = item.current_bill != null ? Number(item.current_bill) : 0;
+    // Same as ReadAndBill receipt: API current_bill is water only; always add ₱20 maintenance.
     const meterMaintenanceCharge = 20.00;
-    const totalCurrent = currentBillNum > 0 ? currentBillNum : meterMaintenanceCharge;
-    const currentBillOnly = totalCurrent >= meterMaintenanceCharge ? totalCurrent - meterMaintenanceCharge : 0;
+    const currentBillOnly = item.current_bill != null ? Math.max(0, Number(item.current_bill)) : 0;
+    const totalCurrent = currentBillOnly + meterMaintenanceCharge;
     const arrearsNum = Math.max(0, parseFloat(item.arrears ?? 0));
     const others = 0.00;
     const totalBillNum = totalCurrent + arrearsNum + others;
-    const surchargeNum = parseFloat((currentBillOnly * 0.10).toFixed(2));
+    const surchargeNum = parseFloat((currentBillOnly * 0.10).toFixed(2)); // 10% of current bill only
     const totalWithSurchargeNum = totalBillNum + surchargeNum;
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';
     return {
