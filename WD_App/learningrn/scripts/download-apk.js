@@ -84,7 +84,7 @@ req.end();
 
 function downloadFile(url, token) {
   const urlObj = new URL(url);
-  const filename = 'ReaderWD.apk';
+  const filename = 'KWD-app.apk';
   const filepath = path.join(process.cwd(), filename);
   
   console.log(`⬇️  Downloading to: ${filepath}`);

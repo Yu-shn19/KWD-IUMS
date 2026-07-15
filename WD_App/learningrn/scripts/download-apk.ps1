@@ -1,7 +1,7 @@
 # Download APK from EAS Build
 $buildId = "372c7ae2-7798-4d2d-9463-caccef48633b"
 $buildUrl = "https://expo.dev/accounts/aj_2004/projects/learningrn/builds/$buildId"
-$outputFile = "ReaderWD.apk"
+$outputFile = "KWD-app.apk"
 
 Write-Host "Downloading APK from EAS Build..." -ForegroundColor Cyan
 Write-Host "Build ID: $buildId" -ForegroundColor Gray

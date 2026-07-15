@@ -546,7 +546,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               : [];
 
           if (list.length > 0) {
-            // Preserve local status and current reading from cache so they don't disappear when returning to screen
+            // Preserve only local "saved offline" overlays.
+            // Do NOT keep stale local "completed" when server has no downloaded_readings.
             let cachedRoutes = [];
             try {
               cachedRoutes = (await routesStorage.getRoutes()) || [];
@@ -557,7 +558,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               const status = r.status;
               const currentReading = r.current_reading ?? r.currentReading;
               const normalizedStatus = normalizeCustomerStatus(status, currentReading);
-              if (id && (normalizedStatus === 'completed' || normalizedStatus === 'saved offline') && (currentReading != null)) {
+              if (id && normalizedStatus === 'saved offline' && (currentReading != null)) {
                 localByScheduleId[id] = {
                   status: normalizedStatus,
                   current_reading: currentReading,
@@ -567,7 +568,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               }
             });
 
-            // Any schedule with a local unsynced reading stays "saved offline" after API refresh (includes retry backoff + syncing)
+            // Any schedule with a local unsynced reading stays "saved offline" after API refresh
             try {
               const unsyncedLocal = await readingsLocalService.getUnsyncedReadingsForUIMerge();
               unsyncedLocal.forEach((row) => {
@@ -594,14 +595,32 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
 
             const routesWithReaderId = list.map(route => {
               const routeScheduleId = getScheduleIdFromRecord(route);
+              const apiStatus = normalizeCustomerStatus(
+                route.status,
+                route.current_reading ?? route.currentReading
+              );
               const local =
                 localByScheduleId[routeScheduleId] ??
                 localByScheduleId[Number(routeScheduleId)];
+
+              // Trust server for completed. Only overlay unsynced local readings.
+              const overlay =
+                local && local.status === 'saved offline' && !isCompletedCustomerStatus(apiStatus)
+                  ? local
+                  : null;
+
               return {
                 ...route,
                 reader_id: readerId,
                 readerId: readerId,
-                ...(local ? { status: local.status, current_reading: local.current_reading, currentReading: local.current_reading, consumption: local.consumption } : {}),
+                ...(overlay
+                  ? {
+                      status: overlay.status,
+                      current_reading: overlay.current_reading,
+                      currentReading: overlay.current_reading,
+                      consumption: overlay.consumption,
+                    }
+                  : {}),
               };
             });
 
