@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ReaderWD",
+    "name": "KWD app",
     "slug": "learningrn",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/KlogoC.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -21,6 +21,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
+      "usesCleartextTraffic": true,
       "package": "com.anonymous.learningrn",
       "permissions": [
         "android.permission.BLUETOOTH",
@@ -46,7 +47,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Allow ReaderWD to use your location to save consumer coordinates."
+          "locationWhenInUsePermission": "Allow KWD app to use your location to save consumer coordinates."
         }
       ],
       [

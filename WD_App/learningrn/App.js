@@ -141,7 +141,7 @@ export default function App() {
         errorMessage = 'The server took too long to respond. Please check your network connection.';
       } else if (error.message.includes('Network request failed') || error.message.includes('fetch')) {
         const apiConfig = getApiConfig();
-        errorMessage = `Cannot connect to server. Please check:\n1. XAMPP Apache is running\n2. Your device is on the same network\n3. The server URL is correct: ${apiConfig.baseURL}`;
+        errorMessage = `Cannot connect to server.\n\nURL: ${apiConfig.baseURL}\n\nCheck:\n1. Phone has internet / mobile data or Wi‑Fi\n2. Server is online\n3. Rebuild the APK if you just changed the API URL`;
       } else if (error.message.includes('401') || error.message.includes('Invalid credentials')) {
         errorMessage = 'Invalid email or password. Please check:\n\nEmail: reader@gmail.com\nPassword: reader123';
       }

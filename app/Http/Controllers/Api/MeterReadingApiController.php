@@ -224,7 +224,16 @@ class MeterReadingApiController extends Controller
             'schedules' => $schedules->map(function($schedule) use ($downloadedReadings, $rateCodes) {
                 $downloaded = $downloadedReadings->get($schedule->id);
                 $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
-                
+
+                // Only treat as completed when a downloaded_readings row exists.
+                // Schedule status "Completed" alone is not enough (no ledger/download proof).
+                $isReallyCompleted = (bool) $downloaded;
+                $displayStatus = $isReallyCompleted
+                    ? 'completed'
+                    : (strcasecmp((string) $schedule->status, 'Completed') === 0
+                        ? 'Assigned'
+                        : $schedule->status);
+
                 return [
                     'id' => $schedule->id,
                     'sedr_number' => $schedule->sedr_number,
@@ -237,11 +246,13 @@ class MeterReadingApiController extends Controller
                     'meter_number' => $schedule->meter_number,
                     'previous_reading' => $schedule->previous_reading,
                     'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),
-                    // Use downloaded reading if exists, otherwise use schedule data
-                    'current_reading' => $downloaded ? $downloaded->current_reading : $schedule->current_reading,
-                    'reading_date' => $downloaded ? $downloaded->reading_date->format('Y-m-d') : ($schedule->reading_date?->format('Y-m-d')),
-                    'consumption' => $downloaded ? $downloaded->consumption : $schedule->consumption,
-                    'status' => $downloaded ? 'completed' : $schedule->status,
+                    'current_reading' => $downloaded ? $downloaded->current_reading : null,
+                    'reading_date' => $downloaded
+                        ? $downloaded->reading_date?->format('Y-m-d')
+                        : null,
+                    'consumption' => $downloaded ? $downloaded->consumption : null,
+                    'status' => $displayStatus,
+                    'has_downloaded_reading' => $isReallyCompleted,
                     'bill_month' => $schedule->bill_month->format('Y-m-d'),
                     'bill_date' => $schedule->bill_date->format('Y-m-d'),
                     'due_date' => $schedule->due_date->format('Y-m-d'),
@@ -351,7 +362,7 @@ class MeterReadingApiController extends Controller
                     'reading_date' => $request->reading_date ?? now(),
                     'status' => 'completed',
                     'reader_notes' => $request->reader_notes,
-                    'prepared_by' => $this->formatName($reader),
+                    'prepared_by' => $reader ? $this->formatName($reader) : 'READER',
                 ];
                 if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
                     $downloadedPayload['completed_at'] = now();
@@ -365,7 +376,7 @@ class MeterReadingApiController extends Controller
                     $downloadedPayload
                 );
 
-                // STEP 3: consumer_ledgers (when BILL/BILLING row exists)
+                // STEP 3: consumer_ledgers — update existing BILL/BILLING or create if missing
                 if ($consumer) {
                     $ledgerEntry = ConsumerLedger::query()
                         ->where(mr_col('consumer_zone_id'), $consumer->id)
@@ -373,32 +384,43 @@ class MeterReadingApiController extends Controller
                         ->whereIn(mr_col('trans'), ['BILL', 'BILLING'])
                         ->first();
 
+                    $previousEntry = ConsumerLedger::query()
+                        ->where(mr_col('consumer_zone_id'), $consumer->id)
+                        ->when($ledgerEntry, function ($q) use ($ledgerEntry) {
+                            $q->where(mr_col('id'), '<', $ledgerEntry->id);
+                        })
+                        ->orderBy(mr_col('id'), 'desc')
+                        ->first();
+
+                    $previousBalance = $previousEntry
+                        ? (float) $previousEntry->balance
+                        : (float) ($consumer->balance ?? 0);
+
+                    $others = 20.00; // Water Maintenance Charge
+                    $debit = $currentBill + $others;
+                    $newBalance = $previousBalance + $debit;
+                    $readerName = $reader ? $this->formatName($reader) : 'READER';
+
+                    $ledgerPayload = [
+                        'trans' => 'BILLING',
+                        'reference' => $schedule->sedr_number ?? ($ledgerEntry->reference ?? ''),
+                        'reading' => $currentReading,
+                        'volume' => $consumption,
+                        'billamount' => $currentBill,
+                        'others' => $others,
+                        'debit' => $debit,
+                        'credit' => $ledgerEntry ? (float) ($ledgerEntry->credit ?? 0) : 0,
+                        'balance' => $newBalance,
+                        'username' => $readerName,
+                        'txtime' => now(),
+                    ];
+
+                    if (Schema::hasColumn('consumer_ledgers', 'downloaded_reading_id')) {
+                        $ledgerPayload['downloaded_reading_id'] = $downloaded->id;
+                    }
+
                     if ($ledgerEntry) {
-                        $previousEntry = ConsumerLedger::query()
-                            ->where(mr_col('consumer_zone_id'), $consumer->id)
-                            ->where(mr_col('id'), '<', $ledgerEntry->id)
-                            ->orderBy(mr_col('id'), 'desc')
-                            ->first();
-
-                        $previousBalance = $previousEntry
-                            ? (float) $previousEntry->balance
-                            : (float) ($consumer->balance ?? 0);
-
-                        $others = 20.00;
-                        $debit = $currentBill + $others;
-                        $newBalance = $previousBalance + $debit;
-
-                        $ledgerEntry->update([
-                            'trans' => 'BILLING',
-                            'reference' => $schedule->sedr_number ?? $ledgerEntry->reference,
-                            'reading' => $currentReading,
-                            'volume' => $consumption,
-                            'billamount' => $currentBill,
-                            'others' => $others,
-                            'debit' => $debit,
-                            'balance' => $newBalance,
-                            'txtime' => now()
-                        ]);
+                        $ledgerEntry->update($ledgerPayload);
 
                         $subsequentEntries = ConsumerLedger::query()
                             ->where(mr_col('consumer_zone_id'), $consumer->id)
@@ -413,7 +435,33 @@ class MeterReadingApiController extends Controller
                             $runningBalance = $runningBalance + $entryDebit - $entryCredit;
                             $entry->update(['balance' => $runningBalance]);
                         }
+                    } else {
+                        // No prepared BILLING row — create one so ledger has reading data
+                        $createPayload = array_merge([
+                            'consumer_zone_id' => $consumer->id,
+                            'schedule_id' => $schedule->id,
+                            'date' => $schedule->bill_date
+                                ? Carbon::parse($schedule->bill_date)->format('Y-m-d')
+                                : now()->format('Y-m-d'),
+                            'due_date' => $schedule->due_date
+                                ? Carbon::parse($schedule->due_date)->format('Y-m-d')
+                                : null,
+                            'penalty' => 0,
+                        ], $ledgerPayload);
+
+                        ConsumerLedger::create($createPayload);
+
+                        Log::info('📒 Created missing BILLING ledger on submit', [
+                            'schedule_id' => $schedule->id,
+                            'consumer_zone_id' => $consumer->id,
+                            'current_reading' => $currentReading,
+                            'consumption' => $consumption,
+                        ]);
                     }
+                } else {
+                    Log::warning('⚠️ No consumer_zone for schedule — ledger not updated', [
+                        'schedule_id' => $schedule->id,
+                    ]);
                 }
 
                 Log::info('✅ Reading Submitted Successfully', [
@@ -662,7 +710,11 @@ class MeterReadingApiController extends Controller
      */
     private function formatName($user)
     {
-        $name = strtoupper($user->last_name) . ', ' . strtoupper($user->first_name);
+        if (!$user) {
+            return 'READER';
+        }
+
+        $name = strtoupper($user->last_name ?? '') . ', ' . strtoupper($user->first_name ?? '');
         
         if ($user->middle_name) {
             $name .= ' ' . strtoupper(substr($user->middle_name, 0, 1)) . '.';
