@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\ActivityLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
@@ -64,6 +65,17 @@ class UserController extends Controller
                 'role' => $request->role,
             ]);
 
+            ActivityLogger::log(
+                'user.created',
+                Auth::user()->name . ' created user ' . $user->name,
+                Auth::user(),
+                [
+                    'target_user_id' => $user->id,
+                    'target_email' => $user->email,
+                    'target_role' => $user->role,
+                ]
+            );
+
             return response()->json([
                 'success' => true,
                 'message' => 'User created successfully!',
@@ -120,11 +132,24 @@ class UserController extends Controller
             ];
 
             // Only update password if provided
-            if ($request->filled('password')) {
+            $passwordChanged = $request->filled('password');
+            if ($passwordChanged) {
                 $data['password'] = Hash::make($request->password);
             }
 
             $user->update($data);
+
+            ActivityLogger::log(
+                'user.updated',
+                Auth::user()->name . ' updated user ' . $user->name,
+                Auth::user(),
+                [
+                    'target_user_id' => $user->id,
+                    'target_email' => $user->email,
+                    'target_role' => $user->role,
+                    'password_changed' => $passwordChanged,
+                ]
+            );
 
             return response()->json([
                 'success' => true,
@@ -145,7 +170,21 @@ class UserController extends Controller
     public function destroy(User $user)
     {
         try {
+            $deletedName = $user->name;
+            $deletedId = $user->id;
+            $deletedEmail = $user->email;
+
             $user->delete();
+
+            ActivityLogger::log(
+                'user.deleted',
+                Auth::user()->name . ' deleted user ' . $deletedName,
+                Auth::user(),
+                [
+                    'target_user_id' => $deletedId,
+                    'target_email' => $deletedEmail,
+                ]
+            );
 
             return response()->json([
                 'success' => true,
@@ -307,14 +346,28 @@ class UserController extends Controller
             }
 
             // Only update password if provided
-            if ($request->filled('password')) {
+            $passwordChanged = $request->filled('password');
+            if ($passwordChanged) {
                 $data['password'] = Hash::make($request->password);
             }
+
+            $pictureChanged = isset($data['profile_picture']);
 
             $user->update($data);
             
             // Refresh user to get updated data
             $user->refresh();
+
+            ActivityLogger::log(
+                'profile.updated',
+                $user->name . ' updated their profile',
+                $user,
+                [
+                    'password_changed' => $passwordChanged,
+                    'profile_picture_changed' => $pictureChanged,
+                    'updated_fields' => array_keys($data),
+                ]
+            );
 
             Log::info('Profile updated successfully', [
                 'user_id' => $user->id,

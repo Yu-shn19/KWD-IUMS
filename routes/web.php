@@ -19,6 +19,7 @@ use App\Http\Controllers\PenaltyController;
 use App\Http\Controllers\LRO_ConsumerLedgerController;
 use App\Http\Controllers\SettingController;
 use App\Http\Controllers\ConsumerActivationCronController;
+use App\Http\Controllers\ActivityLogController;
 
 // Shared-hosting cron (Hostinger hPanel → Cron Jobs). No login; requires secret token in .env.
 Route::get('/cron/consumer-activate-pending', [ConsumerActivationCronController::class, 'activatePending'])
@@ -31,7 +32,7 @@ Route::get('/register', [AuthController::class, 'showRegister'])->name('register
 Route::post('/register', [AuthController::class, 'register']);
 
 // Protected routes (authentication and admin role required)
-Route::middleware(['auth', 'role:admin'])->group(function () {
+Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     // Logout route
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
@@ -43,6 +44,8 @@ Route::middleware(['auth', 'role:admin'])->group(function () {
     Route::get('/user-management', [UserController::class, 'index'])->name('user-management');
     // Profile routes
     Route::post('/profile/update', [UserController::class, 'updateProfile'])->name('profile.update');
+    // Activity Log
+    Route::get('/activity-logs', [ActivityLogController::class, 'index'])->name('activity-logs.index');
     
     // Storage diagnostic route (for debugging - remove in production)
     Route::get('/storage-check', function() {

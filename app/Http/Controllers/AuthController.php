@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\ActivityLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -24,7 +25,15 @@ class AuthController extends Controller
         if (Auth::attempt($credentials)) {
             $request->session()->regenerate();
 
-            $role = Auth::user()->role;
+            $user = Auth::user();
+            ActivityLogger::log(
+                'login',
+                $user->name . ' logged in',
+                $user,
+                ['role' => $user->role]
+            );
+
+            $role = $user->role;
             return match ($role) {
                 'admin' => redirect('/'),
                 'reader' => redirect('/reader/dashboard'),
@@ -32,6 +41,13 @@ class AuthController extends Controller
                 default => redirect('/login'),
             };
         }
+
+        ActivityLogger::log(
+            'login.failed',
+            'Failed login attempt for ' . $credentials['email'],
+            null,
+            ['email' => $credentials['email']]
+        );
 
         return back()->withErrors([
             'email' => 'Invalid credentials provided.',
@@ -75,11 +91,28 @@ class AuthController extends Controller
 
         Auth::login($user);
 
+        ActivityLogger::log(
+            'register',
+            $user->name . ' registered a new account',
+            $user,
+            ['email' => $user->email, 'role' => $user->role]
+        );
+
         return redirect('/dashboard');
     }
 
     public function logout(Request $request)
     {
+        $user = Auth::user();
+
+        if ($user) {
+            ActivityLogger::log(
+                'logout',
+                $user->name . ' logged out',
+                $user
+            );
+        }
+
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();

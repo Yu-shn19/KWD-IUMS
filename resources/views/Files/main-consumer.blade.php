@@ -667,9 +667,9 @@
     </div>
     <!-- New Consumer Modal -->
     <div class="modal fade" id="newConsumerModal" tabindex="-1" aria-labelledby="newConsumerModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
             <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
+                <div class="modal-header bg-primary text-white py-2">
                     <h5 class="modal-title" id="newConsumerModalLabel">
                         <i class="fas fa-user-plus me-2"></i>Add New Consumer
                     </h5>
@@ -677,46 +677,92 @@
                 </div>
                 <form id="newConsumerForm">
                     @csrf
-                    <div class="modal-body">
-                        <div class="row">
-                            <div class="col-12">
-                                <div class="mb-3">
-                                    <label for="transaction_date" class="form-label fw-semibold">
+                    <div class="modal-body py-3">
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <div class="mb-2">
+                                    <label for="transaction_date" class="form-label mb-1 fw-semibold">
                                         <i class="fas fa-calendar-check me-1 text-primary"></i>Transaction Date <span class="text-danger">*</span>
                                     </label>
-                                    <input type="date" class="form-control" id="transaction_date" name="transaction_date" required>
+                                    <input type="date" class="form-control form-control-sm" id="transaction_date" name="transaction_date" required>
                                     <small class="text-muted">Date this consumer transaction was filed.</small>
                                     <div class="invalid-feedback"></div>
                                 </div>
+                                <div class="mb-2">
+                                    <label for="installation_date" class="form-label mb-1">Installation Date <span class="text-danger">*</span></label>
+                                    <input type="date" class="form-control form-control-sm" id="installation_date" name="installation_date">
+                                    <small class="text-muted">Date the water meter is installed.</small>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="account_no" class="form-label mb-1">Account Number <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control form-control-sm" id="account_no" name="account_no" placeholder="e.g. 2099" required autocomplete="off">
+                                    <small class="text-muted">Must be unique — no duplicates.</small>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="meter_number" class="form-label mb-1">Meter Number <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control form-control-sm" id="meter_number" name="meter_number" required>
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="meter_brand" class="form-label mb-1">Meter Brand</label>
+                                    <input type="text" class="form-control form-control-sm" id="meter_brand" name="meter_brand">
+                                    <div class="invalid-feedback"></div>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="address" class="form-label mb-1">Address <span class="text-danger">*</span></label>
+                                    <textarea class="form-control form-control-sm" id="address" name="address" rows="2" required></textarea>
+                                    <div class="invalid-feedback"></div>
+                                </div>
                             </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label for="installation_date" class="form-label">Installation Date <span class="text-danger">*</span></label>
-                                    <input type="date" class="form-control" id="installation_date" name="installation_date" >
-                                    <small class="text-muted">Date that the consumer's water meter is installed.</small>
+                            <div class="col-md-4">
+                                <div class="mb-2">
+                                    <label for="last_name" class="form-label mb-1">Last Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control form-control-sm" id="last_name" name="last_name" required>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="account_no" class="form-label">Account Number <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="account_no" name="account_no" placeholder="e.g. 2099" required autocomplete="off">
-                                    <small class="text-muted">Must be unique — no duplicate account numbers.</small>
+                                <div class="mb-2">
+                                    <label for="first_name" class="form-label mb-1">First Name <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control form-control-sm" id="first_name" name="first_name" required>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="meter_number" class="form-label">Meter Number <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="meter_number" name="meter_number" required>
+                                <div class="mb-2">
+                                    <label for="account_name" class="form-label mb-1">Account Name</label>
+                                    <input type="text" class="form-control form-control-sm" id="account_name" name="account_name" readonly>
+                                    <small class="text-muted">Auto-generated from name, account #, category, zone.</small>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="new_gender" class="form-label mb-1">Gender <span class="text-danger">*</span></label>
+                                    <select class="form-select form-select-sm" id="new_gender" name="gender" required>
+                                        <option value="">Select Gender</option>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Others">Others</option>
+                                    </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                 <div class="mb-3">
-                                    <label for="address" class="form-label">Address <span class="text-danger">*</span></label>
-                                    <textarea class="form-control" id="address" name="address" rows="3" required></textarea>
+                                <div class="mb-2">
+                                    <label for="contact_number" class="form-label mb-1">Contact Number</label>
+                                    <input type="text" class="form-control form-control-sm" id="contact_number" name="contact_number" placeholder="Enter Contact Number">
+                                    <div class="invalid-feedback"></div>
+                                    <small class="text-muted">For reference only — not stored.</small>
+                                </div>
+                                <div class="mb-2">
+                                    <label for="new_status" class="form-label mb-1">Status <span class="text-danger">*</span></label>
+                                    <select class="form-select form-select-sm" id="new_status" name="status" required>
+                                        <option value="">Select Status</option>
+                                        <option value="P" selected>P</option>
+                                        <option value="A">A</option>
+                                        <option value="X">X</option>
+                                    </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="category" class="form-label">Category <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="category" name="category" required>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-2">
+                                    <label for="category" class="form-label mb-1">Category <span class="text-danger">*</span></label>
+                                    <select class="form-select form-select-sm" id="category" name="category" required>
                                         <option value="">Select Category</option>
                                         <option value="COM-A" data-code="COM-A">COM-A</option>
                                         <option value="COM-B" data-code="COM-B">COM-B</option>
@@ -728,57 +774,9 @@
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label for="new_status" class="form-label">Status <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="new_status" name="status" required>
-                                        <option value="">Select Status</option>
-                                         <option value="P"selected>P</option>
-                                        <option value="A">A</option>
-                                        <option value="X">X</option>
-                                    </select>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="last_name" class="form-label">Last Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="last_name" name="last_name" required>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="first_name" class="form-label">First Name <span class="text-danger">*</span></label>
-                                    <input type="text" class="form-control" id="first_name" name="first_name" required>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="account_name" class="form-label">Account Name</label>
-                                    <input type="text" class="form-control" id="account_name" name="account_name" readonly>
-                                    <small class="text-muted">Auto-generated from name, account number, category, and zone.</small>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="new_gender" class="form-label">Gender <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="new_gender" name="gender" required>
-                                        <option value="">Select Gender</option>
-                                        <option value="Male">Male</option>
-                                        <option value="Female">Female</option>
-                                        <option value="Others">Others</option>
-                                    </select>
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="contact_number" class="form-label">Contact Number</label>
-                                    <input type="text" class="form-control" id="contact_number" name="contact_number" placeholder="Enter Contact Number">
-                                    <div class="invalid-feedback"></div>
-                                    <small class="text-muted">Note: Contact number is for reference only and not stored in the system</small>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="meter_brand" class="form-label">Meter Brand</label>
-                                    <input type="text" class="form-control" id="meter_brand" name="meter_brand">
-                                    <div class="invalid-feedback"></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="zone" class="form-label">Zone <span class="text-danger">*</span></label>
-                                    <select class="form-select" id="zone" name="zone" required>
+                                <div class="mb-2">
+                                    <label for="zone" class="form-label mb-1">Zone <span class="text-danger">*</span></label>
+                                    <select class="form-select form-select-sm" id="zone" name="zone" required>
                                         <option value="">Select Zone</option>
                                         @foreach(($zones ?? \App\Models\ConsumerZone::distinctZoneCodes()) as $zoneCode)
                                             <option value="{{ $zoneCode }}">{{ $zoneCode }}</option>
@@ -786,20 +784,20 @@
                                     </select>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="card_number" class="form-label">Sequence <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control" id="card_number" name="card_number" placeholder="Enter Sequence Number" required>
+                                <div class="mb-2">
+                                    <label for="card_number" class="form-label mb-1">Sequence <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control form-control-sm" id="card_number" name="card_number" placeholder="Enter Sequence Number" required>
                                     <div class="invalid-feedback"></div>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="display_cons_ctrl" class="form-label">Control Number</label>
-                                    <input type="text" class="form-control" id="display_cons_ctrl" name="display_cons_ctrl" readonly>
+                                <div class="mb-2">
+                                    <label for="display_cons_ctrl" class="form-label mb-1">Control Number</label>
+                                    <input type="text" class="form-control form-control-sm" id="display_cons_ctrl" name="display_cons_ctrl" readonly>
                                     <small class="text-muted">Auto-generated control number</small>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="modal-footer">
+                    <div class="modal-footer py-2">
                         <button type="button" class="btn btn-secondary" id="cancelBtn" data-dismiss="modal" data-bs-dismiss="modal">
                             <i class="fas fa-times me-1"></i>Cancel
                         </button>
