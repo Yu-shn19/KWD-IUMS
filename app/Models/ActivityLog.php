@@ -31,4 +31,12 @@ class ActivityLog extends Model
     {
         return $this->belongsTo(User::class);
     }
+
+    /**
+     * Plain-language label for the Action column (works for old and new log formats).
+     */
+    public function getActionLabelAttribute(): string
+    {
+        return \App\Services\ActivityLogger::labelFor((string) $this->action);
+    }
 }

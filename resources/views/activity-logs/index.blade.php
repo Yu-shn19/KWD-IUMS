@@ -43,7 +43,7 @@
                                         <option value="">All actions</option>
                                         @foreach($actions as $action)
                                             <option value="{{ $action }}" @selected(request('action') === $action)>
-                                                {{ $action }}
+                                                {{ \App\Services\ActivityLogger::labelFor($action) }}
                                             </option>
                                         @endforeach
                                     </select>
@@ -101,17 +101,18 @@
                                                 </td>
                                                 <td>
                                                     @php
+                                                        $label = strtolower($log->action_label);
                                                         $badge = match (true) {
-                                                            str_contains($log->action, 'failed') => 'badge-danger',
-                                                            str_contains($log->action, 'deleted') || str_contains($log->action, 'destroy') => 'badge-danger',
-                                                            str_contains($log->action, 'login') => 'badge-success',
-                                                            str_contains($log->action, 'logout') => 'badge-secondary',
-                                                            str_starts_with($log->action, 'admin.') => 'badge-warning',
-                                                            str_contains($log->action, 'created') || str_contains($log->action, 'register') || str_contains($log->action, 'store') => 'badge-info',
-                                                            default => 'badge-primary',
+                                                            str_contains($label, 'failed') => 'badge-danger',
+                                                            str_contains($label, 'deleted') || str_contains($label, 'cancelled') => 'badge-danger',
+                                                            str_contains($label, 'logged in') => 'badge-success',
+                                                            str_contains($label, 'logged out') => 'badge-secondary',
+                                                            str_contains($label, 'added') || str_contains($label, 'created') || str_contains($label, 'registered') || str_contains($label, 'imported') => 'badge-info',
+                                                            str_contains($label, 'updated') || str_contains($label, 'changed') => 'badge-primary',
+                                                            default => 'badge-warning',
                                                         };
                                                     @endphp
-                                                    <span class="badge {{ $badge }}">{{ $log->action }}</span>
+                                                    <span class="badge {{ $badge }}">{{ $log->action_label }}</span>
                                                 </td>
                                                 <td>{{ $log->description }}</td>
                                                 <td>{{ $log->ip_address ?? '—' }}</td>
