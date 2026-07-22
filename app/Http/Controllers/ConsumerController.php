@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Imports\BaseReadingImport;
 use App\Imports\ConsumerZoneImport;
 use App\Models\ConsumerZone;
 use App\Models\MeterReadingSchedule;
 use App\Models\ConsumerLedger;
 use App\Models\Setting;
 use App\Services\WaterBillingService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -1098,6 +1101,200 @@ class ConsumerController extends Controller
 
             return back()->with('error', $errorMessage);
         }
+    }
+
+    /**
+     * Display the Upload Base Reading (Excel) page.
+     */
+    public function uploadBaseReadingIndex()
+    {
+        return view('consumer.upload-base-reading');
+    }
+
+    /**
+     * Bulk-update consumer_zone.base_reading from Excel.
+     * Required columns: account_no, account_name, base_reading.
+     * Same lock rules as updateConsumerBaseReading (MeterReadingController).
+     */
+    public function uploadBaseReadingStore(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+        ]);
+
+        $imported = 0;
+        $failed = 0;
+        $errors = [];
+
+        if (!Schema::hasColumn('consumer_zone', 'base_reading')) {
+            return back()->with('error', 'Base reading is not supported in this database (missing column). Run the latest migrations.');
+        }
+
+        try {
+            $data = Excel::toArray(new BaseReadingImport(), $request->file('file'));
+            $rows = $data[0] ?? [];
+
+            if (empty($rows)) {
+                return back()->with('error', 'The file is empty or has no data rows.');
+            }
+
+            $header = $rows[0];
+            $accountNoCol = $this->findExcelColumnIndex($header, ['account_no', 'account_number', 'accountnumber', 'account no']);
+            $baseReadingCol = $this->findExcelColumnIndex($header, ['base_reading', 'basereading', 'base reading', 'base_read']);
+
+            if ($accountNoCol === null) {
+                return back()->with('error', 'Excel must have column: account_no (or account_number).');
+            }
+            if ($baseReadingCol === null) {
+                return back()->with('error', 'Excel must have column: base_reading.');
+            }
+
+            $processedInThisFile = [];
+            $today = Carbon::now()->format('Y-m-d');
+
+            foreach ($rows as $index => $row) {
+                if ($index === 0) {
+                    continue;
+                }
+
+                $rowNum = $index + 1;
+
+                $accountNo = isset($row[$accountNoCol]) ? trim((string) $row[$accountNoCol]) : null;
+                if ($accountNo === '') {
+                    $accountNo = null;
+                }
+
+                $baseReadingVal = isset($row[$baseReadingCol]) ? $row[$baseReadingCol] : null;
+
+                if (!$accountNo) {
+                    $errors[] = "Row {$rowNum}: Missing account_no.";
+                    $failed++;
+                    continue;
+                }
+
+                if (isset($processedInThisFile[$accountNo])) {
+                    $errors[] = "Row {$rowNum}: Duplicate in file – [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
+                    $failed++;
+                    continue;
+                }
+
+                $baseReadingInt = null;
+                if ($baseReadingVal !== null && $baseReadingVal !== '') {
+                    if (is_numeric($baseReadingVal)) {
+                        $baseReadingInt = (int) round((float) $baseReadingVal);
+                        if ($baseReadingInt < 0) {
+                            $errors[] = "Row {$rowNum}: base_reading must be >= 0.";
+                            $failed++;
+                            continue;
+                        }
+                    } else {
+                        $errors[] = "Row {$rowNum}: base_reading must be numeric.";
+                        $failed++;
+                        continue;
+                    }
+                } else {
+                    $errors[] = "Row {$rowNum}: Missing or invalid base_reading.";
+                    $failed++;
+                    continue;
+                }
+
+                $consumer = ConsumerZone::findByAccountNo($accountNo);
+                if (!$consumer) {
+                    $errors[] = "Row {$rowNum}: Consumer not found for account [{$accountNo}].";
+                    $failed++;
+                    continue;
+                }
+
+                if ($this->consumerHasBaseReadingLock($consumer)) {
+                    $errors[] = "Row {$rowNum}: Base reading is locked for [{$accountNo}] — consumer already has reading history.";
+                    $failed++;
+                    continue;
+                }
+
+                $consumer->update(ConsumerZone::filterTableAttributes([
+                    'base_reading' => $baseReadingInt,
+                    'base_reading_date' => $today,
+                ]));
+
+                $processedInThisFile[$accountNo] = $rowNum;
+                $imported++;
+            }
+
+            Log::info('Bulk base_reading upload completed', [
+                'imported' => $imported,
+                'failed' => $failed,
+                'user' => optional(Auth::user())->name,
+            ]);
+
+            $message = $imported > 0
+                ? "Updated base_reading for {$imported} account(s)."
+                : 'No rows updated.';
+            if ($failed > 0) {
+                $message .= " {$failed} row(s) failed.";
+            }
+
+            if ($imported > 0) {
+                return back()
+                    ->with('success', $message)
+                    ->with('upload_errors', $errors);
+            }
+
+            return back()
+                ->with('warning', $message)
+                ->with('upload_errors', $errors);
+        } catch (\Throwable $e) {
+            Log::error('Upload base_reading failed: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return back()->with('error', 'Upload failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Same lock rules as MeterReadingController::updateConsumerBaseReading.
+     */
+    private function consumerHasBaseReadingLock(ConsumerZone $consumer): bool
+    {
+        $hasDownloadedReading = DB::table(mr_col('downloaded_readings'))
+            ->where(mr_col('consumer_zone_id'), $consumer->id)
+            ->exists();
+
+        $hasScheduleHistory = MeterReadingSchedule::query()->where(mr_col('consumer_zone_id'), $consumer->id)
+            ->where(function ($query) {
+                $query->whereNotNull(mr_col('current_reading'))
+                    ->orWhereNotNull('reading_date')
+                    ->orWhereIn('status', ['Completed', 'Verified', 'In Progress']);
+            })
+            ->exists();
+
+        $hasBillingLedger = DB::table(mr_col('consumer_ledgers'))
+            ->where(mr_col('consumer_zone_id'), $consumer->id)
+            ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
+            ->whereNotNull(mr_col('reading'))
+            ->where(mr_col('reading'), '>', 0)
+            ->exists();
+
+        return $hasDownloadedReading || $hasScheduleHistory || $hasBillingLedger;
+    }
+
+    /**
+     * Find column index by possible header names (case-insensitive, spaces/underscores normalized).
+     */
+    private function findExcelColumnIndex(array $headerRow, array $possibleNames): ?int
+    {
+        $normalizedNames = array_map(function ($name) {
+            return trim(strtolower(str_replace([' ', '_'], '', (string) $name)));
+        }, $possibleNames);
+
+        foreach ($headerRow as $index => $cellValue) {
+            $cellNormalized = trim(strtolower(str_replace([' ', '_'], '', (string) $cellValue)));
+            if (in_array($cellNormalized, $normalizedNames, true)) {
+                return $index;
+            }
+        }
+
+        return null;
     }
 
     private function normalizeAccountNo(?string $accountNo): string

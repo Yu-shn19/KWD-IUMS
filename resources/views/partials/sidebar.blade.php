@@ -41,6 +41,9 @@
         <a class="collapse-item" href="{{ route('consumer.import') }}">
           <i class="fas fa-circle small-icon"></i> Import Consumer Master List
         </a>
+        <a class="collapse-item" href="{{ route('consumer.upload-base-reading') }}">
+          <i class="fas fa-circle small-icon"></i> Upload Base Reading
+        </a>
         <a class="collapse-item" href="#">
           <i class="fas fa-circle small-icon"></i> Category/Routes
         </a>

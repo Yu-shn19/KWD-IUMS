@@ -77,6 +77,8 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     Route::delete('/consumer/{consumer}', [ConsumerController::class, 'destroy'])->name('consumer.destroy');
     Route::get('/consumer/import', [ConsumerController::class, 'importIndex'])->name('consumer.import');
     Route::post('/consumer/import', [ConsumerController::class, 'importStore'])->name('consumer.import.store');
+    Route::get('/consumer/upload-base-reading', [ConsumerController::class, 'uploadBaseReadingIndex'])->name('consumer.upload-base-reading');
+    Route::post('/consumer/upload-base-reading', [ConsumerController::class, 'uploadBaseReadingStore'])->name('consumer.upload-base-reading.store');
 
     // Ledger page route
    // Route::get('/ledger', [ConsumerController::class, 'ledger'])->name('ledger');

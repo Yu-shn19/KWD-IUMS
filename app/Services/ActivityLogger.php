@@ -48,6 +48,7 @@ class ActivityLogger
         'consumer.update' => 'Updated Consumer',
         'consumer.destroy' => 'Deleted Consumer',
         'consumer.import.store' => 'Imported Consumers',
+        'consumer.upload-base-reading.store' => 'Uploaded Base Reading',
 
         // Billing processes
         'billing-processes.prepare-meter-reading' => 'Prepared Meter Reading',
