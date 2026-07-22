@@ -3188,12 +3188,32 @@ class BillingProcessController extends Controller
      */
     private function createOneDmLedgerEntry(ConsumerZone $consumer, string $date, float $amount): string
     {
-        $reference = $this->generateUniqueDmReference($date);
-        $debit = round($amount, 2);
+        return $this->createOneMemoLedgerEntry($consumer, $date, abs($amount), 'DM');
+    }
+
+    /**
+     * Insert one DM or CM ledger row.
+     * Positive Excel amount → DM (debit). Negative Excel amount → CM (credit = abs value).
+     */
+    private function createOneMemoLedgerEntry(ConsumerZone $consumer, string $date, float $amount, string $trans): string
+    {
+        $trans = strtoupper($trans) === 'CM' ? 'CM' : 'DM';
+        $magnitude = round(abs($amount), 2);
+        $reference = $this->generateUniqueMemoReference($trans, $date);
         $username = \App\Support\AuthUsername::formatted();
         $dateTime = Carbon::parse($date)->startOfDay();
         $currentBalance = $consumer->getLedgerBalance();
-        $newBalance = round($currentBalance + $debit, 2);
+
+        if ($trans === 'CM') {
+            // Credit Memo: store magnitude on credit (same pattern as BillingAdjustment), balance decreases.
+            $debit = 0;
+            $credit = $magnitude;
+            $newBalance = round($currentBalance - $magnitude, 2);
+        } else {
+            $debit = $magnitude;
+            $credit = 0;
+            $newBalance = round($currentBalance + $magnitude, 2);
+        }
 
         ConsumerLedger::create([
             'consumer_zone_id' => $consumer->id,
@@ -3202,7 +3222,7 @@ class BillingProcessController extends Controller
             'downloaded_reading_id' => null,
             'penalty_id' => null,
             'billing_adjustment_id' => null,
-            'trans' => 'DM',
+            'trans' => $trans,
             'date' => $date,
             'due_date' => null,
             'reference' => $reference,
@@ -3212,7 +3232,7 @@ class BillingProcessController extends Controller
             'penalty' => 0,
             'others' => 0,
             'debit' => $debit,
-            'credit' => 0,
+            'credit' => $credit,
             'balance' => $newBalance,
             'username' => $username,
             'txtime' => $dateTime,
@@ -3224,6 +3244,14 @@ class BillingProcessController extends Controller
     /**
      * Bulk DM upload via Excel. File must have columns: account_no, amount. Date is set by the user.
      */
+    /**
+     * Dedicated Files page for bulk DM Excel upload.
+     */
+    public function uploadDmIndex(): View
+    {
+        return view('consumer.upload-dm');
+    }
+
     public function storeDmLedgerImport(Request $request)
     {
         $request->validate([
@@ -3309,18 +3337,26 @@ class BillingProcessController extends Controller
                 }
 
                 if (!$accountNo) {
-                    if ($amountVal === null || $amountVal === '') {
-                        continue; // Skip fully empty rows
+                    if ($amountVal === null || $amountVal === '' || (is_numeric($amountVal) && abs((float) $amountVal) < 0.00001)) {
+                        continue; // Skip empty / zero rows
                     }
                     $errors[] = "Row {$rowNum}: Missing account_no.";
                     $failed++;
                     continue;
                 }
-                if ($amountVal === null || $amountVal < 0) {
-                    $errors[] = "Row {$rowNum}: Invalid or missing amount.";
-                    $failed++;
+
+                // Skip zero or blank amount quietly (no error)
+                if ($amountVal === null || $amountVal === '' || abs((float) $amountVal) < 0.00001) {
                     continue;
                 }
+
+                // Skip non-numeric amount quietly
+                if (!is_numeric($amountVal)) {
+                    continue;
+                }
+
+                $trans = $amountVal < 0 ? 'CM' : 'DM';
+                $magnitude = abs($amountVal);
 
                 $consumer = ConsumerZone::query()->where(mr_col('account_no'), $accountNo)->first();
                 if (!$consumer) {
@@ -3332,27 +3368,27 @@ class BillingProcessController extends Controller
                     continue;
                 }
 
-                // Strict: duplicate in file â€“ same account_no already processed in this upload
+                // Strict: duplicate in file – same account_no already processed in this upload
                 if (isset($processedInThisFile[$accountNo])) {
-                    $errors[] = "Row {$rowNum}: Duplicate in file â€“ [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
+                    $errors[] = "Row {$rowNum}: Duplicate in file – [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
                     $failed++;
                     continue;
                 }
 
-                // Strict: duplicate in DB â€“ consumer already has a DM for this date
+                // Strict: duplicate in DB – consumer already has same memo type for this date
                 $alreadyExists = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
                     ->where(mr_col('date'), $dmDate)
-                    ->where(mr_col('trans'), 'DM')
+                    ->where(mr_col('trans'), $trans)
                     ->exists();
                 if ($alreadyExists) {
-                    $errors[] = "Row {$rowNum}: Duplicate â€“ [{$accountNo}] already has a DM for {$dmDate}.";
+                    $errors[] = "Row {$rowNum}: Duplicate – [{$accountNo}] already has a {$trans} for {$dmDate}.";
                     $failed++;
                     continue;
                 }
 
                 try {
                     DB::beginTransaction();
-                    $this->createOneDmLedgerEntry($consumer, $dmDate, $amountVal);
+                    $this->createOneMemoLedgerEntry($consumer, $dmDate, $magnitude, $trans);
                     DB::commit();
                     $imported++;
                     $processedInThisFile[$accountNo] = $rowNum;
@@ -3363,9 +3399,9 @@ class BillingProcessController extends Controller
                 }
             }
 
-            $message = "DM import completed. Imported: {$imported}, Failed: {$failed}.";
+            $message = "DM/CM import completed. Imported: {$imported}, Failed: {$failed}.";
             if ($imported === 0 && $failed === 0 && count($rows) > 1) {
-                $message = 'No data rows were processed. Check that the file has a header row (account_no, amount) and at least one data row with valid account numbers and amounts.';
+                $message = 'No data rows were processed. Check that the file has a header row (account_no, amount) and at least one data row with valid account numbers and amounts. Use positive amounts for DM and negative amounts for CM.';
             }
 
             return response()->json([
@@ -3428,15 +3464,16 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Generate a unique DM reference: 6-digit number (000001, 000002, ...).
+     * Generate a unique DM/CM reference: 6-digit number (000001, 000002, ...).
      * Ensures no duplicate reference in consumer_ledgers.
      */
-    private function generateUniqueDmReference(string $date): string
+    private function generateUniqueMemoReference(string $trans, string $date): string
     {
+        $trans = strtoupper($trans) === 'CM' ? 'CM' : 'DM';
         $maxAttempts = 100;
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $lastRef = ConsumerLedger::query()->where(mr_col('trans'), 'DM')
+            $lastRef = ConsumerLedger::query()->whereIn(mr_col('trans'), ['DM', 'CM'])
                 ->whereRaw('reference REGEXP ?', ['^[0-9]{6}$'])
                 ->orderByRaw(mr_col('CAST(reference AS UNSIGNED) DESC'))
                 ->value(mr_col('reference'));
@@ -3447,7 +3484,7 @@ class BillingProcessController extends Controller
             }
 
             if ($seq > 999999) {
-                throw new \RuntimeException('DM reference sequence exhausted (max 999999).');
+                throw new \RuntimeException("{$trans} reference sequence exhausted (max 999999).");
             }
 
             $reference = str_pad((string) $seq, 6, '0', STR_PAD_LEFT);
@@ -3457,7 +3494,15 @@ class BillingProcessController extends Controller
             }
         }
 
-        throw new \RuntimeException('Unable to generate unique DM reference after ' . $maxAttempts . ' attempts.');
+        throw new \RuntimeException("Unable to generate unique {$trans} reference after {$maxAttempts} attempts.");
+    }
+
+    /**
+     * @deprecated Use generateUniqueMemoReference()
+     */
+    private function generateUniqueDmReference(string $date): string
+    {
+        return $this->generateUniqueMemoReference('DM', $date);
     }
     
     /**

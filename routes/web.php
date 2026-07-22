@@ -79,6 +79,7 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     Route::post('/consumer/import', [ConsumerController::class, 'importStore'])->name('consumer.import.store');
     Route::get('/consumer/upload-base-reading', [ConsumerController::class, 'uploadBaseReadingIndex'])->name('consumer.upload-base-reading');
     Route::post('/consumer/upload-base-reading', [ConsumerController::class, 'uploadBaseReadingStore'])->name('consumer.upload-base-reading.store');
+    Route::get('/consumer/upload-dm', [BillingProcessController::class, 'uploadDmIndex'])->name('consumer.upload-dm');
 
     // Ledger page route
    // Route::get('/ledger', [ConsumerController::class, 'ledger'])->name('ledger');

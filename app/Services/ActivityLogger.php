@@ -67,7 +67,7 @@ class ActivityLogger
         // Consumer master list / DM
         'consumer-master-list.bulk-dm' => 'Saved Bulk Debit Memo',
         'consumer-master-list.store-dm' => 'Saved Debit Memo',
-        'consumer-master-list.import-dm' => 'Imported Debit Memo',
+        'consumer-master-list.import-dm' => 'Imported Debit/Credit Memo',
 
         // Meter reading
         'meter-reading.assign' => 'Assigned Meter Reading',

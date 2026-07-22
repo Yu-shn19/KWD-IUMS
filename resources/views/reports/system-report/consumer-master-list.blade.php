@@ -189,9 +189,6 @@
                                                 <button type="button" class="btn btn-success btn-sm mr-2" id="exportReadingGuideExcelBtn">
                                                     <i class="fas fa-file-excel mr-1"></i>Export Excel
                                                 </button>
-                                                <button type="button" class="btn btn-info btn-sm" data-toggle="modal" data-target="#importDmModal" title="Upload Excel to add DM for multiple consumers">
-                                                    <i class="fas fa-file-excel mr-1"></i>Upload DM (Excel)
-                                                </button>
                                             </div>
                                         </div>
                                     </form>
@@ -422,45 +419,6 @@
                     </button>
                     <button type="button" class="btn btn-warning btn-sm" id="addDmSubmitBtn">
                         <i class="fas fa-save mr-1"></i>Add DM
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Upload DM (Excel) Modal -->
-    <div class="modal fade" id="importDmModal" tabindex="-1" role="dialog" aria-labelledby="importDmModalLabel" aria-hidden="true">
-        <div class="modal-dialog" role="document">
-            <div class="modal-content">
-                <div class="modal-header bg-info text-white">
-                    <h5 class="modal-title" id="importDmModalLabel">
-                        <i class="fas fa-file-excel mr-2"></i>Upload DM (Excel)
-                    </h5>
-                    <button type="button" class="close text-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close">
-                        <span aria-hidden="true">&times;</span>
-                    </button>
-                </div>
-                <div class="modal-body">
-                    <p class="text-muted small mb-3">Upload an Excel file with columns <strong>account_no</strong> and <strong>amount</strong>. All DMs will use the date you select below. Reference is auto-generated (6 digits) per row.</p>
-                    <form id="importDmForm">
-                        @csrf
-                        <div class="form-group">
-                            <label for="importDmDate" class="font-weight-bold">DM Date <span class="text-danger">*</span></label>
-                            <input type="date" name="date" id="importDmDate" class="form-control" value="{{ now()->format('Y-m-d') }}" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="importDmFile" class="font-weight-bold">Excel File <span class="text-danger">*</span></label>
-                            <input type="file" name="file" id="importDmFile" class="form-control" accept=".xlsx,.xls,.csv" required>
-                            <small class="text-muted">.xlsx, .xls or .csv. Max 10MB.</small>
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal" data-bs-dismiss="modal">
-                        <i class="fas fa-times mr-1"></i>Cancel
-                    </button>
-                    <button type="button" class="btn btn-info btn-sm" id="importDmSubmitBtn">
-                        <i class="fas fa-upload mr-1"></i>Upload & Import DM
                     </button>
                 </div>
             </div>
@@ -736,59 +694,6 @@
                 });
             });
 
-            // Upload DM (Excel): reset default date when modal opens
-            $('#importDmModal').on('show.bs.modal', function() {
-                $('#importDmDate').val('{{ now()->format('Y-m-d') }}');
-            });
-
-            // Upload DM (Excel): submit
-            $('#importDmSubmitBtn').on('click', function() {
-                var fileInput = $('#importDmFile')[0];
-                var date = $('#importDmDate').val();
-                if (!date) {
-                    Swal.fire({ icon: 'warning', title: 'Required', text: 'Please select a DM date.', confirmButtonColor: '#f0ad4e' });
-                    return;
-                }
-                if (!fileInput || !fileInput.files || !fileInput.files.length) {
-                    Swal.fire({ icon: 'warning', title: 'Required', text: 'Please select an Excel file.', confirmButtonColor: '#f0ad4e' });
-                    return;
-                }
-                var formData = new FormData();
-                formData.append('_token', $('#importDmForm input[name="_token"]').val());
-                formData.append('date', date);
-                formData.append('file', fileInput.files[0]);
-                var btn = $('#importDmSubmitBtn');
-                btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-1"></i>Importing...');
-                $.ajax({
-                    url: '{{ route("consumer-master-list.import-dm") }}',
-                    method: 'POST',
-                    data: formData,
-                    processData: false,
-                    contentType: false,
-                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
-                    success: function(res) {
-                        $('#importDmModal').modal('hide');
-                        $('#importDmForm')[0].reset();
-                        btn.prop('disabled', false).html('<i class="fas fa-upload mr-1"></i>Upload & Import DM');
-                        var msg = res.message || 'Import completed.';
-                        if (res.errors && res.errors.length) {
-                            msg += '\n\n' + res.errors.slice(0, 10).join('\n');
-                            if (res.errors.length > 10) msg += '\n... and ' + (res.errors.length - 10) + ' more.';
-                        }
-                        Swal.fire({
-                            icon: res.imported > 0 ? 'success' : 'warning',
-                            title: 'DM Import',
-                            text: msg,
-                            confirmButtonColor: '#3085d6'
-                        }).then(function() { window.location.reload(); });
-                    },
-                    error: function(xhr) {
-                        btn.prop('disabled', false).html('<i class="fas fa-upload mr-1"></i>Upload & Import DM');
-                        var msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : (xhr.statusText || 'Request failed.');
-                        Swal.fire({ icon: 'error', title: 'Error', text: msg, confirmButtonColor: '#d33' });
-                    }
-                });
-            });
         });
         
         // Handle flash messages with SweetAlert (only for non-AJAX requests)
