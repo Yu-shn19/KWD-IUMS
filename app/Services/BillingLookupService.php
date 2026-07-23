@@ -900,13 +900,14 @@ class BillingLookupService
     {
         $penalty = 0.0;
 
-        if ($consumer && (!empty($state->reading->schedule_id) || !empty($state->reading->downloaded_id))) {
+        $penaltiesHasDownloadedReadingId = Schema::hasColumn('penalties', 'downloaded_reading_id');
+        if ($consumer && (!empty($state->reading->schedule_id) || ($penaltiesHasDownloadedReadingId && !empty($state->reading->downloaded_id)))) {
             $penaltyQuery = Penalty::query()->where(mr_col('consumer_zone_id'), $consumer->id)
-                ->where(function ($q) use ($state) {
+                ->where(function ($q) use ($state, $penaltiesHasDownloadedReadingId) {
                     if (!empty($state->reading->schedule_id)) {
                         $q->where(mr_col('schedule_id'), $state->reading->schedule_id);
                     }
-                    if (!empty($state->reading->downloaded_id)) {
+                    if ($penaltiesHasDownloadedReadingId && !empty($state->reading->downloaded_id)) {
                         if (!empty($state->reading->schedule_id)) {
                             $q->orWhere(mr_col('downloaded_reading_id'), $state->reading->downloaded_id);
                         } else {

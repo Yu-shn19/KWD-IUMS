@@ -479,7 +479,7 @@ class MeterReadingController extends Controller
 
                 // Strict: duplicate account_no in file
                 if (isset($processedInThisFile[$accountNo])) {
-                    $errors[] = "Row {$rowNum}: Duplicate in file – [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
+                    $errors[] = "Row {$rowNum}: Duplicate in file ? [{$accountNo}] already processed in row {$processedInThisFile[$accountNo]}.";
                     $failed++;
                     continue;
                 }
@@ -636,7 +636,7 @@ class MeterReadingController extends Controller
     /**
      * Save the BASE READING for a consumer (consumer_zone.base_reading).
      *
-     * Used for NEW consumers whose water meter is NOT brand-new — i.e. the
+     * Used for NEW consumers whose water meter is NOT brand-new ? i.e. the
      * meter already shows a non-zero value but no readings have been billed
      * yet. The base reading is consumed by
      * BillingProcessController::getPreviousReading() as the last-resort
@@ -1566,7 +1566,7 @@ class MeterReadingController extends Controller
                 ], 404);
             }
             if (!$scheduleExists) {
-                // Allow form to load so user can record payment; breakdown/arrears (e.g. Arrears — Previous Year) will come from ledger via bill-month-details.
+                // Allow form to load so user can record payment; breakdown/arrears (e.g. Arrears ? Previous Year) will come from ledger via bill-month-details.
                 $consumerQuery = ConsumerZone::query();
                 $this->whereConsumerAccountMatch($consumerQuery, $accountNumber, $accountName, 'account_no', 'account_name');
                 $consumer = $consumerQuery->orderBy(mr_col('account_no'))->first();
@@ -1611,10 +1611,10 @@ class MeterReadingController extends Controller
                         'downloaded_updated_at' => null,
                         'payment_reference' => null,
                     ];
-                    $lookupSuccessMessage = 'Account "' . $searchTerm . '" exists but has no billing schedule. The account may need to be added to a billing cycle first. Unpaid amounts from previous years can be entered in Arrears — Previous Year.';
+                    $lookupSuccessMessage = 'Account "' . $searchTerm . '" exists but has no billing schedule. The account may need to be added to a billing cycle first. Unpaid amounts from previous years can be entered in Arrears ? Previous Year.';
                 }
             } else {
-            // No completed meter reading yet – use schedule for this bill month so payment form can open (breakdown from ledger)
+            // No completed meter reading yet ? use schedule for this bill month so payment form can open (breakdown from ledger)
             if ($billMonthDate && ($accountNumber || $accountName)) {
                 $scheduleQuery = DB::table(mr_col('meter_reading_schedules as mrs'))
                     ->leftJoin(mr_col('consumer_zone as cz'), mr_col('mrs.consumer_zone_id'), '=', mr_col('cz.id'))
@@ -1803,14 +1803,15 @@ class MeterReadingController extends Controller
         $meterMaintenanceCharge = 20.00;
         
         // If current_bill is 0 or null, calculate it from consumption using category
-        // Note: Current bill does NOT include meter maintenance charge (₱20) or penalty
+        // Note: Current bill does NOT include meter maintenance charge (?20) or penalty
         $currentBill = $storedCurrentBill;
         if ($currentBill <= 0 && $consumption > 0) {
             // Calculate bill WITHOUT meter rental (meter rental shown separately)
             $currentBill = $this->calculateWaterBill($consumption, $category);
         }
         
-        // Penalty from penalties table: scope by consumer_zone_id, match by schedule_id or downloaded_reading_id
+        // Penalty from penalties table: scope by consumer_zone_id + schedule_id
+        // (downloaded_reading_id is optional and may not exist on penalties)
         $penalty = 0.0;
         $consumerByAccount = \App\Models\ConsumerZone::where(function ($q) use ($reading) {
             $acc = $reading->account_number ?? '';
@@ -1826,13 +1827,14 @@ class MeterReadingController extends Controller
                 $consumerByAccount = ConsumerZone::find($czId);
             }
         }
-        if ($consumerByAccount && (!empty($reading->schedule_id) || !empty($reading->downloaded_id))) {
+        $penaltiesHasDownloadedReadingId = Schema::hasColumn('penalties', 'downloaded_reading_id');
+        if ($consumerByAccount && (!empty($reading->schedule_id) || ($penaltiesHasDownloadedReadingId && !empty($reading->downloaded_id)))) {
             $penaltyQuery = Penalty::query()->where(mr_col('consumer_zone_id'), $consumerByAccount->id)
-                ->where(function ($q) use ($reading) {
+                ->where(function ($q) use ($reading, $penaltiesHasDownloadedReadingId) {
                     if (!empty($reading->schedule_id)) {
                         $q->where(mr_col('schedule_id'), $reading->schedule_id);
                     }
-                    if (!empty($reading->downloaded_id)) {
+                    if ($penaltiesHasDownloadedReadingId && !empty($reading->downloaded_id)) {
                         if (!empty($reading->schedule_id)) {
                             $q->orWhere(mr_col('downloaded_reading_id'), $reading->downloaded_id);
                         } else {
@@ -1979,7 +1981,7 @@ class MeterReadingController extends Controller
                         ->first();
                 }
             }
-            // Do not use "any PAYMENT with date in bill month" — paid only when payment is for THIS reading/schedule and paid_at is set (matches ledger)
+            // Do not use "any PAYMENT with date in bill month" ? paid only when payment is for THIS reading/schedule and paid_at is set (matches ledger)
         }
 
         $isPaid = ($paymentRow && $paymentRow->paid_at) || ($ledgerPaymentRow && $ledgerPaymentRow->paid_at);
@@ -2676,7 +2678,7 @@ class MeterReadingController extends Controller
 
                 // Create penalty entry in penalties table
                 try {
-                    Penalty::create([
+                    Penalty::create(Penalty::filterTableAttributes([
                         'consumer_zone_id' => $consumerZoneId,
                         'schedule_id' => $schedule->schedule_id,
                         'downloaded_reading_id' => $schedule->downloaded_id,
@@ -2688,7 +2690,7 @@ class MeterReadingController extends Controller
                         'balance' => $newBalance,
                         'username' => $username,
                         'txtime' => Carbon::now()->format('Y-m-d H:i:s'),
-                    ]);
+                    ]));
 
                     Log::info('Penalty entry created in penalties table', [
                         'account_no' => $accountNo,
@@ -3189,7 +3191,7 @@ class MeterReadingController extends Controller
                 $schedule = MeterReadingSchedule::find($ledger->schedule_id);
             }
             
-            // Determine bill month for this entry — always use date and due_date from the database:
+            // Determine bill month for this entry ? always use date and due_date from the database:
             // BILLING: schedule.bill_month or ledger.date; due_date comes from schedule/ledger for when payment is due.
             // PENALTY: ledger.date = when penalty is effective (e.g. day after due = 12/17); due_date = which bill it relates to.
             $entryDate = null;
@@ -3288,14 +3290,14 @@ class MeterReadingController extends Controller
         $principalFromBilling = 0;
         $dueDateForOverdue = null;
         $noBillingInViewedMonth = false;
-        $usePyFormula = true; // false in "Due Date → Current Billing Month" window (overdue view) so PY = 0
+        $usePyFormula = true; // false in "Due Date ? Current Billing Month" window (overdue view) so PY = 0
 
         // --- DATE RANGE MODE: Payment breakdown per analyst spec (paid_at only) ---
         // HARD PAYMENT RULE: Unpaid iff paid_at IS NULL on the charge row (consumer_ledgers). Paid iff paid_at IS NOT NULL. Never infer from balance/amount/credit. Never double-count months with paid_at IS NOT NULL.
         // Derived: unpaid_principal_months = BILLING, billamount>0, paid_at IS NULL; unpaid_wmc_months = BILLING, others>0, paid_at IS NULL; unpaid_penalty_months = PENALTY, penalty>0, paid_at IS NULL.
-        // Method A = Billing Date → Due Date: Current Bill = 195 if current month BILLING paid_at IS NULL else 0; Penalty = SUM(unpaid penalty); WMC = SUM(unpaid WMC); Arrears CY = 0; Arrears PY = first-month rule or SUM(billamount) before current.
-        // Method B = Due Date → Current Billing Month: Current Bill = 0; Penalty/WMC = SUM(unpaid); Arrears CY = SUM(all unpaid principal); Arrears PY = 0.
-        // First-month rule (Method A only): when first billing month in Method A and RB ≠ 0 → PY = max(0, RB − Current Billing − Current Month WMC). Constants: principal ₱195, WMC ₱20, penalty ₱19.50.
+        // Method A = Billing Date ? Due Date: Current Bill = 195 if current month BILLING paid_at IS NULL else 0; Penalty = SUM(unpaid penalty); WMC = SUM(unpaid WMC); Arrears CY = 0; Arrears PY = first-month rule or SUM(billamount) before current.
+        // Method B = Due Date ? Current Billing Month: Current Bill = 0; Penalty/WMC = SUM(unpaid); Arrears CY = SUM(all unpaid principal); Arrears PY = 0.
+        // First-month rule (Method A only): when first billing month in Method A and RB ? 0 ? PY = max(0, RB ? Current Billing ? Current Month WMC). Constants: principal ?195, WMC ?20, penalty ?19.50.
         if ($dateRangeMode) {
             // HARD PAYMENT RULE: Unpaid iff paid_at IS NULL on the charge row. Never infer from balance/amount/credit. Never double-count months with paid_at IS NOT NULL.
             // RESET RULE: If latest PAYMENT before billing month has balance=0, ignore charges before that (cycle restart).
@@ -3439,7 +3441,7 @@ class MeterReadingController extends Controller
                     break;
                 }
             }
-            // Method A: Current Bill = ₱195 if current billing month BILLING row has paid_at IS NULL, else 0
+            // Method A: Current Bill = ?195 if current billing month BILLING row has paid_at IS NULL, else 0
             if ($currentBillEntry) {
                 $currentBill = $isChargeUnpaid($currentBillEntry)
                     ? round($currentBillEntry['billamount'] ?? 195.00, 2)
@@ -3621,11 +3623,11 @@ class MeterReadingController extends Controller
                 $arrearsCy = 0;
                 $arrearsPy = 0;
                 $penalty = $penaltyUnpaidSum;
-                $maintenance = $wmcUnpaidSum > 0 ? $wmcUnpaidSum : 20.00; // WMC ₱20.00 per unpaid month
+                $maintenance = $wmcUnpaidSum > 0 ? $wmcUnpaidSum : 20.00; // WMC ?20.00 per unpaid month
             }
 
             if (!$payOnlyOneMonthApplied) {
-            // Date-meaning methods: A = Billing Date→Due Date, B = Due Date→Current Billing Month
+            // Date-meaning methods: A = Billing Date?Due Date, B = Due Date?Current Billing Month
             // Constants: principal 195, WMC 20, penalty 19.50 (10% of 195) per unpaid month. No double-count if paid.
             $principalPerMonth = 195.00;
             $wmcPerMonth = 20.00;
@@ -3639,7 +3641,7 @@ class MeterReadingController extends Controller
             $unpaidPrincipalMonths = $overdueCount; // count of months with unpaid principal
 
             if ($hasCurrent) {
-                // METHOD A — Billing Date → Billing Due Date
+                // METHOD A ? Billing Date ? Billing Due Date
                 // Penalty = unpaid penalty rows (e.g., Dec+Jan penalties while Feb is before due)
                 $penalty = $penaltyUnpaidSum;
                 // WMC = unpaid rental months only (current month + any prior unpaid)
@@ -3700,7 +3702,7 @@ class MeterReadingController extends Controller
                 }
                 $usePyFormula = false;
             } else {
-                // METHOD B — Billing Due Date → Current Billing Month. Current Bill = 0. Arrears CY = all unpaid principal; Arrears PY = 0.
+                // METHOD B ? Billing Due Date ? Current Billing Month. Current Bill = 0. Arrears CY = all unpaid principal; Arrears PY = 0.
                 $currentBill = 0;
                 $penalty = $penaltyUnpaidSum;
                 $maintenance = $wmcUnpaidSum > 0 ? $wmcUnpaidSum : round($wmcPerMonth * $unpaidPrincipalMonths, 2);
@@ -3810,13 +3812,13 @@ class MeterReadingController extends Controller
         $arrearsCy = 0;
         $arrearsPy = 0;
 
-        // Previous month date range (for "is previous month paid?" and for Arrears — Previous Month principal)
+        // Previous month date range (for "is previous month paid?" and for Arrears ? Previous Month principal)
         $prevMonthStart = $fromMonthDate->copy()->subMonth()->startOfMonth();
         $prevMonthEnd = $fromMonthDate->copy()->subMonth()->endOfMonth();
         $prevFromStr = $prevMonthStart->format('Y-m-d');
         $prevToStr = $prevMonthEnd->format('Y-m-d');
 
-        // Check if previous month is paid (using paid_at): if paid, Arrears — Previous Month = 0 so it won't appear in breakdown
+        // Check if previous month is paid (using paid_at): if paid, Arrears ? Previous Month = 0 so it won't appear in breakdown
         $prevMonthPaid = false;
         $prevSchedulesInRange = MeterReadingSchedule::query()->where(mr_col('consumer_zone_id'), $consumer->id)
             ->whereBetween('bill_month', [$prevFromStr, $prevToStr])
@@ -3853,7 +3855,7 @@ class MeterReadingController extends Controller
                 ->exists();
         }
 
-        // Arrears — Previous Month = previous month's unpaid principal only (e.g. December bill 195), not full balance (234.50).
+        // Arrears ? Previous Month = previous month's unpaid principal only (e.g. December bill 195), not full balance (234.50).
         // If previous month is paid (paid_at set), show 0 so it does not appear in breakdown.
         if ($prevMonthPaid) {
             $arrearsPy = 0;
@@ -3914,7 +3916,7 @@ class MeterReadingController extends Controller
         }
         // Only when not in date-range mode (bill month mode).
         if (!$dateRangeMode) {
-        // Rule: Bill 195 issued Dec 1–16 (date), due_date 12/16 → no penalty before due_date. After due_date (Dec 17–Jan 1): penalty 19.5, maintenance 20.
+        // Rule: Bill 195 issued Dec 1?16 (date), due_date 12/16 ? no penalty before due_date. After due_date (Dec 17?Jan 1): penalty 19.5, maintenance 20.
         // If still unpaid in Jan, Feb view: carry 195, penalty 39, maintenance 40, overdue 390, no new bill. Always use date and due_date from DB.
         if ($isRange && $paymentStatus !== 'paid' && !empty($billingEntriesWithDueDate)) {
             $currentBillFromRule = 0;
@@ -3926,10 +3928,10 @@ class MeterReadingController extends Controller
                 $due = $entry['due_date'];
                 $amt = $entry['billamount'];
                 if ($due === null || $due->gt($toMonthDateEnd)) {
-                    // due_date after end of range (or missing) → bill not yet due at end of range → current
+                    // due_date after end of range (or missing) ? bill not yet due at end of range ? current
                     $currentBillFromRule += $amt;
                 } else {
-                    // due_date <= end of range → overdue by end of range (use date/due_date from DB)
+                    // due_date <= end of range ? overdue by end of range (use date/due_date from DB)
                     $arrearsPrincipal += $amt;
                     $overdueBillCount++;
                     if ($earliestDueInRange === null || $due->lt($earliestDueInRange)) {
@@ -3943,7 +3945,7 @@ class MeterReadingController extends Controller
                 $overduePeriodsRange = min($overduePeriodsRange, 12);
                 $currentBill = $currentBillFromRule;
                 $arrearsCy = round($arrearsPrincipal, 2);
-                // Penalty = 10% per bill per period: 195→19.5 (1 period), 390→39 (2 periods). Use per-bill × periods.
+                // Penalty = 10% per bill per period: 195?19.5 (1 period), 390?39 (2 periods). Use per-bill � periods.
                 $perBillPrincipal = $overdueBillCount > 0 ? $arrearsPrincipal / $overdueBillCount : $arrearsPrincipal;
                 $penalty = round($perBillPrincipal * 0.10 * $overduePeriodsRange, 2);
                 $maintenance = round(20 * $overduePeriodsRange, 2); // 20 first period, 40 second
@@ -3957,7 +3959,7 @@ class MeterReadingController extends Controller
             }
         }
 
-        // Overdue breakdown for single month (or range with no BILLING in range) — use date and due_date from DB:
+        // Overdue breakdown for single month (or range with no BILLING in range) ? use date and due_date from DB:
         // Period 1 (date before due_date): Current 195, Penalty 0, Maintenance 20, Arrears CY 0
         // Period 2 (after due_date, 1 month): Current 0, Penalty 19.5, Maintenance 20, Arrears CY 195
         // Period 4 (after due_date, 2 months): Current 0, Penalty 39, Maintenance 40, Arrears CY 390
@@ -3965,7 +3967,7 @@ class MeterReadingController extends Controller
         if (!$usedRangeRule && $paymentStatus !== 'paid' && $dueDateForOverdue && $principalFromBilling > 0 && $dueDateForOverdue->lt($toMonthDate)) {
             // Only treat as "overdue-only" period (no new bill) when there is no BILLING in this range
             if ($currentBill <= 0) {
-                // Number of full months overdue: Dec 16 due → Jan 31 = 1 period, → Feb 28 = 2 periods
+                // Number of full months overdue: Dec 16 due ? Jan 31 = 1 period, ? Feb 28 = 2 periods
                 $overduePeriods = (int) max(1, $dueDateForOverdue->diffInMonths($toMonthDate));
                 $overduePeriods = min($overduePeriods, 12);
                 $arrearsCy = round($principalFromBilling * $overduePeriods, 2);
@@ -3973,7 +3975,7 @@ class MeterReadingController extends Controller
                 $maintenance = round(20 * $overduePeriods, 2);
                 $currentBill = 0; // Overdue period: no new bill in breakdown
             } else {
-                // Period has a new bill (e.g. Jan 2–16): add carried penalty/maintenance; Arrears — Previous Month not computed (stays 0.00)
+                // Period has a new bill (e.g. Jan 2?16): add carried penalty/maintenance; Arrears ? Previous Month not computed (stays 0.00)
                 $previousPrincipal = 0;
                 $previousDueDate = null;
                 $latestBillingBeforePeriod = \App\Models\ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
@@ -4021,7 +4023,7 @@ class MeterReadingController extends Controller
             $arrearsPy = 0;
         }
 
-        // When previous month is paid (e.g. November all 0.00), December must show Arrears CY 0, Arrears PY 0 — compute from displayed period (toMonthDate)
+        // When previous month is paid (e.g. November all 0.00), December must show Arrears CY 0, Arrears PY 0 ? compute from displayed period (toMonthDate)
         $displayedPrevMonthStart = $toMonthDate->copy()->subMonth()->startOfMonth();
         $displayedPrevMonthEnd = $toMonthDate->copy()->subMonth()->endOfMonth();
         $displayedPrevFromStr = $displayedPrevMonthStart->format('Y-m-d');
@@ -4097,14 +4099,14 @@ class MeterReadingController extends Controller
             $arrearsPy = max(0, round($currentBalance, 2));
         }
 
-        // Balance as of end of previous year: split arrears by year so balance from 2025 → PY, from current year → CY.
+        // Balance as of end of previous year: split arrears by year so balance from 2025 ? PY, from current year ? CY.
         $balanceEndOfPreviousYear = $this->getLedgerBalanceAsOfDate((int) $consumer->id, Carbon::now()->subYear()->endOfYear()->format('Y-m-d'));
 
         // Always use database-backed breakdown (paid_at only).
         // PRE-DUE vs POST-DUE: compare transaction_date (from date button) to the selected bill's due_date.
         // PRE-DUE (transaction_date <= due_date): Current Bill = 195, Arrears CY = current year (excluding selected month), Arrears PY = past years.
         // POST-DUE (transaction_date > due_date): Current Bill = 0, Arrears CY = current year, Arrears PY = past years.
-        // When selecting a bill month, if date is after due_date → POST-DUE; if date is within billing period → PRE-DUE.
+        // When selecting a bill month, if date is after due_date ? POST-DUE; if date is within billing period ? PRE-DUE.
         $billingController = app(\App\Http\Controllers\BillingProcessController::class);
         $asOfDate = $request->input('transaction_date') ? Carbon::parse($request->input('transaction_date')) : Carbon::now();
         $selectedBillMonthYmd = null;
@@ -4581,7 +4583,7 @@ class MeterReadingController extends Controller
 
         // Final reconciliation for non-explicit-paid-OR flows vs displayed ledger balance:
         // - If breakdown sum > balance: trim buckets (existing behavior).
-        // - If breakdown sum < balance: add shortfall to Arrears — CY (partial payments / coverage gaps vs running balance).
+        // - If breakdown sum < balance: add shortfall to Arrears ? CY (partial payments / coverage gaps vs running balance).
         // Breakdown total excludes senior discount deduction.
         if (!($orNumberInput !== '' && $orPayment)) {
             $currentBalanceCapped = round(max(0, (float) $currentBalance), 2);
@@ -4682,7 +4684,7 @@ class MeterReadingController extends Controller
             }
         }
 
-        // Arrears — Previous Year is computed inside Method A/B per date-meaning rules.
+        // Arrears ? Previous Year is computed inside Method A/B per date-meaning rules.
         
         return response()->json([
             'success' => true,
@@ -4709,7 +4711,7 @@ class MeterReadingController extends Controller
 
     /**
      * Compute running balance as of a given date (inclusive) from consumer_ledgers.
-     * Used to split arrears by year: balance at end of previous year → Arrears PY; rest → Arrears CY.
+     * Used to split arrears by year: balance at end of previous year ? Arrears PY; rest ? Arrears CY.
      *
      * @param int $consumerZoneId
      * @param string $asOfDate Y-m-d

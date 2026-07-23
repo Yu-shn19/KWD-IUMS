@@ -1087,7 +1087,7 @@ class ReportController extends Controller
     public function collectionReport(Request $request)
     {
         // Get filter parameters
-        $dateFrom = $request->input('date_from', Carbon::now()->startOfMonth()->format('Y-m-d'));
+        $dateFrom = $request->input('date_from', Carbon::now()->format('Y-m-d'));
         $dateTo = $request->input('date_to', Carbon::now()->format('Y-m-d'));
         $zone = $request->input('zone', '');
         $collector = $request->input('collector', '');

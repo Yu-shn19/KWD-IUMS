@@ -2755,6 +2755,11 @@
                         if (suggestionsDropdown) {
                             suggestionsDropdown.style.display = 'none';
                         }
+                        // Load account when user leaves the field (unless a suggestion click already triggered lookup)
+                        const value = accountNumberField.value?.trim();
+                        if (value) {
+                            performLookup();
+                        }
                     }, 200);
                 });
                 
