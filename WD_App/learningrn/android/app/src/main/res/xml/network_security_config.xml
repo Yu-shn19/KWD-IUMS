@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-  <!-- Allow HTTP API hosts used by KWD app (Android 9+ blocks cleartext by default). -->
+  <!--
+    HTTPS (kiblawanwaterdistrict.cloud) uses system CAs.
+    Cleartext HTTP is still allowed for local/IP test servers.
+  -->
   <base-config cleartextTrafficPermitted="true">
     <trust-anchors>
       <certificates src="system" />
     </trust-anchors>
   </base-config>
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">kiblawanwaterdistrict.cloud</domain>
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </domain-config>
   <domain-config cleartextTrafficPermitted="true">
     <domain includeSubdomains="true">187.127.206.191</domain>
     <domain includeSubdomains="true">192.168.1.8</domain>

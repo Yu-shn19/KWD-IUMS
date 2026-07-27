@@ -60,7 +60,7 @@ const apiRequest = async (endpoint, options = {}) => {
     
     // Provide more helpful error messages
     if (error.message.includes('Network request failed') || error.message.includes('fetch')) {
-      throw new Error(`Cannot connect to server. Please check:\n1. XAMPP Apache is running\n2. Laravel API is accessible at ${API_BASE_URL}\n3. Your device is on the same network`);
+      throw new Error(`Cannot connect to server at ${API_BASE_URL}. Check internet, HTTPS URL, and that the API is online.`);
     }
     
     throw error;
