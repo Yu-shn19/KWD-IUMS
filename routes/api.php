@@ -28,7 +28,7 @@ Route::get('/test', function () {
         'success' => true,
         'message' => 'API is working',
         'timestamp' => now(),
-        'version' => '1.0'
+        'version' => '1.1-completed-from-download-reading'
     ]);
 });
 

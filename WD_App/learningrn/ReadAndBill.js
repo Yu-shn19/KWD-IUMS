@@ -776,11 +776,23 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const routesWithReaderId = list.map((route) => {
               const routeScheduleId = getScheduleIdFromRecord(route);
               const accountKey = getAccountKeyFromRecord(route);
+              const scheduleStatus = route.schedule_status ?? route.scheduleStatus ?? route.status;
+              const effectiveReading =
+                route.current_reading ??
+                route.currentReading ??
+                route.schedule_current_reading ??
+                route.scheduleCurrentReading ??
+                null;
+              const effectiveConsumption =
+                route.consumption ??
+                route.schedule_consumption ??
+                route.scheduleConsumption ??
+                null;
               const hasDownload =
                 !!(route.has_downloaded_reading ?? route.hasDownloadedReading ?? route.downloaded_reading_id);
               const apiStatus = normalizeCustomerStatus(
-                route.status,
-                route.current_reading ?? route.currentReading,
+                scheduleStatus,
+                effectiveReading,
                 {
                   has_downloaded_reading: hasDownload,
                   downloaded_reading_id: route.downloaded_reading_id,
@@ -791,14 +803,21 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 localByScheduleId[Number(routeScheduleId)] ??
                 (accountKey ? localByAccount[accountKey] : null);
 
-              // If Download Reading has the row, always Completed — never Pending.
-              if (hasDownload || isCompletedCustomerStatus(apiStatus)) {
+              // Match Download Reading page: Completed / Curr.Read / download ⇒ never Pending
+              const looksCompletedOnServer =
+                hasDownload ||
+                isCompletedCustomerStatus(apiStatus) ||
+                isCompletedCustomerStatus(scheduleStatus) ||
+                (effectiveReading != null && effectiveReading !== '') ||
+                (effectiveConsumption != null && Number(effectiveConsumption) > 0);
+
+              if (looksCompletedOnServer) {
                 if (accountKey) {
                   completedAccountsStorage.markCompleted({
                     accountNumber: route.account_number ?? route.accountNumber,
                     scheduleId: routeScheduleId,
-                    currentReading: route.current_reading ?? route.currentReading,
-                    consumption: route.consumption,
+                    currentReading: effectiveReading,
+                    consumption: effectiveConsumption,
                     billMonth: route.bill_month ?? route.billMonth ?? null,
                   }).catch(() => {});
                 }
@@ -808,16 +827,16 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                   readerId: readerId,
                   status: 'completed',
                   has_downloaded_reading: true,
-                  current_reading: route.current_reading ?? route.currentReading ?? local?.current_reading ?? null,
-                  currentReading: route.current_reading ?? route.currentReading ?? local?.current_reading ?? null,
-                  consumption: route.consumption ?? local?.consumption ?? 0,
+                  current_reading: effectiveReading ?? local?.current_reading ?? null,
+                  currentReading: effectiveReading ?? local?.current_reading ?? null,
+                  consumption: effectiveConsumption ?? local?.consumption ?? 0,
                 };
               }
 
               // Hard rule: never downgrade local completed / saved-offline → pending/Assigned
               const overlay = pickNonDowngradedProgress(
                 apiStatus,
-                route.current_reading ?? route.currentReading,
+                effectiveReading,
                 local
               );
 

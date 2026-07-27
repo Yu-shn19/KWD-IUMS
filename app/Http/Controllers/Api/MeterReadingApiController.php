@@ -324,6 +324,7 @@ class MeterReadingApiController extends Controller
                     'meter_number' => $schedule->meter_number,
                     'previous_reading' => $schedule->previous_reading,
                     'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),
+                    // Prefer download reading; fall back to schedule (same as Download Reading page)
                     'current_reading' => $downloaded
                         ? $downloaded->current_reading
                         : ($scheduleHasReading ? $schedule->current_reading : null),
@@ -332,6 +333,10 @@ class MeterReadingApiController extends Controller
                         ? $downloaded->consumption
                         : ($scheduleHasReading ? $schedule->consumption : null),
                     'status' => $displayStatus,
+                    // Raw schedule fields so the app can match Download Reading even if mapping changes
+                    'schedule_status' => $schedule->status,
+                    'schedule_current_reading' => $schedule->current_reading,
+                    'schedule_consumption' => $schedule->consumption,
                     'has_downloaded_reading' => $hasDownloadedReading || $isReallyCompleted,
                     'downloaded_reading_id' => $downloaded->id ?? null,
                     'downloaded_reading_status' => $downloaded->status ?? ($isReallyCompleted ? 'completed' : null),
