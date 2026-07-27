@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { apiRequest, routesAPI } from './services/api';
 import { getApiConfig } from './config/api';
-import { tokenStorage, routesStorage, userStorage, receiptStorage, printerStorage, receiptLogoStorage, receiptFormatStorage } from './services/storage';
+import { tokenStorage, routesStorage, userStorage, receiptStorage, printerStorage, receiptLogoStorage, receiptFormatStorage, completedAccountsStorage } from './services/storage';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -589,6 +589,26 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         console.warn('SQLite synced overlay for cache:', e?.message || e);
       }
 
+      try {
+        const durable = await completedAccountsStorage.getAll();
+        mapped = mapped.map((cust) => {
+          if (isCompletedCustomerStatus(cust.status)) return cust;
+          if (isSavedOfflineCustomerStatus(cust.status)) return cust;
+          const acct = getAccountKeyFromRecord(cust);
+          const row = acct ? durable[acct] : null;
+          if (!row) return cust;
+          return {
+            ...cust,
+            status: 'completed',
+            currentReading: row.current_reading ?? cust.currentReading,
+            current_reading: row.current_reading ?? cust.current_reading,
+            consumption: row.consumption != null ? row.consumption : cust.consumption,
+          };
+        });
+      } catch (e) {
+        console.warn('Durable completed overlay for cache:', e?.message || e);
+      }
+
       console.log('✅ Mapped customers from cache:', mapped.length);
       return mapped;
     } catch (error) {
@@ -641,7 +661,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const localByAccount = {};
 
             const rememberLocalProgress = (id, accountKey, patch) => {
-              if (!patch || patch.current_reading == null) return;
+              if (!patch) return;
               const normalizedStatus = normalizeCustomerStatus(patch.status, patch.current_reading);
               if (
                 normalizedStatus !== 'saved offline' &&
@@ -649,6 +669,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               ) {
                 return;
               }
+              // Allow completed without a reading value so status cannot snap back to Pending
+              if (patch.current_reading == null && normalizedStatus !== 'completed') return;
               const next = {
                 status: normalizedStatus,
                 current_reading: patch.current_reading,
@@ -716,9 +738,36 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                   current_reading: cur,
                   consumption: row.data?.consumption != null ? row.data.consumption : 0,
                 });
+                if (acct || row.data?.customer?.accountNumber || row.data?.customer?.account_number) {
+                  completedAccountsStorage.markCompleted({
+                    accountNumber:
+                      row.data?.customer?.accountNumber ||
+                      row.data?.customer?.account_number ||
+                      acct,
+                    scheduleId: sid,
+                    currentReading: cur,
+                    consumption: row.data?.consumption,
+                  }).catch(() => {});
+                }
               });
             } catch (syncMergeErr) {
               console.warn('SQLite synced merge for routes:', syncMergeErr?.message);
+            }
+
+            // Durable completed accounts — never allow API Assigned/Pending to wipe these
+            try {
+              const durable = await completedAccountsStorage.getAll();
+              Object.keys(durable || {}).forEach((acctKey) => {
+                const row = durable[acctKey];
+                if (!row) return;
+                rememberLocalProgress(row.schedule_id, acctKey, {
+                  status: 'completed',
+                  current_reading: row.current_reading,
+                  consumption: row.consumption != null ? row.consumption : 0,
+                });
+              });
+            } catch (durableErr) {
+              console.warn('Durable completed merge:', durableErr?.message);
             }
 
             const routesWithReaderId = list.map((route) => {
@@ -760,7 +809,38 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
 
             await routesStorage.saveRoutes(routesWithReaderId);
 
-            const mapped = routesWithReaderId.map((c, idx) => ({
+            const mapped = routesWithReaderId.map((c, idx) => {
+              const accountKey = getAccountKeyFromRecord(c);
+              const local =
+                localByScheduleId[getScheduleIdFromRecord(c)] ??
+                localByScheduleId[Number(getScheduleIdFromRecord(c))] ??
+                (accountKey ? localByAccount[accountKey] : null);
+              let status = normalizeCustomerStatus(
+                c.status,
+                c.current_reading ?? c.currentReading,
+                {
+                  has_downloaded_reading: c.has_downloaded_reading ?? c.hasDownloadedReading,
+                }
+              );
+              let currentReading = c.current_reading ?? c.currentReading ?? null;
+              let consumption = c.consumption ?? 0;
+              // Final lock: local/durable completed always wins over Pending/Assigned
+              if (local && statusProgressRank(local.status) > statusProgressRank(status)) {
+                status = local.status;
+                if (local.current_reading != null) currentReading = local.current_reading;
+                if (local.consumption != null) consumption = local.consumption;
+              }
+              // Seed durable store when API/server already confirms completed
+              if (isCompletedCustomerStatus(status) && accountKey) {
+                completedAccountsStorage.markCompleted({
+                  accountNumber: c.account_number ?? c.accountNumber,
+                  scheduleId: getScheduleIdFromRecord(c),
+                  currentReading,
+                  consumption,
+                  billMonth: c.bill_month ?? c.billMonth ?? null,
+                }).catch(() => {});
+              }
+              return {
               id: getScheduleIdFromRecord(c) ?? `route-${c.account_number ?? c.accountNumber ?? idx}`,
               sedrNumber: c.sedr_number ?? c.sedrNumber ?? null,
               sequence: resolveConsumerSequence({
@@ -775,17 +855,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               zone: c.zone ?? '-',
               address: c.address ?? '-',
               meterNumber: c.meter_number ?? c.meterNumber ?? '-',
-              status: normalizeCustomerStatus(
-                c.status,
-                c.current_reading ?? c.currentReading,
-                {
-                  has_downloaded_reading: c.has_downloaded_reading ?? c.hasDownloadedReading,
-                }
-              ),
+              status,
               lastReading: c.previous_reading ?? c.lastReading ?? 0,
-              currentReading: c.current_reading ?? c.currentReading ?? null,
+              currentReading,
               estimatedReading: c.estimatedReading ?? 0,
-              consumption: c.consumption ?? 0,
+              consumption,
               billMonth: c.bill_month ?? c.billMonth ?? null,
               billDate: c.bill_date ?? c.billDate ?? c.reading_date ?? c.readingDate ?? c.scheduleReadingDate ?? null,
               dueDate: c.due_date ?? c.dueDate ?? null,
@@ -793,7 +867,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               scheduleReadingDate: c.reading_date ?? c.readingDate ?? c.scheduleReadingDate ?? c.bill_date ?? c.billDate ?? null,
               arrears: parseFloat(c.arrears ?? 0),
               readerId: readerId,
-            }));
+            };
+            });
 
             setCustomers(mapped);
             if (showAlerts) {
@@ -1798,6 +1873,14 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const a = getAccountFromReadingData(readingData);
             return a ? String(a).trim().toLowerCase() : null;
           })();
+          const accountNumber = getAccountFromReadingData(readingData);
+          await completedAccountsStorage.markCompleted({
+            accountNumber,
+            scheduleId,
+            currentReading: readingData.current_reading,
+            consumption: readingData.consumption,
+            billMonth: readingData.customer?.billMonth || readingData.customer?.bill_month || null,
+          });
           const stored = (await routesStorage.getRoutes()) || [];
           const updatedStored = stored.map((r) => {
             const sameId = matchesScheduleId(r, scheduleId);
