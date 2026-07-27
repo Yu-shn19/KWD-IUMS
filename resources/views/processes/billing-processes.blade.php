@@ -830,31 +830,16 @@
             let currentSurchargeData = [];
             let currentDataType = ''; // 'surcharge' | 'downloaded' | 'prepared' | ''
 
-            /** Ascending sort by the segment after the last "-" in Account # (e.g. 081-32-625 → 625); used for Meter Reading Preparation + search */
+            /** Alphabetical (A–Z) sort by Account Name; used for Meter Reading Preparation + search */
             function sortRowsByAccountNumber(rows) {
                 if (!Array.isArray(rows)) return [];
-                const tailAfterLastHyphen = (accountNumber) => {
-                    const s = (accountNumber || '').toString().trim();
-                    const i = s.lastIndexOf('-');
-                    return i === -1 ? s : s.slice(i + 1).trim();
-                };
-                const tailNumeric = (accountNumber) => {
-                    const tail = tailAfterLastHyphen(accountNumber);
-                    const n = parseInt(tail, 10);
-                    return Number.isNaN(n) ? null : n;
-                };
-                return [...rows].sort((a, b) => {
-                    const na = tailNumeric(a.account_number);
-                    const nb = tailNumeric(b.account_number);
-                    if (na !== null && nb !== null && na !== nb) return na - nb;
-                    if (na !== null && nb === null) return -1;
-                    if (na === null && nb !== null) return 1;
-                    const ta = tailAfterLastHyphen(a.account_number);
-                    const tb = tailAfterLastHyphen(b.account_number);
-                    let c = ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
-                    if (c !== 0) return c;
-                    return (a.account_number || '').toString().localeCompare((b.account_number || '').toString(), undefined, { numeric: true, sensitivity: 'base' });
-                });
+                return [...rows].sort((a, b) =>
+                    (a.account_name || '').toString().localeCompare(
+                        (b.account_name || '').toString(),
+                        undefined,
+                        { sensitivity: 'base' }
+                    )
+                );
             }
 
             // Quick lookup elements

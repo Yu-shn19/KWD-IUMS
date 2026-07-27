@@ -246,6 +246,33 @@
         </div>
     </div>
 
+    <!-- PIN required before editing Prev. Read -->
+    <div class="modal fade" id="prevReadPinModal" tabindex="-1" role="dialog" aria-labelledby="prevReadPinModalLabel" aria-hidden="true" data-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered" role="document">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="prevReadPinModalLabel">
+                        <i class="fas fa-lock mr-2"></i>Enter PIN
+                    </h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                        <span>&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-2">Enter the edit PIN (4 characters) to update Prev. Read.</p>
+                    <input type="password" class="form-control" id="prevReadPinInput" placeholder="PIN" autocomplete="off" maxlength="4" inputmode="text">
+                    <div class="invalid-feedback" id="prevReadPinError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="prevReadPinVerifyBtn">
+                        <i class="fas fa-check mr-1"></i>Verify
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Download API Info Modal -->
     <div class="modal fade" id="downloadApiModal" tabindex="-1" role="dialog">
         <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
@@ -529,11 +556,11 @@
 
         function displayRoutes(routes) {
             const sorted = [...routes].sort((a, b) => {
-                const za = (a.zone != null ? String(a.zone) : '').trim();
-                const zb = (b.zone != null ? String(b.zone) : '').trim();
-                if (za !== zb) {
-                    return za.localeCompare(zb, undefined, { numeric: true });
-                }
+                const na = (a.account_name != null ? String(a.account_name) : '').trim();
+                const nb = (b.account_name != null ? String(b.account_name) : '').trim();
+                const byName = na.localeCompare(nb, undefined, { sensitivity: 'base' });
+                if (byName !== 0) return byName;
+
                 const aa = (a.account_number || '').toString();
                 const ab = (b.account_number || '').toString();
                 return aa.localeCompare(ab, undefined, { numeric: true });
@@ -565,8 +592,9 @@
                 
                 // Calculate consumption if current reading exists
                 const currentReading = route.current_reading || '-';
-                const consumption = route.consumption || (route.current_reading && route.previous_reading ? 
-                                   route.current_reading - route.previous_reading : '-');
+                const prevRead = route.previous_reading ?? 0;
+                const consumption = route.consumption || (route.current_reading != null && prevRead != null ?
+                                   route.current_reading - prevRead : '-');
                                   
                 html += `
                     <tr>
@@ -576,7 +604,16 @@
                         <td style="font-size: 11px;">${route.address || '-'}</td>
                         <td class="text-center" style="font-size: 11px;">${route.zone || '-'}</td>
                         <td style="font-size: 11px;">${route.meter_number || '-'}</td>
-                        <td class="text-center" style="font-size: 11px;">${route.previous_reading || '0'}</td>
+                        <td class="text-center" style="font-size: 11px;">
+                            <input type="number" min="0" step="1" readonly
+                                class="form-control form-control-sm prev-read-input text-center border"
+                                value="${route.previous_reading ?? 0}"
+                                data-schedule-id="${route.id}"
+                                data-account-no="${route.account_number || ''}"
+                                data-original="${route.previous_reading ?? 0}"
+                                title="Click to enter PIN and edit"
+                                style="max-width: 85px; display: inline-block; font-size: 11px; background-color: #fff; cursor: pointer;" />
+                        </td>
                         <td class="text-center ${route.current_reading ? 'font-weight-bold text-primary' : ''}" style="font-size: 11px;">
                             ${currentReading}
                         </td>
@@ -597,6 +634,190 @@
             `;
 
             document.getElementById('routesContent').innerHTML = html;
+
+            // Attach PIN gate + save handlers to prev-read inputs
+            document.querySelectorAll('#routesContent .prev-read-input').forEach(function(input) {
+                input.addEventListener('mousedown', function(e) {
+                    if (this.readOnly) {
+                        e.preventDefault();
+                        requestPinThenEdit(this);
+                    }
+                });
+                input.addEventListener('focus', function() {
+                    if (this.readOnly) {
+                        this.blur();
+                        requestPinThenEdit(this);
+                    }
+                });
+                input.addEventListener('blur', function() {
+                    if (this.readOnly) return;
+                    savePrevRead(this);
+                    // Re-lock after leaving the field so next edit requires PIN again
+                    this.readOnly = true;
+                    this.style.cursor = 'pointer';
+                });
+                input.addEventListener('keydown', function(e) {
+                    if (this.readOnly) {
+                        e.preventDefault();
+                        return;
+                    }
+                    if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
+                });
+            });
+        }
+
+        var pendingPrevReadScheduleId = null;
+
+        function requestPinThenEdit(input) {
+            pendingPrevReadScheduleId = input.dataset.scheduleId || null;
+            var pinInput = document.getElementById('prevReadPinInput');
+            var errEl = document.getElementById('prevReadPinError');
+            if (pinInput) {
+                pinInput.value = '';
+                pinInput.classList.remove('is-invalid');
+            }
+            if (errEl) {
+                errEl.textContent = '';
+                errEl.classList.remove('d-block');
+            }
+            $('#prevReadPinModal').modal('show');
+            setTimeout(function() {
+                if (pinInput) pinInput.focus();
+            }, 300);
+        }
+
+        function unlockPrevReadInput(scheduleId) {
+            var input = document.querySelector('#routesContent .prev-read-input[data-schedule-id="' + scheduleId + '"]');
+            if (!input) return;
+            input.readOnly = false;
+            input.style.cursor = 'text';
+            input.focus();
+            input.select();
+        }
+
+        document.getElementById('prevReadPinVerifyBtn').addEventListener('click', function() {
+            var pinInput = document.getElementById('prevReadPinInput');
+            var errEl = document.getElementById('prevReadPinError');
+            var pin = (pinInput && pinInput.value) ? pinInput.value.trim() : '';
+            if (!pin || pin.length < 4) {
+                if (errEl) { errEl.textContent = 'Enter the 4-character PIN.'; errEl.classList.add('d-block'); }
+                if (pinInput) pinInput.classList.add('is-invalid');
+                return;
+            }
+            var btn = this;
+            btn.disabled = true;
+            fetch('{{ route("consumer.verify-edit-pin") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')
+                        ? document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                        : ''
+                },
+                body: JSON.stringify({ pin: pin })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.disabled = false;
+                if (data.success) {
+                    var scheduleId = pendingPrevReadScheduleId;
+                    pendingPrevReadScheduleId = null;
+                    $('#prevReadPinModal').modal('hide');
+                    if (scheduleId) unlockPrevReadInput(scheduleId);
+                } else {
+                    if (errEl) { errEl.textContent = data.message || 'Invalid PIN.'; errEl.classList.add('d-block'); }
+                    if (pinInput) pinInput.classList.add('is-invalid');
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                if (errEl) { errEl.textContent = 'Request failed.'; errEl.classList.add('d-block'); }
+                if (pinInput) pinInput.classList.add('is-invalid');
+            });
+        });
+
+        $('#prevReadPinInput').on('keydown', function(e) {
+            if (e.which === 13) document.getElementById('prevReadPinVerifyBtn').click();
+        });
+
+        // Keep PIN modal stacked above the routes modal
+        $('#prevReadPinModal').on('shown.bs.modal', function() {
+            $(this).css('z-index', 1060);
+            $('.modal-backdrop').last().css('z-index', 1055);
+        });
+        $('#prevReadPinModal').on('hidden.bs.modal', function() {
+            pendingPrevReadScheduleId = null;
+        });
+
+        function savePrevRead(input) {
+            const newVal = parseInt(input.value, 10);
+            const original = parseInt(input.dataset.original, 10);
+            if (isNaN(newVal) || newVal < 0 || newVal === original) return;
+
+            const scheduleId = parseInt(input.dataset.scheduleId, 10);
+            const accountNo = input.dataset.accountNo;
+            if (!scheduleId || !accountNo) return;
+
+            input.disabled = true;
+            input.classList.remove('border-success', 'border-danger');
+            input.classList.add('border-warning');
+
+            fetch('{{ route("consumer.update-meter-reading") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                },
+                body: JSON.stringify({
+                    schedule_id: scheduleId,
+                    account_no: accountNo,
+                    previous_reading: newVal
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                input.disabled = false;
+                input.readOnly = true;
+                input.style.cursor = 'pointer';
+                if (data.success) {
+                    input.dataset.original = String(newVal);
+                    input.classList.remove('border-warning');
+                    input.classList.add('border-success');
+                    // Sync local cache so the 45s auto-refresh keeps the saved value
+                    const match = currentModalRoutes.find(r => r.id === scheduleId);
+                    if (match) match.previous_reading = newVal;
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Success',
+                        text: 'Prev. Read successfully updated.',
+                        confirmButtonColor: '#3085d6'
+                    });
+                    setTimeout(() => input.classList.remove('border-success'), 2000);
+                } else {
+                    input.value = input.dataset.original;
+                    input.classList.remove('border-warning');
+                    input.classList.add('border-danger');
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Error',
+                        text: data.message || 'Failed to save previous reading.',
+                        confirmButtonColor: '#d33'
+                    });
+                    setTimeout(() => input.classList.remove('border-danger'), 3000);
+                }
+            })
+            .catch(() => {
+                input.disabled = false;
+                input.readOnly = true;
+                input.style.cursor = 'pointer';
+                input.value = input.dataset.original;
+                input.classList.remove('border-warning');
+                input.classList.add('border-danger');
+                setTimeout(() => input.classList.remove('border-danger'), 3000);
+            });
         }
 
         // Generate Download API Info
