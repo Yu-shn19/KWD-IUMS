@@ -546,8 +546,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               : [];
 
           if (list.length > 0) {
-            // Preserve only local "saved offline" overlays.
-            // Do NOT keep stale local "completed" when server has no downloaded_readings.
+            // Preserve local "saved offline" and recently synced "completed" so a refresh
+            // does not flash them back to pending before the API reflects the upload.
             let cachedRoutes = [];
             try {
               cachedRoutes = (await routesStorage.getRoutes()) || [];
@@ -558,7 +558,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               const status = r.status;
               const currentReading = r.current_reading ?? r.currentReading;
               const normalizedStatus = normalizeCustomerStatus(status, currentReading);
-              if (id && normalizedStatus === 'saved offline' && (currentReading != null)) {
+              if (
+                id &&
+                (normalizedStatus === 'saved offline' || normalizedStatus === 'completed') &&
+                (currentReading != null)
+              ) {
                 localByScheduleId[id] = {
                   status: normalizedStatus,
                   current_reading: currentReading,
@@ -603,11 +607,15 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 localByScheduleId[routeScheduleId] ??
                 localByScheduleId[Number(routeScheduleId)];
 
-              // Trust server for completed. Only overlay unsynced local readings.
-              const overlay =
-                local && local.status === 'saved offline' && !isCompletedCustomerStatus(apiStatus)
-                  ? local
-                  : null;
+              // Prefer API completed. Keep local saved-offline / completed if API still pending.
+              let overlay = null;
+              if (isCompletedCustomerStatus(apiStatus)) {
+                overlay = null; // API wins
+              } else if (local?.status === 'saved offline') {
+                overlay = local;
+              } else if (local?.status === 'completed') {
+                overlay = local; // keep completed after sync until API catches up
+              }
 
               return {
                 ...route,
@@ -801,6 +809,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                     `${result.synced} reading(s) synced and completed!${result.failed > 0 ? `\n${result.failed} failed` : ''}`,
                     [{ text: 'OK' }]
                   );
+                }
+                // Refresh list so synced accounts stay Completed (not Pending)
+                if (result.synced > 0) {
+                  await loadCustomersFromRoutes(false);
                 }
               } else {
                 Alert.alert(

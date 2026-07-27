@@ -190,16 +190,31 @@ class MeterReadingApiController extends Controller
             END
         ")->orderByAccountNumberTail()->get();
 
-        // Get downloaded readings for this reader (only for current bill_month schedules)
+        // Get downloaded readings for these schedules (any matching completed row).
+        // Do not require reader_id match — offline sync may rematch schedule IDs,
+        // and completed work must still show as completed for the assigned reader.
         $downloadedReadings = collect();
         if ($schedules->isNotEmpty()) {
             $scheduleIds = $schedules->pluck('id')->toArray();
-        $downloadedReadings = DownloadedReading::query()
-            ->where(mr_col('reader_id'), $readerId)
-            ->where(mr_col('status'), 'completed')
+            $allDownloaded = DownloadedReading::query()
                 ->whereIn(mr_col('schedule_id'), $scheduleIds)
-            ->get()
-            ->keyBy(mr_col('schedule_id'));
+                ->where(function ($q) {
+                    $q->whereRaw('LOWER(COALESCE(status, "")) = ?', ['completed']);
+                })
+                ->orderByDesc(mr_col('id'))
+                ->get();
+
+            foreach ($allDownloaded as $dr) {
+                $sid = (int) $dr->schedule_id;
+                if (!$downloadedReadings->has($sid)) {
+                    $downloadedReadings->put($sid, $dr);
+                    continue;
+                }
+                // Prefer a row belonging to the current reader when duplicates exist
+                if ((int) $dr->reader_id === (int) $readerId) {
+                    $downloadedReadings->put($sid, $dr);
+                }
+            }
         }
 
         // Get rate codes from consumer_zone table for all schedules
@@ -222,17 +237,30 @@ class MeterReadingApiController extends Controller
             ],
             'total_schedules' => $schedules->count(),
             'schedules' => $schedules->map(function($schedule) use ($downloadedReadings, $rateCodes) {
-                $downloaded = $downloadedReadings->get($schedule->id);
+                $downloaded = $downloadedReadings->get((int) $schedule->id);
                 $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
 
-                // Only treat as completed when a downloaded_readings row exists.
-                // Schedule status "Completed" alone is not enough (no ledger/download proof).
-                $isReallyCompleted = (bool) $downloaded;
+                // Completed when download exists, or schedule was marked Completed with a reading
+                // (covers sync race / reader_id mismatch on downloaded_readings).
+                $scheduleCompleted = strcasecmp((string) $schedule->status, 'Completed') === 0
+                    && $schedule->current_reading !== null
+                    && $schedule->current_reading !== '';
+                $isReallyCompleted = (bool) $downloaded || $scheduleCompleted;
                 $displayStatus = $isReallyCompleted
                     ? 'completed'
                     : (strcasecmp((string) $schedule->status, 'Completed') === 0
                         ? 'Assigned'
                         : $schedule->status);
+
+                $currentReading = $downloaded
+                    ? $downloaded->current_reading
+                    : ($scheduleCompleted ? $schedule->current_reading : null);
+                $consumption = $downloaded
+                    ? $downloaded->consumption
+                    : ($scheduleCompleted ? $schedule->consumption : null);
+                $readingDate = $downloaded
+                    ? $downloaded->reading_date?->format('Y-m-d')
+                    : ($scheduleCompleted ? $schedule->reading_date?->format('Y-m-d') : null);
 
                 return [
                     'id' => $schedule->id,
@@ -246,13 +274,11 @@ class MeterReadingApiController extends Controller
                     'meter_number' => $schedule->meter_number,
                     'previous_reading' => $schedule->previous_reading,
                     'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),
-                    'current_reading' => $downloaded ? $downloaded->current_reading : null,
-                    'reading_date' => $downloaded
-                        ? $downloaded->reading_date?->format('Y-m-d')
-                        : null,
-                    'consumption' => $downloaded ? $downloaded->consumption : null,
+                    'current_reading' => $currentReading,
+                    'reading_date' => $readingDate,
+                    'consumption' => $consumption,
                     'status' => $displayStatus,
-                    'has_downloaded_reading' => $isReallyCompleted,
+                    'has_downloaded_reading' => (bool) $downloaded,
                     'bill_month' => $schedule->bill_month->format('Y-m-d'),
                     'bill_date' => $schedule->bill_date->format('Y-m-d'),
                     'due_date' => $schedule->due_date->format('Y-m-d'),
