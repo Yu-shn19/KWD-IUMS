@@ -1896,6 +1896,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         return priorityA - priorityB;
       }
 
+      const nameA = (a.name || a.account_name || '').toLowerCase();
+      const nameB = (b.name || b.account_name || '').toLowerCase();
+      const byName = nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+      if (byName !== 0) return byName;
+
       const accountA = (a.accountNumber || a.account_number || '').toLowerCase();
       const accountB = (b.accountNumber || b.account_number || '').toLowerCase();
       return accountA.localeCompare(accountB, undefined, { numeric: true, sensitivity: 'base' });
