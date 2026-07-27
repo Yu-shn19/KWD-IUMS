@@ -69,17 +69,18 @@ const isCompletedCustomerStatus = (status) => {
 const isSavedOfflineCustomerStatus = (status) =>
   (status ?? '').toString().trim().toLowerCase() === 'saved offline';
 
-/** Normalize API/cache status. downloaded_readings (has_downloaded_reading) is source of truth. */
+/** Normalize API/cache status. Match Download Reading: Completed + current reading stay completed. */
 const normalizeCustomerStatus = (status, currentReading = null, extras = {}) => {
   if (isSavedOfflineCustomerStatus(status)) return 'saved offline';
-  // Download Reading row exists on server → always Completed
+  // Download Reading / API confirmed row
   if (extras?.has_downloaded_reading || extras?.hasDownloadedReading) return 'completed';
   if (extras?.downloaded_reading_id) return 'completed';
   if (isCompletedCustomerStatus(status)) return 'completed';
-  const hasReading = currentReading != null && currentReading !== '';
   const s = (status ?? '').toString().trim().toLowerCase();
-  if (hasReading && (s === 'completed' || s === 'verified')) return 'completed';
-  // API only sends current_reading when a downloaded_readings row was matched
+  // Web Download Reading uses schedule status "Completed"
+  if (s === 'completed' || s === 'verified') return 'completed';
+  const hasReading = currentReading != null && currentReading !== '';
+  // Curr. Read filled (as on download-reading) ⇒ already read — never Pending
   if (hasReading) return 'completed';
   return status || 'Assigned';
 };
