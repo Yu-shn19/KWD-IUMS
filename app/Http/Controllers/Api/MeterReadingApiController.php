@@ -121,20 +121,6 @@ class MeterReadingApiController extends Controller
                 ->orderBy(mr_col('bill_month'), 'DESC')
                 ->value(mr_col('bill_month'));
             
-            // Get zones that have active routes in the latest bill_month
-            if ($latestBillMonth) {
-                $assignedZones = MeterReadingSchedule::query()
-                    ->joinConsumerZone()
-                    ->where(mr_col('meter_reading_schedules.assigned_reader_id'), $readerId)
-                    ->where(mr_col('meter_reading_schedules.bill_month'), $latestBillMonth)
-                    ->whereIn(mr_col('meter_reading_schedules.status'), ['Assigned', 'In Progress'])
-                    ->distinct()
-                    ->pluck('cz.zone_code')
-                    ->filter()
-                    ->values()
-                    ->toArray();
-            }
-            
             // If no active routes, then get from completed routes
             if (!$latestBillMonth) {
                 $latestBillMonth = MeterReadingSchedule::query()
@@ -142,20 +128,20 @@ class MeterReadingApiController extends Controller
                     ->where(mr_col('status'), 'Completed')
                     ->orderBy(mr_col('bill_month'), 'DESC')
                     ->value(mr_col('bill_month'));
-                
-                // Get zones from completed routes in the latest bill_month
-                if ($latestBillMonth) {
-                    $assignedZones = MeterReadingSchedule::query()
-                        ->joinConsumerZone()
-                        ->where(mr_col('meter_reading_schedules.assigned_reader_id'), $readerId)
-                        ->where(mr_col('meter_reading_schedules.bill_month'), $latestBillMonth)
-                        ->where(mr_col('meter_reading_schedules.status'), 'Completed')
-                        ->distinct()
-                        ->pluck('cz.zone_code')
-                        ->filter()
-                        ->values()
-                        ->toArray();
-                }
+            }
+
+            // Zones for that bill month — include Completed so already-read accounts stay in the list
+            if ($latestBillMonth) {
+                $assignedZones = MeterReadingSchedule::query()
+                    ->joinConsumerZone()
+                    ->where(mr_col('meter_reading_schedules.assigned_reader_id'), $readerId)
+                    ->where(mr_col('meter_reading_schedules.bill_month'), $latestBillMonth)
+                    ->whereIn(mr_col('meter_reading_schedules.status'), ['Assigned', 'In Progress', 'Completed'])
+                    ->distinct()
+                    ->pluck('cz.zone_code')
+                    ->filter()
+                    ->values()
+                    ->toArray();
             }
         }
 
@@ -163,7 +149,7 @@ class MeterReadingApiController extends Controller
             ->where(mr_col('assigned_reader_id'), $readerId)
             ->whereIn(mr_col('status'), ['Assigned', 'In Progress', 'Completed']);
 
-        // Filter by zone: use provided one, or zones with active assignments
+        // Filter by zone: use provided one, or zones with assignments for this bill month
         if ($zone) {
             $query->forZoneCode($zone);
         } elseif (!empty($assignedZones)) {
@@ -190,27 +176,49 @@ class MeterReadingApiController extends Controller
             END
         ")->orderByAccountNumberTail()->get();
 
-        // Get downloaded readings for these schedules (any matching row with a reading).
-        // Do not require reader_id match — offline sync may rematch schedule IDs,
-        // and completed work must still show as completed for the assigned reader.
-        $downloadedReadings = collect();
+        // Match downloaded_readings by schedule_id OR consumer_zone_id.
+        // Offline sync can rematch schedule IDs; admin UI may show completed on a download
+        // whose schedule_id differs slightly from the row still listed as Assigned.
+        $downloadedByScheduleId = collect();
+        $downloadedByConsumerZoneId = collect();
         if ($schedules->isNotEmpty()) {
-            $scheduleIds = $schedules->pluck('id')->toArray();
+            $scheduleIds = $schedules->pluck('id')->map(fn ($id) => (int) $id)->all();
+            $consumerZoneIds = $schedules->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
+
             $allDownloaded = DownloadedReading::query()
-                ->whereIn(mr_col('schedule_id'), $scheduleIds)
+                ->where(function ($q) use ($scheduleIds, $consumerZoneIds) {
+                    $q->whereIn(mr_col('schedule_id'), $scheduleIds);
+                    if (!empty($consumerZoneIds)) {
+                        $q->orWhereIn(mr_col('consumer_zone_id'), $consumerZoneIds);
+                    }
+                })
                 ->whereNotNull(mr_col('current_reading'))
                 ->orderByDesc(mr_col('id'))
                 ->get();
 
             foreach ($allDownloaded as $dr) {
-                $sid = (int) $dr->schedule_id;
-                if (!$downloadedReadings->has($sid)) {
-                    $downloadedReadings->put($sid, $dr);
-                    continue;
+                $sid = (int) ($dr->schedule_id ?? 0);
+                $czid = (int) ($dr->consumer_zone_id ?? 0);
+
+                if ($sid > 0) {
+                    $existing = $downloadedByScheduleId->get($sid);
+                    if (!$existing || (int) $dr->reader_id === (int) $readerId) {
+                        $downloadedByScheduleId->put($sid, $dr);
+                    }
                 }
-                // Prefer a row belonging to the current reader when duplicates exist
-                if ((int) $dr->reader_id === (int) $readerId) {
-                    $downloadedReadings->put($sid, $dr);
+
+                if ($czid > 0) {
+                    // Only reuse a CZ-level download when it belongs to one of this month's schedules
+                    // (or has no schedule_id). Avoids pulling last month's reading onto a new assignment.
+                    $drScheduleId = (int) ($dr->schedule_id ?? 0);
+                    $belongsToThisBatch = $drScheduleId === 0 || in_array($drScheduleId, $scheduleIds, true);
+                    if (!$belongsToThisBatch) {
+                        continue;
+                    }
+                    $existingCz = $downloadedByConsumerZoneId->get($czid);
+                    if (!$existingCz || (int) $dr->reader_id === (int) $readerId) {
+                        $downloadedByConsumerZoneId->put($czid, $dr);
+                    }
                 }
             }
         }
@@ -234,18 +242,20 @@ class MeterReadingApiController extends Controller
                 'name' => $this->formatName($reader)
             ],
             'total_schedules' => $schedules->count(),
-            'schedules' => $schedules->map(function($schedule) use ($downloadedReadings, $rateCodes) {
-                $downloaded = $downloadedReadings->get((int) $schedule->id);
+            'schedules' => $schedules->map(function($schedule) use ($downloadedByScheduleId, $downloadedByConsumerZoneId, $rateCodes) {
+                $downloaded = $downloadedByScheduleId->get((int) $schedule->id);
+                if (!$downloaded && $schedule->consumer_zone_id) {
+                    $downloaded = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                }
                 $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
 
-                // Completed when a download exists or the schedule already has a current reading.
+                // Completed when download exists, schedule has a reading, or schedule is Completed.
                 $scheduleHasReading = $schedule->current_reading !== null && $schedule->current_reading !== '';
-                $isReallyCompleted = (bool) $downloaded || $scheduleHasReading;
+                $scheduleMarkedCompleted = strcasecmp((string) $schedule->status, 'Completed') === 0;
+                $isReallyCompleted = (bool) $downloaded || $scheduleHasReading || $scheduleMarkedCompleted;
                 $displayStatus = $isReallyCompleted
                     ? 'completed'
-                    : (strcasecmp((string) $schedule->status, 'Completed') === 0
-                        ? 'Assigned'
-                        : $schedule->status);
+                    : $schedule->status;
 
                 $currentReading = $downloaded
                     ? $downloaded->current_reading
