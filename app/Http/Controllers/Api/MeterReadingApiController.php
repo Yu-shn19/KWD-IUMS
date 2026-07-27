@@ -208,15 +208,18 @@ class MeterReadingApiController extends Controller
                 }
 
                 if ($czid > 0) {
-                    // Only reuse a CZ-level download when it belongs to one of this month's schedules
-                    // (or has no schedule_id). Avoids pulling last month's reading onto a new assignment.
-                    $drScheduleId = (int) ($dr->schedule_id ?? 0);
-                    $belongsToThisBatch = $drScheduleId === 0 || in_array($drScheduleId, $scheduleIds, true);
-                    if (!$belongsToThisBatch) {
-                        continue;
-                    }
+                    // Index by consumer so a download still marks the account completed
+                    // even when schedule_id was rematched / differs from the listed row.
                     $existingCz = $downloadedByConsumerZoneId->get($czid);
-                    if (!$existingCz || (int) $dr->reader_id === (int) $readerId) {
+                    $drInBatch = in_array((int) ($dr->schedule_id ?? 0), $scheduleIds, true);
+                    $existingInBatch = $existingCz
+                        ? in_array((int) ($existingCz->schedule_id ?? 0), $scheduleIds, true)
+                        : false;
+                    if (!$existingCz) {
+                        $downloadedByConsumerZoneId->put($czid, $dr);
+                    } elseif ($drInBatch && !$existingInBatch) {
+                        $downloadedByConsumerZoneId->put($czid, $dr);
+                    } elseif ((int) $dr->reader_id === (int) $readerId) {
                         $downloadedByConsumerZoneId->put($czid, $dr);
                     }
                 }
