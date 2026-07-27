@@ -95,8 +95,31 @@ const statusProgressRank = (status) => {
 };
 
 const getAccountKeyFromRecord = (record) => {
-  const a = (record?.account_number ?? record?.accountNumber ?? '').toString().trim();
+  const a = (record?.account_number ?? record?.accountNumber ?? record?.account_no ?? '').toString().trim();
   return a ? a.toLowerCase() : null;
+};
+
+/** Also match by account tail (e.g. 011-32-1851 ↔ 1851) for durable completed overlay. */
+const getAccountTailKey = (recordOrKey) => {
+  const raw = typeof recordOrKey === 'string'
+    ? recordOrKey
+    : (recordOrKey?.account_number ?? recordOrKey?.accountNumber ?? recordOrKey?.account_no ?? '');
+  const a = String(raw ?? '').trim().toLowerCase();
+  if (!a) return null;
+  if (!a.includes('-')) return a;
+  const tail = a.split('-').pop()?.trim();
+  return tail || a;
+};
+
+const findLocalProgress = (localByScheduleId, localByAccount, scheduleId, accountKey, accountTail) => {
+  return (
+    localByScheduleId[scheduleId] ??
+    localByScheduleId[Number(scheduleId)] ??
+    (accountKey ? localByAccount[accountKey] : null) ??
+    (accountTail ? localByAccount[accountTail] : null) ??
+    (accountTail ? localByAccount[`tail:${accountTail}`] : null) ??
+    null
+  );
 };
 
 /**
@@ -691,6 +714,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               const n = Number(id);
               if (!Number.isNaN(n)) store(localByScheduleId, n);
               store(localByAccount, accountKey);
+              const tail = getAccountTailKey(accountKey || '');
+              if (tail) {
+                store(localByAccount, tail);
+                store(localByAccount, `tail:${tail}`);
+              }
             };
 
             cachedRoutes.forEach((r) => {
@@ -798,10 +826,13 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                   downloaded_reading_id: route.downloaded_reading_id,
                 }
               );
-              const local =
-                localByScheduleId[routeScheduleId] ??
-                localByScheduleId[Number(routeScheduleId)] ??
-                (accountKey ? localByAccount[accountKey] : null);
+              const local = findLocalProgress(
+                localByScheduleId,
+                localByAccount,
+                routeScheduleId,
+                accountKey,
+                getAccountTailKey(route)
+              );
 
               // Match Download Reading page: Completed / Curr.Read / download ⇒ never Pending
               const looksCompletedOnServer =

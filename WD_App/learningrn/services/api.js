@@ -312,10 +312,38 @@ export const dashboardAPI = {
 // Routes API (uploaded by admin from the website)
 export const routesAPI = {
   // Get list of route customers for a reader
+  // Prefers /mobile-reader-schedules.php (Download Reading status) then falls back to /reader/schedules
   getRoutes: async (params = {}, token) => {
     const query = new URLSearchParams(params).toString();
-    const endpoint = `/reader/schedules${query ? `?${query}` : ''}`;
+    const apiBase = getApiConfig().baseURL.replace(/\/$/, '');
+    const siteBase = apiBase.replace(/\/api$/i, '');
 
+    // Drop-in endpoint: keeps Completed when Download Reading already has Curr. Read
+    try {
+      const v2Url = `${siteBase}/mobile-reader-schedules.php${query ? `?${query}` : ''}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), getApiConfig().timeout || 45000);
+      const response = await fetch(v2Url, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+      clearTimeout(timeoutId);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.success && Array.isArray(data.schedules)) {
+          console.log('📡 Schedules from mobile-reader-schedules.php', data.version || '', data.total_schedules);
+          return data;
+        }
+      }
+    } catch (e) {
+      console.warn('mobile-reader-schedules.php unavailable, using /reader/schedules:', e?.message || e);
+    }
+
+    const endpoint = `/reader/schedules${query ? `?${query}` : ''}`;
     return apiRequest(endpoint, {
       method: 'GET',
       token
