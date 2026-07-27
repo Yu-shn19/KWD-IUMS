@@ -22,13 +22,16 @@ use App\Http\Controllers\ConsumerController; // Mao ni akoang gi add
 // Public routes (no authentication required)
 Route::post('/reader/login', [MeterReadingApiController::class, 'login']);
 
-// Test endpoint (public)
+// Test endpoint (public) — used to verify which server copy is live
 Route::get('/test', function () {
     return response()->json([
         'success' => true,
         'message' => 'API is working',
         'timestamp' => now(),
-        'version' => '1.3-completed-matches-download-reading'
+        'version' => '1.3-completed-matches-download-reading',
+        'code_marker' => 'routes-api-php-v13',
+        'base_path' => base_path(),
+        'routes_mtime' => @filemtime(base_path('routes/api.php')) ?: null,
     ]);
 });
 
