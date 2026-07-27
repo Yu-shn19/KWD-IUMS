@@ -229,7 +229,7 @@ export const completedAccountsStorage = {
       const key = accountNumber != null ? String(accountNumber).trim().toLowerCase() : null;
       if (!key) return false;
       const all = await completedAccountsStorage.getAll();
-      all[key] = {
+      const entry = {
         status: 'completed',
         account_number: accountNumber,
         schedule_id: scheduleId != null ? Number(scheduleId) : null,
@@ -238,6 +238,13 @@ export const completedAccountsStorage = {
         bill_month: billMonth || null,
         completed_at: new Date().toISOString(),
       };
+      all[key] = entry;
+      // Also index by account tail so overlays still match shortened account displays
+      const tail = key.includes('-') ? key.split('-').pop() : null;
+      if (tail && tail !== key) {
+        all[tail] = entry;
+        all[`tail:${tail}`] = entry;
+      }
       await AsyncStorage.setItem(STORAGE_KEYS.COMPLETED_ACCOUNTS, JSON.stringify(all));
       return true;
     } catch (error) {

@@ -95,8 +95,31 @@ const statusProgressRank = (status) => {
 };
 
 const getAccountKeyFromRecord = (record) => {
-  const a = (record?.account_number ?? record?.accountNumber ?? '').toString().trim();
+  const a = (record?.account_number ?? record?.accountNumber ?? record?.account_no ?? '').toString().trim();
   return a ? a.toLowerCase() : null;
+};
+
+/** Also match by account tail (e.g. 011-32-1851 ↔ 1851) for durable completed overlay. */
+const getAccountTailKey = (recordOrKey) => {
+  const raw = typeof recordOrKey === 'string'
+    ? recordOrKey
+    : (recordOrKey?.account_number ?? recordOrKey?.accountNumber ?? recordOrKey?.account_no ?? '');
+  const a = String(raw ?? '').trim().toLowerCase();
+  if (!a) return null;
+  if (!a.includes('-')) return a;
+  const tail = a.split('-').pop()?.trim();
+  return tail || a;
+};
+
+const findLocalProgress = (localByScheduleId, localByAccount, scheduleId, accountKey, accountTail) => {
+  return (
+    localByScheduleId[scheduleId] ??
+    localByScheduleId[Number(scheduleId)] ??
+    (accountKey ? localByAccount[accountKey] : null) ??
+    (accountTail ? localByAccount[accountTail] : null) ??
+    (accountTail ? localByAccount[`tail:${accountTail}`] : null) ??
+    null
+  );
 };
 
 /**
@@ -691,6 +714,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               const n = Number(id);
               if (!Number.isNaN(n)) store(localByScheduleId, n);
               store(localByAccount, accountKey);
+              const tail = getAccountTailKey(accountKey || '');
+              if (tail) {
+                store(localByAccount, tail);
+                store(localByAccount, `tail:${tail}`);
+              }
             };
 
             cachedRoutes.forEach((r) => {
@@ -776,29 +804,51 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const routesWithReaderId = list.map((route) => {
               const routeScheduleId = getScheduleIdFromRecord(route);
               const accountKey = getAccountKeyFromRecord(route);
+              const scheduleStatus = route.schedule_status ?? route.scheduleStatus ?? route.status;
+              const effectiveReading =
+                route.current_reading ??
+                route.currentReading ??
+                route.schedule_current_reading ??
+                route.scheduleCurrentReading ??
+                null;
+              const effectiveConsumption =
+                route.consumption ??
+                route.schedule_consumption ??
+                route.scheduleConsumption ??
+                null;
               const hasDownload =
                 !!(route.has_downloaded_reading ?? route.hasDownloadedReading ?? route.downloaded_reading_id);
               const apiStatus = normalizeCustomerStatus(
-                route.status,
-                route.current_reading ?? route.currentReading,
+                scheduleStatus,
+                effectiveReading,
                 {
                   has_downloaded_reading: hasDownload,
                   downloaded_reading_id: route.downloaded_reading_id,
                 }
               );
-              const local =
-                localByScheduleId[routeScheduleId] ??
-                localByScheduleId[Number(routeScheduleId)] ??
-                (accountKey ? localByAccount[accountKey] : null);
+              const local = findLocalProgress(
+                localByScheduleId,
+                localByAccount,
+                routeScheduleId,
+                accountKey,
+                getAccountTailKey(route)
+              );
 
-              // If Download Reading has the row, always Completed — never Pending.
-              if (hasDownload || isCompletedCustomerStatus(apiStatus)) {
+              // Match Download Reading page: Completed / Curr.Read / download ⇒ never Pending
+              const looksCompletedOnServer =
+                hasDownload ||
+                isCompletedCustomerStatus(apiStatus) ||
+                isCompletedCustomerStatus(scheduleStatus) ||
+                (effectiveReading != null && effectiveReading !== '') ||
+                (effectiveConsumption != null && Number(effectiveConsumption) > 0);
+
+              if (looksCompletedOnServer) {
                 if (accountKey) {
                   completedAccountsStorage.markCompleted({
                     accountNumber: route.account_number ?? route.accountNumber,
                     scheduleId: routeScheduleId,
-                    currentReading: route.current_reading ?? route.currentReading,
-                    consumption: route.consumption,
+                    currentReading: effectiveReading,
+                    consumption: effectiveConsumption,
                     billMonth: route.bill_month ?? route.billMonth ?? null,
                   }).catch(() => {});
                 }
@@ -808,16 +858,16 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                   readerId: readerId,
                   status: 'completed',
                   has_downloaded_reading: true,
-                  current_reading: route.current_reading ?? route.currentReading ?? local?.current_reading ?? null,
-                  currentReading: route.current_reading ?? route.currentReading ?? local?.current_reading ?? null,
-                  consumption: route.consumption ?? local?.consumption ?? 0,
+                  current_reading: effectiveReading ?? local?.current_reading ?? null,
+                  currentReading: effectiveReading ?? local?.current_reading ?? null,
+                  consumption: effectiveConsumption ?? local?.consumption ?? 0,
                 };
               }
 
               // Hard rule: never downgrade local completed / saved-offline → pending/Assigned
               const overlay = pickNonDowngradedProgress(
                 apiStatus,
-                route.current_reading ?? route.currentReading,
+                effectiveReading,
                 local
               );
 
@@ -900,6 +950,24 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             });
 
             setCustomers(mapped);
+            // After reinstall, Completed only works if the live server has the fix.
+            try {
+              const apiVer = String(response?.version || '');
+              const serverHasFix = /1\.[2-9]|mobile-reader|download-reading|completed-matches/i.test(apiVer);
+              const anyCompleted = mapped.some((c) => isCompletedCustomerStatus(c.status));
+              if (!serverHasFix && !anyCompleted && mapped.length > 0) {
+                const warnedKey = 'warned_outdated_schedules_api';
+                const already = await AsyncStorage.getItem(warnedKey);
+                if (!already) {
+                  await AsyncStorage.setItem(warnedKey, new Date().toISOString());
+                  Alert.alert(
+                    'Server update needed',
+                    'Live API is still outdated, so Completed readings can show as Pending after reinstall.\n\nUpload these to kiblawanwaterdistrict.cloud:\n• public/mobile-reader-schedules.php\n• app/Http/Controllers/Api/MeterReadingApiController.php\n• routes/api.php\n\nThen run: php artisan optimize:clear\n\nVerify /api/test version is 1.3 (not 1.0).',
+                    [{ text: 'OK' }]
+                  );
+                }
+              }
+            } catch (_) {}
             if (showAlerts) {
               Alert.alert('✅ Routes Loaded', `${mapped.length} route(s) downloaded from the server.`);
             }

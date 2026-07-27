@@ -1,0 +1,22 @@
+﻿UPLOAD THESE FILES TO kiblawanwaterdistrict.cloud
+
+1) MeterReadingApiController.php
+   -> app/Http/Controllers/Api/MeterReadingApiController.php
+
+2) api.php
+   -> routes/api.php
+
+3) mobile-reader-schedules.php
+   -> public/mobile-reader-schedules.php  (website public folder / document root)
+
+Then on the server run:
+  php artisan optimize:clear
+
+Verify in browser:
+  https://kiblawanwaterdistrict.cloud/api/test
+  must show version containing 1.3 (not 1.0)
+
+  https://kiblawanwaterdistrict.cloud/mobile-reader-schedules.php
+  must NOT be 404
+
+Then rebuild/reinstall the APK and Refresh routes.
