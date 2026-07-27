@@ -950,24 +950,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             });
 
             setCustomers(mapped);
-            // After reinstall, Completed only works if the live server has the fix.
-            try {
-              const apiVer = String(response?.version || '');
-              const serverHasFix = /1\.[2-9]|mobile-reader|download-reading|completed-matches/i.test(apiVer);
-              const anyCompleted = mapped.some((c) => isCompletedCustomerStatus(c.status));
-              if (!serverHasFix && !anyCompleted && mapped.length > 0) {
-                const warnedKey = 'warned_outdated_schedules_api';
-                const already = await AsyncStorage.getItem(warnedKey);
-                if (!already) {
-                  await AsyncStorage.setItem(warnedKey, new Date().toISOString());
-                  Alert.alert(
-                    'Server update needed',
-                    'Live API is still outdated, so Completed readings can show as Pending after reinstall.\n\nUpload these to kiblawanwaterdistrict.cloud:\n• public/mobile-reader-schedules.php\n• app/Http/Controllers/Api/MeterReadingApiController.php\n• routes/api.php\n\nThen run: php artisan optimize:clear\n\nVerify /api/test version is 1.3 (not 1.0).',
-                    [{ text: 'OK' }]
-                  );
-                }
-              }
-            } catch (_) {}
             if (showAlerts) {
               Alert.alert('✅ Routes Loaded', `${mapped.length} route(s) downloaded from the server.`);
             }
