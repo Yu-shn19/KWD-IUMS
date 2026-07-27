@@ -69,15 +69,17 @@ const isCompletedCustomerStatus = (status) => {
 const isSavedOfflineCustomerStatus = (status) =>
   (status ?? '').toString().trim().toLowerCase() === 'saved offline';
 
-/** Normalize API/cache status so "Completed" and "completed" both show as completed. */
+/** Normalize API/cache status. downloaded_readings (has_downloaded_reading) is source of truth. */
 const normalizeCustomerStatus = (status, currentReading = null, extras = {}) => {
   if (isSavedOfflineCustomerStatus(status)) return 'saved offline';
-  if (isCompletedCustomerStatus(status)) return 'completed';
+  // Download Reading row exists on server → always Completed
   if (extras?.has_downloaded_reading || extras?.hasDownloadedReading) return 'completed';
+  if (extras?.downloaded_reading_id) return 'completed';
+  if (isCompletedCustomerStatus(status)) return 'completed';
   const hasReading = currentReading != null && currentReading !== '';
   const s = (status ?? '').toString().trim().toLowerCase();
   if (hasReading && (s === 'completed' || s === 'verified')) return 'completed';
-  // API only sends current_reading after a successful read/sync — never show those as Pending
+  // API only sends current_reading when a downloaded_readings row was matched
   if (hasReading) return 'completed';
   return status || 'Assigned';
 };
@@ -773,11 +775,14 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const routesWithReaderId = list.map((route) => {
               const routeScheduleId = getScheduleIdFromRecord(route);
               const accountKey = getAccountKeyFromRecord(route);
+              const hasDownload =
+                !!(route.has_downloaded_reading ?? route.hasDownloadedReading ?? route.downloaded_reading_id);
               const apiStatus = normalizeCustomerStatus(
                 route.status,
                 route.current_reading ?? route.currentReading,
                 {
-                  has_downloaded_reading: route.has_downloaded_reading ?? route.hasDownloadedReading,
+                  has_downloaded_reading: hasDownload,
+                  downloaded_reading_id: route.downloaded_reading_id,
                 }
               );
               const local =
@@ -785,7 +790,30 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 localByScheduleId[Number(routeScheduleId)] ??
                 (accountKey ? localByAccount[accountKey] : null);
 
-              // Hard rule: never downgrade completed / saved-offline → pending/Assigned
+              // If Download Reading has the row, always Completed — never Pending.
+              if (hasDownload || isCompletedCustomerStatus(apiStatus)) {
+                if (accountKey) {
+                  completedAccountsStorage.markCompleted({
+                    accountNumber: route.account_number ?? route.accountNumber,
+                    scheduleId: routeScheduleId,
+                    currentReading: route.current_reading ?? route.currentReading,
+                    consumption: route.consumption,
+                    billMonth: route.bill_month ?? route.billMonth ?? null,
+                  }).catch(() => {});
+                }
+                return {
+                  ...route,
+                  reader_id: readerId,
+                  readerId: readerId,
+                  status: 'completed',
+                  has_downloaded_reading: true,
+                  current_reading: route.current_reading ?? route.currentReading ?? local?.current_reading ?? null,
+                  currentReading: route.current_reading ?? route.currentReading ?? local?.current_reading ?? null,
+                  consumption: route.consumption ?? local?.consumption ?? 0,
+                };
+              }
+
+              // Hard rule: never downgrade local completed / saved-offline → pending/Assigned
               const overlay = pickNonDowngradedProgress(
                 apiStatus,
                 route.current_reading ?? route.currentReading,
