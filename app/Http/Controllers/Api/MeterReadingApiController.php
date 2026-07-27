@@ -190,7 +190,7 @@ class MeterReadingApiController extends Controller
             END
         ")->orderByAccountNumberTail()->get();
 
-        // Get downloaded readings for these schedules (any matching completed row).
+        // Get downloaded readings for these schedules (any matching row with a reading).
         // Do not require reader_id match — offline sync may rematch schedule IDs,
         // and completed work must still show as completed for the assigned reader.
         $downloadedReadings = collect();
@@ -198,9 +198,7 @@ class MeterReadingApiController extends Controller
             $scheduleIds = $schedules->pluck('id')->toArray();
             $allDownloaded = DownloadedReading::query()
                 ->whereIn(mr_col('schedule_id'), $scheduleIds)
-                ->where(function ($q) {
-                    $q->whereRaw('LOWER(COALESCE(status, "")) = ?', ['completed']);
-                })
+                ->whereNotNull(mr_col('current_reading'))
                 ->orderByDesc(mr_col('id'))
                 ->get();
 
@@ -240,12 +238,9 @@ class MeterReadingApiController extends Controller
                 $downloaded = $downloadedReadings->get((int) $schedule->id);
                 $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
 
-                // Completed when download exists, or schedule was marked Completed with a reading
-                // (covers sync race / reader_id mismatch on downloaded_readings).
-                $scheduleCompleted = strcasecmp((string) $schedule->status, 'Completed') === 0
-                    && $schedule->current_reading !== null
-                    && $schedule->current_reading !== '';
-                $isReallyCompleted = (bool) $downloaded || $scheduleCompleted;
+                // Completed when a download exists or the schedule already has a current reading.
+                $scheduleHasReading = $schedule->current_reading !== null && $schedule->current_reading !== '';
+                $isReallyCompleted = (bool) $downloaded || $scheduleHasReading;
                 $displayStatus = $isReallyCompleted
                     ? 'completed'
                     : (strcasecmp((string) $schedule->status, 'Completed') === 0
@@ -254,13 +249,13 @@ class MeterReadingApiController extends Controller
 
                 $currentReading = $downloaded
                     ? $downloaded->current_reading
-                    : ($scheduleCompleted ? $schedule->current_reading : null);
+                    : ($scheduleHasReading ? $schedule->current_reading : null);
                 $consumption = $downloaded
                     ? $downloaded->consumption
-                    : ($scheduleCompleted ? $schedule->consumption : null);
+                    : ($scheduleHasReading ? $schedule->consumption : null);
                 $readingDate = $downloaded
                     ? $downloaded->reading_date?->format('Y-m-d')
-                    : ($scheduleCompleted ? $schedule->reading_date?->format('Y-m-d') : null);
+                    : ($scheduleHasReading ? $schedule->reading_date?->format('Y-m-d') : null);
 
                 return [
                     'id' => $schedule->id,
