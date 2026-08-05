@@ -154,6 +154,21 @@ export async function getUnsyncedReadingsForUIMerge() {
   });
 }
 
+/**
+ * Synced local readings used to keep UI "completed" if the routes API still returns Assigned.
+ */
+export async function getSyncedReadingsForUIMerge() {
+  return withReadingsDb(async (conn) => {
+    const rows = await conn.getAllAsync(
+      `SELECT id, schedule_id, current_reading, reading_date, reader_notes, reader_id, consumption, status, lastAttempt, error, retryCount, customer
+       FROM ${TABLE}
+       WHERE status = 'synced'
+       ORDER BY id DESC`
+    );
+    return rows.map(mapRowToReadingQueueItem);
+  });
+}
+
 export async function getAllReadingsForExport() {
   return withReadingsDb(async (conn) => {
     const rows = await conn.getAllAsync(
@@ -315,6 +330,7 @@ export default {
   saveReadingToLocal,
   getPendingReadings,
   getUnsyncedReadingsForUIMerge,
+  getSyncedReadingsForUIMerge,
   getAllReadingsForExport,
   markSyncing,
   markSynced,

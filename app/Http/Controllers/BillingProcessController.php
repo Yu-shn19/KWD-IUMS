@@ -156,11 +156,10 @@ class BillingProcessController extends Controller
                     'message' => 'Zone is required for Meter Reading Preparation.',
                 ], 422);
             }
-            // Zone-only: only ACTIVE consumers (exclude disconnected / inactive)
+            // Zone-only: only ACTIVE consumers (exclude disconnected / inactive), A–Z by account name
             $consumersQuery = ConsumerZone::query()
                 ->whereIn(DB::raw('UPPER(TRIM(COALESCE(status_code, "")))'), ['A', 'ACTIVE'])
-                ->orderBy(mr_col('sequence'))
-                ->orderBy(mr_col('account_no'));
+                ->orderBy(mr_col('account_name'));
             $this->applyZoneCodeFilter($consumersQuery, $zone, 'zone_code');
             $consumers = $consumersQuery->get();
         }

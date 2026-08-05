@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { apiRequest, routesAPI } from './services/api';
 import { getApiConfig } from './config/api';
-import { tokenStorage, routesStorage, userStorage, receiptStorage, printerStorage, receiptLogoStorage, receiptFormatStorage } from './services/storage';
+import { tokenStorage, routesStorage, userStorage, receiptStorage, printerStorage, receiptLogoStorage, receiptFormatStorage, completedAccountsStorage } from './services/storage';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -69,15 +69,74 @@ const isCompletedCustomerStatus = (status) => {
 const isSavedOfflineCustomerStatus = (status) =>
   (status ?? '').toString().trim().toLowerCase() === 'saved offline';
 
-/** Normalize API/cache status so "Completed" and "completed" both show as completed. */
-const normalizeCustomerStatus = (status, currentReading = null) => {
+/** Normalize API/cache status. Match Download Reading: Completed + current reading stay completed. */
+const normalizeCustomerStatus = (status, currentReading = null, extras = {}) => {
   if (isSavedOfflineCustomerStatus(status)) return 'saved offline';
+  // Download Reading / API confirmed row
+  if (extras?.has_downloaded_reading || extras?.hasDownloadedReading) return 'completed';
+  if (extras?.downloaded_reading_id) return 'completed';
   if (isCompletedCustomerStatus(status)) return 'completed';
-  const hasReading = currentReading != null && currentReading !== '';
-  if (hasReading && isCompletedCustomerStatus(status)) return 'completed';
   const s = (status ?? '').toString().trim().toLowerCase();
-  if (hasReading && (s === 'completed' || s === 'verified')) return 'completed';
+  // Web Download Reading uses schedule status "Completed"
+  if (s === 'completed' || s === 'verified') return 'completed';
+  const hasReading = currentReading != null && currentReading !== '';
+  // Curr. Read filled (as on download-reading) ⇒ already read — never Pending
+  if (hasReading) return 'completed';
   return status || 'Assigned';
+};
+
+/** Higher = more final. Used so Completed / Saved offline never downgrade to Pending. */
+const statusProgressRank = (status) => {
+  const s = (status ?? '').toString().trim().toLowerCase();
+  if (s === 'completed' || s === 'verified') return 3;
+  if (s === 'saved offline') return 2;
+  if (s === 'in progress') return 1;
+  return 0;
+};
+
+const getAccountKeyFromRecord = (record) => {
+  const a = (record?.account_number ?? record?.accountNumber ?? record?.account_no ?? '').toString().trim();
+  return a ? a.toLowerCase() : null;
+};
+
+/** Also match by account tail (e.g. 011-32-1851 ↔ 1851) for durable completed overlay. */
+const getAccountTailKey = (recordOrKey) => {
+  const raw = typeof recordOrKey === 'string'
+    ? recordOrKey
+    : (recordOrKey?.account_number ?? recordOrKey?.accountNumber ?? recordOrKey?.account_no ?? '');
+  const a = String(raw ?? '').trim().toLowerCase();
+  if (!a) return null;
+  if (!a.includes('-')) return a;
+  const tail = a.split('-').pop()?.trim();
+  return tail || a;
+};
+
+const findLocalProgress = (localByScheduleId, localByAccount, scheduleId, accountKey, accountTail) => {
+  return (
+    localByScheduleId[scheduleId] ??
+    localByScheduleId[Number(scheduleId)] ??
+    (accountKey ? localByAccount[accountKey] : null) ??
+    (accountTail ? localByAccount[accountTail] : null) ??
+    (accountTail ? localByAccount[`tail:${accountTail}`] : null) ??
+    null
+  );
+};
+
+/**
+ * Never replace completed / saved-offline with Assigned/pending from the API.
+ * Prefer API only when it is at least as advanced (e.g. API completed).
+ */
+const pickNonDowngradedProgress = (apiStatus, apiReading, localPatch) => {
+  if (!localPatch) return null;
+  const apiRank = statusProgressRank(apiStatus);
+  const localRank = statusProgressRank(localPatch.status);
+  if (localRank > apiRank) return localPatch;
+  if (localRank === apiRank && localRank >= 2) {
+    // Same tier: keep a local reading if API has none yet
+    const apiHasReading = apiReading != null && apiReading !== '';
+    if (!apiHasReading && localPatch.current_reading != null) return localPatch;
+  }
+  return null;
 };
 const ReadingEntryModal = ({ visible, onClose, initialReading, selectedCustomer, onSave, presentDate, previousDate, styles: modalStyles }) => {
   const [displayReading, setDisplayReading] = React.useState('0');
@@ -229,7 +288,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
   const [initialReadingForModal, setInitialReadingForModal] = useState('');
   const [customers, setCustomers] = useState([]);
   const [isCleared, setIsCleared] = useState(false);
-  const [shouldSortCustomers, setShouldSortCustomers] = useState(false); 
   const [isOnline, setIsOnline] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -456,7 +514,13 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         zone: c.zone ?? '-',
         address: c.address ?? '-',
         meterNumber: c.meter_number ?? c.meterNumber ?? '-',
-        status: normalizeCustomerStatus(c.status, c.current_reading ?? c.currentReading),
+        status: normalizeCustomerStatus(
+          c.status,
+          c.current_reading ?? c.currentReading,
+          {
+            has_downloaded_reading: c.has_downloaded_reading ?? c.hasDownloadedReading,
+          }
+        ),
         lastReading: c.previous_reading ?? c.lastReading ?? 0,
         currentReading: c.current_reading ?? c.currentReading ?? null,
         estimatedReading: c.estimatedReading ?? 0,
@@ -479,7 +543,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const sid = row.data?.schedule_id;
             if (sid == null && sid !== 0) return;
             const cur = row.data?.current_reading;
-            if (cur == null && cur !== 0) return;
+            if (cur == null) return;
             const cons =
               row.data?.consumption != null
                 ? row.data.consumption
@@ -493,15 +557,82 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             patchBySchedule.set(sid, patch);
             const n = Number(sid);
             if (!Number.isNaN(n)) patchBySchedule.set(n, patch);
+            const acct =
+              getAccountKeyFromRecord(row.data?.customer) ||
+              getAccountKeyFromRecord(row.data);
+            if (acct) patchBySchedule.set(`acct:${acct}`, patch);
           });
           mapped = mapped.map((cust) => {
             const sid = cust.id;
-            const p = patchBySchedule.get(sid) ?? patchBySchedule.get(Number(sid));
+            const acct = getAccountKeyFromRecord(cust);
+            const p =
+              patchBySchedule.get(sid) ??
+              patchBySchedule.get(Number(sid)) ??
+              (acct ? patchBySchedule.get(`acct:${acct}`) : null);
             return p ? { ...cust, ...p } : cust;
           });
         }
       } catch (e) {
         console.warn('SQLite unsynced overlay for cache:', e?.message || e);
+      }
+
+      try {
+        const synced = await readingsLocalService.getSyncedReadingsForUIMerge();
+        if (synced.length > 0) {
+          const patchByKey = new Map();
+          synced.forEach((row) => {
+            const sid = row.data?.schedule_id;
+            const cur = row.data?.current_reading;
+            if (cur == null) return;
+            const patch = {
+              status: 'completed',
+              current_reading: cur,
+              currentReading: cur,
+              consumption: row.data?.consumption != null ? row.data.consumption : 0,
+            };
+            if (sid != null || sid === 0) {
+              patchByKey.set(sid, patch);
+              const n = Number(sid);
+              if (!Number.isNaN(n)) patchByKey.set(n, patch);
+            }
+            const acct =
+              getAccountKeyFromRecord(row.data?.customer) ||
+              getAccountKeyFromRecord(row.data);
+            if (acct) patchByKey.set(`acct:${acct}`, patch);
+          });
+          mapped = mapped.map((cust) => {
+            if (isCompletedCustomerStatus(cust.status)) return cust;
+            if (isSavedOfflineCustomerStatus(cust.status)) return cust;
+            const acct = getAccountKeyFromRecord(cust);
+            const p =
+              patchByKey.get(cust.id) ??
+              patchByKey.get(Number(cust.id)) ??
+              (acct ? patchByKey.get(`acct:${acct}`) : null);
+            return p ? { ...cust, ...p } : cust;
+          });
+        }
+      } catch (e) {
+        console.warn('SQLite synced overlay for cache:', e?.message || e);
+      }
+
+      try {
+        const durable = await completedAccountsStorage.getAll();
+        mapped = mapped.map((cust) => {
+          if (isCompletedCustomerStatus(cust.status)) return cust;
+          if (isSavedOfflineCustomerStatus(cust.status)) return cust;
+          const acct = getAccountKeyFromRecord(cust);
+          const row = acct ? durable[acct] : null;
+          if (!row) return cust;
+          return {
+            ...cust,
+            status: 'completed',
+            currentReading: row.current_reading ?? cust.currentReading,
+            current_reading: row.current_reading ?? cust.current_reading,
+            consumption: row.consumption != null ? row.consumption : cust.consumption,
+          };
+        });
+      } catch (e) {
+        console.warn('Durable completed overlay for cache:', e?.message || e);
       }
 
       console.log('✅ Mapped customers from cache:', mapped.length);
@@ -546,68 +677,199 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               : [];
 
           if (list.length > 0) {
-            // Preserve only local "saved offline" overlays.
-            // Do NOT keep stale local "completed" when server has no downloaded_readings.
+            // Preserve local progress so Completed / Saved offline never snap back to Pending.
             let cachedRoutes = [];
             try {
               cachedRoutes = (await routesStorage.getRoutes()) || [];
             } catch (_) {}
+
             const localByScheduleId = {};
+            const localByAccount = {};
+
+            const rememberLocalProgress = (id, accountKey, patch) => {
+              if (!patch) return;
+              const normalizedStatus = normalizeCustomerStatus(patch.status, patch.current_reading);
+              if (
+                normalizedStatus !== 'saved offline' &&
+                normalizedStatus !== 'completed'
+              ) {
+                return;
+              }
+              // Allow completed without a reading value so status cannot snap back to Pending
+              if (patch.current_reading == null && normalizedStatus !== 'completed') return;
+              const next = {
+                status: normalizedStatus,
+                current_reading: patch.current_reading,
+                currentReading: patch.current_reading,
+                consumption: patch.consumption != null ? patch.consumption : 0,
+              };
+              const store = (map, key) => {
+                if (key == null || key === '') return;
+                const prev = map[key];
+                if (!prev || statusProgressRank(next.status) >= statusProgressRank(prev.status)) {
+                  map[key] = next;
+                }
+              };
+              store(localByScheduleId, id);
+              const n = Number(id);
+              if (!Number.isNaN(n)) store(localByScheduleId, n);
+              store(localByAccount, accountKey);
+              const tail = getAccountTailKey(accountKey || '');
+              if (tail) {
+                store(localByAccount, tail);
+                store(localByAccount, `tail:${tail}`);
+              }
+            };
+
             cachedRoutes.forEach((r) => {
               const id = getScheduleIdFromRecord(r);
-              const status = r.status;
               const currentReading = r.current_reading ?? r.currentReading;
-              const normalizedStatus = normalizeCustomerStatus(status, currentReading);
-              if (id && normalizedStatus === 'saved offline' && (currentReading != null)) {
-                localByScheduleId[id] = {
-                  status: normalizedStatus,
-                  current_reading: currentReading,
-                  currentReading,
-                  consumption: r.consumption != null ? r.consumption : (currentReading != null && r.previous_reading != null ? currentReading - r.previous_reading : r.lastReading != null ? currentReading - r.lastReading : 0),
-                };
-              }
+              rememberLocalProgress(id, getAccountKeyFromRecord(r), {
+                status: r.status,
+                current_reading: currentReading,
+                consumption:
+                  r.consumption != null
+                    ? r.consumption
+                    : currentReading != null && r.previous_reading != null
+                      ? currentReading - r.previous_reading
+                      : r.lastReading != null
+                        ? currentReading - r.lastReading
+                        : 0,
+              });
             });
 
-            // Any schedule with a local unsynced reading stays "saved offline" after API refresh
             try {
               const unsyncedLocal = await readingsLocalService.getUnsyncedReadingsForUIMerge();
               unsyncedLocal.forEach((row) => {
                 const sid = row.data?.schedule_id;
-                if (sid == null && sid !== 0) return;
                 const cur = row.data?.current_reading;
-                if (cur == null && cur !== 0) return;
-                const cons = row.data?.consumption != null ? row.data.consumption : 0;
-                const patch = {
+                const acct =
+                  getAccountKeyFromRecord(row.data?.customer) ||
+                  getAccountKeyFromRecord(row.data);
+                rememberLocalProgress(sid, acct, {
                   status: 'saved offline',
                   current_reading: cur,
-                  currentReading: cur,
-                  consumption: cons,
-                };
-                const n = Number(sid);
-                if (!Number.isNaN(n)) {
-                  localByScheduleId[n] = { ...(localByScheduleId[n] || {}), ...patch };
-                }
-                localByScheduleId[sid] = { ...(localByScheduleId[sid] || {}), ...patch };
+                  consumption: row.data?.consumption != null ? row.data.consumption : 0,
+                });
               });
             } catch (mergeErr) {
               console.warn('SQLite offline merge for routes:', mergeErr?.message);
             }
 
-            const routesWithReaderId = list.map(route => {
-              const routeScheduleId = getScheduleIdFromRecord(route);
-              const apiStatus = normalizeCustomerStatus(
-                route.status,
-                route.current_reading ?? route.currentReading
-              );
-              const local =
-                localByScheduleId[routeScheduleId] ??
-                localByScheduleId[Number(routeScheduleId)];
+            try {
+              const syncedLocal = await readingsLocalService.getSyncedReadingsForUIMerge();
+              syncedLocal.forEach((row) => {
+                const sid = row.data?.schedule_id;
+                const cur = row.data?.current_reading;
+                const acct =
+                  getAccountKeyFromRecord(row.data?.customer) ||
+                  getAccountKeyFromRecord(row.data);
+                rememberLocalProgress(sid, acct, {
+                  status: 'completed',
+                  current_reading: cur,
+                  consumption: row.data?.consumption != null ? row.data.consumption : 0,
+                });
+                if (acct || row.data?.customer?.accountNumber || row.data?.customer?.account_number) {
+                  completedAccountsStorage.markCompleted({
+                    accountNumber:
+                      row.data?.customer?.accountNumber ||
+                      row.data?.customer?.account_number ||
+                      acct,
+                    scheduleId: sid,
+                    currentReading: cur,
+                    consumption: row.data?.consumption,
+                  }).catch(() => {});
+                }
+              });
+            } catch (syncMergeErr) {
+              console.warn('SQLite synced merge for routes:', syncMergeErr?.message);
+            }
 
-              // Trust server for completed. Only overlay unsynced local readings.
-              const overlay =
-                local && local.status === 'saved offline' && !isCompletedCustomerStatus(apiStatus)
-                  ? local
-                  : null;
+            // Durable completed accounts — never allow API Assigned/Pending to wipe these
+            try {
+              const durable = await completedAccountsStorage.getAll();
+              Object.keys(durable || {}).forEach((acctKey) => {
+                const row = durable[acctKey];
+                if (!row) return;
+                rememberLocalProgress(row.schedule_id, acctKey, {
+                  status: 'completed',
+                  current_reading: row.current_reading,
+                  consumption: row.consumption != null ? row.consumption : 0,
+                });
+              });
+            } catch (durableErr) {
+              console.warn('Durable completed merge:', durableErr?.message);
+            }
+
+            const routesWithReaderId = list.map((route) => {
+              const routeScheduleId = getScheduleIdFromRecord(route);
+              const accountKey = getAccountKeyFromRecord(route);
+              const scheduleStatus = route.schedule_status ?? route.scheduleStatus ?? route.status;
+              const effectiveReading =
+                route.current_reading ??
+                route.currentReading ??
+                route.schedule_current_reading ??
+                route.scheduleCurrentReading ??
+                null;
+              const effectiveConsumption =
+                route.consumption ??
+                route.schedule_consumption ??
+                route.scheduleConsumption ??
+                null;
+              const hasDownload =
+                !!(route.has_downloaded_reading ?? route.hasDownloadedReading ?? route.downloaded_reading_id);
+              const apiStatus = normalizeCustomerStatus(
+                scheduleStatus,
+                effectiveReading,
+                {
+                  has_downloaded_reading: hasDownload,
+                  downloaded_reading_id: route.downloaded_reading_id,
+                }
+              );
+              const local = findLocalProgress(
+                localByScheduleId,
+                localByAccount,
+                routeScheduleId,
+                accountKey,
+                getAccountTailKey(route)
+              );
+
+              // Match Download Reading page: Completed / Curr.Read / download ⇒ never Pending
+              const looksCompletedOnServer =
+                hasDownload ||
+                isCompletedCustomerStatus(apiStatus) ||
+                isCompletedCustomerStatus(scheduleStatus) ||
+                (effectiveReading != null && effectiveReading !== '') ||
+                (effectiveConsumption != null && Number(effectiveConsumption) > 0);
+
+              if (looksCompletedOnServer) {
+                if (accountKey) {
+                  completedAccountsStorage.markCompleted({
+                    accountNumber: route.account_number ?? route.accountNumber,
+                    scheduleId: routeScheduleId,
+                    currentReading: effectiveReading,
+                    consumption: effectiveConsumption,
+                    billMonth: route.bill_month ?? route.billMonth ?? null,
+                  }).catch(() => {});
+                }
+                return {
+                  ...route,
+                  reader_id: readerId,
+                  readerId: readerId,
+                  status: 'completed',
+                  has_downloaded_reading: true,
+                  current_reading: effectiveReading ?? local?.current_reading ?? null,
+                  currentReading: effectiveReading ?? local?.current_reading ?? null,
+                  consumption: effectiveConsumption ?? local?.consumption ?? 0,
+                };
+              }
+
+              // Hard rule: never downgrade local completed / saved-offline → pending/Assigned
+              const overlay = pickNonDowngradedProgress(
+                apiStatus,
+                effectiveReading,
+                local
+              );
 
               return {
                 ...route,
@@ -626,7 +888,38 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
 
             await routesStorage.saveRoutes(routesWithReaderId);
 
-            const mapped = routesWithReaderId.map((c, idx) => ({
+            const mapped = routesWithReaderId.map((c, idx) => {
+              const accountKey = getAccountKeyFromRecord(c);
+              const local =
+                localByScheduleId[getScheduleIdFromRecord(c)] ??
+                localByScheduleId[Number(getScheduleIdFromRecord(c))] ??
+                (accountKey ? localByAccount[accountKey] : null);
+              let status = normalizeCustomerStatus(
+                c.status,
+                c.current_reading ?? c.currentReading,
+                {
+                  has_downloaded_reading: c.has_downloaded_reading ?? c.hasDownloadedReading,
+                }
+              );
+              let currentReading = c.current_reading ?? c.currentReading ?? null;
+              let consumption = c.consumption ?? 0;
+              // Final lock: local/durable completed always wins over Pending/Assigned
+              if (local && statusProgressRank(local.status) > statusProgressRank(status)) {
+                status = local.status;
+                if (local.current_reading != null) currentReading = local.current_reading;
+                if (local.consumption != null) consumption = local.consumption;
+              }
+              // Seed durable store when API/server already confirms completed
+              if (isCompletedCustomerStatus(status) && accountKey) {
+                completedAccountsStorage.markCompleted({
+                  accountNumber: c.account_number ?? c.accountNumber,
+                  scheduleId: getScheduleIdFromRecord(c),
+                  currentReading,
+                  consumption,
+                  billMonth: c.bill_month ?? c.billMonth ?? null,
+                }).catch(() => {});
+              }
+              return {
               id: getScheduleIdFromRecord(c) ?? `route-${c.account_number ?? c.accountNumber ?? idx}`,
               sedrNumber: c.sedr_number ?? c.sedrNumber ?? null,
               sequence: resolveConsumerSequence({
@@ -641,11 +934,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               zone: c.zone ?? '-',
               address: c.address ?? '-',
               meterNumber: c.meter_number ?? c.meterNumber ?? '-',
-              status: normalizeCustomerStatus(c.status, c.current_reading ?? c.currentReading),
+              status,
               lastReading: c.previous_reading ?? c.lastReading ?? 0,
-              currentReading: c.current_reading ?? c.currentReading ?? null,
+              currentReading,
               estimatedReading: c.estimatedReading ?? 0,
-              consumption: c.consumption ?? 0,
+              consumption,
               billMonth: c.bill_month ?? c.billMonth ?? null,
               billDate: c.bill_date ?? c.billDate ?? c.reading_date ?? c.readingDate ?? c.scheduleReadingDate ?? null,
               dueDate: c.due_date ?? c.dueDate ?? null,
@@ -653,10 +946,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               scheduleReadingDate: c.reading_date ?? c.readingDate ?? c.scheduleReadingDate ?? c.bill_date ?? c.billDate ?? null,
               arrears: parseFloat(c.arrears ?? 0),
               readerId: readerId,
-            }));
+            };
+            });
 
             setCustomers(mapped);
-            setShouldSortCustomers(true); // Enable sorting when refreshing
             if (showAlerts) {
               Alert.alert('✅ Routes Loaded', `${mapped.length} route(s) downloaded from the server.`);
             }
@@ -667,7 +960,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const cachedCustomers = await loadCustomersFromCache(readerId);
             if (cachedCustomers.length > 0) {
               setCustomers(cachedCustomers);
-              setShouldSortCustomers(false);
               console.log('✅ Using cached data:', cachedCustomers.length, 'customers');
               if (showAlerts) {
                 Alert.alert('Using Cached Data', `Loaded ${cachedCustomers.length} route(s) from cache.`);
@@ -679,7 +971,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             if (showAlerts) {
               if (customers.length === 0) {
                 setCustomers([]);
-                setShouldSortCustomers(false);
                 Alert.alert('No Routes', 'No routes assigned yet. Contact admin to assign schedules.');
               } else {
                 Alert.alert('Using Existing Routes', 'No new routes found from server. Keeping your locally saved assigned routes.');
@@ -702,7 +993,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       
       if (cachedCustomers.length > 0) {
         setCustomers(cachedCustomers);
-        setShouldSortCustomers(false);
         console.log('✅ Loaded', cachedCustomers.length, 'customers from cache (offline mode)');
         if (showAlerts) {
           Alert.alert('Offline Mode', `Loaded ${cachedCustomers.length} route(s) from cache. Connect to internet to refresh.`);
@@ -713,7 +1003,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         if (showAlerts) {
           if (customers.length === 0) {
             setCustomers([]);
-            setShouldSortCustomers(false);
             Alert.alert('No Cached Data', 'No routes found in cache. Connect to internet and refresh to download routes.');
           } else {
             Alert.alert('Offline Mode', 'No new cached routes found. Keeping your currently displayed assigned routes.');
@@ -738,7 +1027,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         console.error('Error loading from cache:', cacheError);
         if (customers.length === 0) {
           setCustomers([]);
-          setShouldSortCustomers(false);
         }
         if (showAlerts) {
           Alert.alert(
@@ -801,6 +1089,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                     `${result.synced} reading(s) synced and completed!${result.failed > 0 ? `\n${result.failed} failed` : ''}`,
                     [{ text: 'OK' }]
                   );
+                }
+                // Refresh list so synced accounts stay Completed (not Pending)
+                if (result.synced > 0) {
+                  await loadCustomersFromRoutes(false);
                 }
               } else {
                 Alert.alert(
@@ -1029,18 +1321,6 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     
     loadInitialData();
   }, []);
-
-  // Disable sorting after it's been applied (after refresh)
-  useEffect(() => {
-    if (shouldSortCustomers) {
-      // Disable sorting after the current render cycle
-      // This ensures sorting only happens once after refresh, not on every status change
-      const timer = setTimeout(() => {
-        setShouldSortCustomers(false);
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [shouldSortCustomers]);
 
   const METER_MAINTENANCE_CHARGE = METER_RENTAL;
 
@@ -1511,12 +1791,65 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         const fromApi = findInList(list);
         if (fromApi != null) {
           try {
+            // Merge API schedules into cache WITHOUT wiping local completed / saved-offline.
+            const existing = (await routesStorage.getRoutes()) || [];
+            const progressById = {};
+            const progressByAcct = {};
+            existing.forEach((r) => {
+              const st = normalizeCustomerStatus(r.status, r.current_reading ?? r.currentReading);
+              if (st !== 'saved offline' && st !== 'completed') return;
+              const reading = r.current_reading ?? r.currentReading;
+              if (reading == null) return;
+              const patch = {
+                status: st,
+                current_reading: reading,
+                currentReading: reading,
+                consumption: r.consumption != null ? r.consumption : 0,
+              };
+              const sid = getScheduleIdFromRecord(r);
+              if (sid != null) {
+                progressById[sid] = patch;
+                const n = Number(sid);
+                if (!Number.isNaN(n)) progressById[n] = patch;
+              }
+              const acct = getAccountKeyFromRecord(r);
+              if (acct) progressByAcct[acct] = patch;
+            });
+
             await routesStorage.saveRoutes(
-              list.map((route) => ({
-                ...route,
-                reader_id: readerId,
-                readerId: readerId,
-              }))
+              list.map((route) => {
+                const sid = getScheduleIdFromRecord(route);
+                const acct = getAccountKeyFromRecord(route);
+                const local =
+                  progressById[sid] ??
+                  progressById[Number(sid)] ??
+                  (acct ? progressByAcct[acct] : null);
+                const apiStatus = normalizeCustomerStatus(
+                  route.status,
+                  route.current_reading ?? route.currentReading,
+                  {
+                    has_downloaded_reading: route.has_downloaded_reading ?? route.hasDownloadedReading,
+                  }
+                );
+                const overlay = pickNonDowngradedProgress(
+                  apiStatus,
+                  route.current_reading ?? route.currentReading,
+                  local
+                );
+                return {
+                  ...route,
+                  reader_id: readerId,
+                  readerId: readerId,
+                  ...(overlay
+                    ? {
+                        status: overlay.status,
+                        current_reading: overlay.current_reading,
+                        currentReading: overlay.current_reading,
+                        consumption: overlay.consumption,
+                      }
+                    : {}),
+                };
+              })
             );
           } catch (_) {}
           return fromApi;
@@ -1615,36 +1948,57 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       }
       if (uploadResult && uploadResult.success) {
         try {
+          const accountKey = (() => {
+            const a = getAccountFromReadingData(readingData);
+            return a ? String(a).trim().toLowerCase() : null;
+          })();
+          const accountNumber = getAccountFromReadingData(readingData);
+          await completedAccountsStorage.markCompleted({
+            accountNumber,
+            scheduleId,
+            currentReading: readingData.current_reading,
+            consumption: readingData.consumption,
+            billMonth: readingData.customer?.billMonth || readingData.customer?.bill_month || null,
+          });
           const stored = (await routesStorage.getRoutes()) || [];
-          const updatedStored = stored.map((r) =>
-            matchesScheduleId(r, scheduleId)
-              ? {
-                  ...r,
-                  status: 'completed',
-                  current_reading: readingData.current_reading,
-                  currentReading: readingData.current_reading,
-                  consumption:
-                    readingData.consumption != null
-                      ? readingData.consumption
-                      : r.consumption,
-                }
-              : r
-          );
+          const updatedStored = stored.map((r) => {
+            const sameId = matchesScheduleId(r, scheduleId);
+            const sameAcct =
+              accountKey && getAccountKeyFromRecord(r) === accountKey;
+            if (!sameId && !sameAcct) return r;
+            return {
+              ...r,
+              status: 'completed',
+              current_reading: readingData.current_reading,
+              currentReading: readingData.current_reading,
+              consumption:
+                readingData.consumption != null
+                  ? readingData.consumption
+                  : r.consumption,
+            };
+          });
           await routesStorage.saveRoutes(updatedStored);
         } catch (e) {
           console.warn('Could not update routes cache after sync:', e?.message);
         }
         setCustomers((prev) =>
-          prev.map((c) =>
-            matchesScheduleId(c, scheduleId)
-              ? {
-                  ...c,
-                  status: 'completed',
-                  currentReading: readingData.current_reading,
-                  consumption: readingData.consumption,
-                }
-              : c
-          )
+          prev.map((c) => {
+            const accountKey = (() => {
+              const a = getAccountFromReadingData(readingData);
+              return a ? String(a).trim().toLowerCase() : null;
+            })();
+            const sameId = matchesScheduleId(c, scheduleId);
+            const sameAcct =
+              accountKey && getAccountKeyFromRecord(c) === accountKey;
+            if (!sameId && !sameAcct) return c;
+            return {
+              ...c,
+              status: 'completed',
+              currentReading: readingData.current_reading,
+              current_reading: readingData.current_reading,
+              consumption: readingData.consumption,
+            };
+          })
         );
       }
 
@@ -1731,7 +2085,13 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       setPendingCount(initialPendingCount);
       const optimisticCustomers = customers.map((c) =>
         matchesScheduleId(c, scheduleId)
-          ? { ...c, status: 'saved offline', currentReading: reading, consumption: consumption }
+          ? {
+              ...c,
+              status: 'saved offline',
+              currentReading: reading,
+              current_reading: reading,
+              consumption: consumption,
+            }
           : c
       );
       setCustomers(optimisticCustomers);
@@ -1865,32 +2225,25 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       return !normalizedSearch || name.includes(normalizedSearch) || account.includes(normalizedSearch) || meterNumber.includes(normalizedSearch);
     });
 
-    if (!shouldSortCustomers) return filteredCustomers;
-
+    // Always A–Z by account name (then account number)
     return [...filteredCustomers].sort((a, b) => {
-      const statusA = a.status || 'Assigned';
-      const statusB = b.status || 'Assigned';
-
-      const getStatusPriority = (status) => {
-        if (isCompletedCustomerStatus(status)) return 2;
-        if (isSavedOfflineCustomerStatus(status)) return 1;
-        return 0;
-      };
-
-      const priorityA = getStatusPriority(statusA);
-      const priorityB = getStatusPriority(statusB);
-
-      if (priorityA !== priorityB) {
-        return priorityA - priorityB;
-      }
+      const nameA = (a.name || a.account_name || '').toLowerCase();
+      const nameB = (b.name || b.account_name || '').toLowerCase();
+      const byName = nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+      if (byName !== 0) return byName;
 
       const accountA = (a.accountNumber || a.account_number || '').toLowerCase();
       const accountB = (b.accountNumber || b.account_number || '').toLowerCase();
       return accountA.localeCompare(accountB, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [customers, normalizedSearch, shouldSortCustomers]);
+  }, [customers, normalizedSearch]);
 
-  const renderCustomerItem = useCallback(({ item: customer }) => (
+  const renderCustomerItem = useCallback(({ item: customer }) => {
+    const displayStatus = normalizeCustomerStatus(
+      customer.status,
+      customer.currentReading ?? customer.current_reading
+    );
+    return (
     <TouchableOpacity
       style={[
         styles.customerItem,
@@ -1928,19 +2281,20 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       <View style={styles.customerStatus}>
         <View style={[
           styles.statusBadge,
-          isCompletedCustomerStatus(customer.status) ? styles.completedBadge :
-          isSavedOfflineCustomerStatus(customer.status) ? styles.offlineBadge :
+          isCompletedCustomerStatus(displayStatus) ? styles.completedBadge :
+          isSavedOfflineCustomerStatus(displayStatus) ? styles.offlineBadge :
           styles.pendingBadge
         ]}>
           <Text style={styles.statusText}>
-            {isCompletedCustomerStatus(customer.status) ? '✅ Completed' :
-              isSavedOfflineCustomerStatus(customer.status) ? '💾 Saved Offline' :
+            {isCompletedCustomerStatus(displayStatus) ? '✅ Completed' :
+              isSavedOfflineCustomerStatus(displayStatus) ? '💾 Saved Offline' :
               '⏳ Pending'}
           </Text>
         </View>
       </View>
     </TouchableOpacity>
-  ), [handleCustomerSelect, selectedCustomer?.id]);
+    );
+  }, [handleCustomerSelect, selectedCustomer?.id]);
 
   // Memoize date calculations to prevent recalculation on every render
   const presentDate = useMemo(() => formatDateMDY(new Date()), []);

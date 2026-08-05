@@ -34,13 +34,77 @@ export default function Routes({ onBack }) {
           ? response.data
           : [];
 
-      await routesStorage.saveRoutes([]);
-      
+      // Keep local completed / saved-offline so Read and Bill does not snap back to Pending
+      let existing = [];
+      try {
+        existing = (await routesStorage.getRoutes()) || [];
+      } catch (_) {}
+      const progressById = {};
+      const progressByAcct = {};
+      const rank = (status) => {
+        const s = (status ?? '').toString().trim().toLowerCase();
+        if (s === 'completed' || s === 'verified') return 3;
+        if (s === 'saved offline') return 2;
+        return 0;
+      };
+      const accountKey = (r) => {
+        const a = (r?.account_number ?? r?.accountNumber ?? '').toString().trim();
+        return a ? a.toLowerCase() : null;
+      };
+      const scheduleId = (r) => r?.schedule_id ?? r?.scheduleId ?? r?.id ?? null;
+      existing.forEach((r) => {
+        const st = (r.status ?? '').toString().trim().toLowerCase();
+        if (st !== 'completed' && st !== 'verified' && st !== 'saved offline') return;
+        const reading = r.current_reading ?? r.currentReading;
+        if (reading == null) return;
+        const patch = {
+          status: st === 'saved offline' ? 'saved offline' : 'completed',
+          current_reading: reading,
+          currentReading: reading,
+          consumption: r.consumption != null ? r.consumption : 0,
+        };
+        const sid = scheduleId(r);
+        if (sid != null) {
+          progressById[sid] = patch;
+          const n = Number(sid);
+          if (!Number.isNaN(n)) progressById[n] = patch;
+        }
+        const acct = accountKey(r);
+        if (acct) progressByAcct[acct] = patch;
+      });
+
       if (list.length > 0) {
-        await routesStorage.saveRoutes(list);
-        setCustomers(list);
+        const merged = list.map((route) => {
+          const sid = scheduleId(route);
+          const acct = accountKey(route);
+          const local =
+            progressById[sid] ??
+            progressById[Number(sid)] ??
+            (acct ? progressByAcct[acct] : null);
+          const apiStatus = (route.status ?? '').toString().trim().toLowerCase();
+          const apiReading = route.current_reading ?? route.currentReading;
+          const apiCompleted =
+            apiStatus === 'completed' ||
+            apiStatus === 'verified' ||
+            route.has_downloaded_reading ||
+            (apiReading != null && apiReading !== '');
+          if (apiCompleted || !local || rank(local.status) <= rank(apiStatus)) {
+            return { ...route, reader_id: readerId, readerId: readerId };
+          }
+          return {
+            ...route,
+            reader_id: readerId,
+            readerId: readerId,
+            status: local.status,
+            current_reading: local.current_reading,
+            currentReading: local.current_reading,
+            consumption: local.consumption,
+          };
+        });
+        await routesStorage.saveRoutes(merged);
+        setCustomers(merged);
         if (showAlerts) {
-          Alert.alert('✅ Loaded', `${list.length} route(s) assigned.\n\nShowing latest assignments from the server.`);
+          Alert.alert('✅ Loaded', `${merged.length} route(s) assigned.\n\nShowing latest assignments from the server.`);
         }
       } else {
         setCustomers([]);
