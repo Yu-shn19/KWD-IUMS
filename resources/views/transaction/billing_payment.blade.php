@@ -448,24 +448,28 @@
                                                 </thead>
                                                 <tbody>
                                                     <tr>
-                                                        <td>Current Bill</td>
+                                                        <td>Current Billing</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldCurrentBill" data-charge value="216.60"></td>
                                                     </tr>
                                                     <tr>
-                                                        <td>Arrears — Current Year</td>
+                                                        <td>Current MR</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldArrearsCurrent" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
-                                                        <td>Arrears — Previous Year</td>
+                                                        <td>Prio Years</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldArrearsPrevious" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
-                                                        <td>Penalty</td>
+                                                        <td>Current Arrears</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldPenalty" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
-                                                        <td>Water Maintenance Charge</td>
+                                                        <td>Current Penalty</td>
                                                         <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldMaintenance" data-charge value="0.00"></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>MR Arrears</td>
+                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldMrArrears" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>
@@ -474,7 +478,7 @@
                                                                     <input type="checkbox" id="enableSeniorDiscount">
                                                                 </div>
                                                                 <label for="enableSeniorDiscount" class="senior-discount-label mb-0">
-                                                                    Sr. Citizen Discount <small class="text-muted">(5% of Current Bill)</small>
+                                                                    Sr. Citizen Discount <small class="text-muted">(5% of Current Billing)</small>
                                                                 </label>
                                                             </div>
                                                         </td>
@@ -1247,7 +1251,7 @@
             // Enable/disable form fields
             const disableFormFields = (disabled) => {
                 const fieldsToDisable = [
-                    'fieldCurrentBill', 'fieldPenalty', 'fieldMaintenance', 'fieldAdvances',
+                    'fieldCurrentBill', 'fieldPenalty', 'fieldMaintenance', 'fieldMrArrears', 'fieldAdvances',
                     'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldSeniorDiscount',
                     'fieldOthers', 'fieldMaterials', 'fieldFees', 'fieldInspection',
                     'paymentType', 'paymentRemarks', 'cashTendered', 'enableSeniorDiscount'
@@ -1280,6 +1284,7 @@
                 'fieldArrearsPrevious',
                 'fieldPenalty',
                 'fieldMaintenance',
+                'fieldMrArrears',
                 'fieldAdvances',
                 'sundryAmount1',
                 'sundryAmount2',
@@ -1326,7 +1331,7 @@
             const updateTotals = () => {
                 // Subtotal = Current Bill + Arrears Current Year + Arrears Previous Year + Penalty + Water Maintenance Charge + Advances
                 // Sr. Citizen Discount is deducted only when checkbox is checked.
-                const subtotalChargeIds = ['fieldCurrentBill', 'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldPenalty', 'fieldMaintenance', 'fieldAdvances'];
+                const subtotalChargeIds = ['fieldCurrentBill', 'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldPenalty', 'fieldMaintenance', 'fieldMrArrears', 'fieldAdvances'];
                 let subtotal = 0;
                 subtotalChargeIds.forEach(id => {
                     const el = document.getElementById(id);
@@ -2453,7 +2458,7 @@
 
                 // Clear all fields to empty/zero
                 const fieldsToClear = [
-                    'fieldCurrentBill', 'fieldPenalty', 'fieldMaintenance', 'fieldAdvances',
+                    'fieldCurrentBill', 'fieldPenalty', 'fieldMaintenance', 'fieldMrArrears', 'fieldAdvances',
                     'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldSeniorDiscount',
                     'fieldOthers', 'fieldMaterials', 'fieldFees', 'fieldInspection',
                     'accountNumber', 'accountName', 'billMonth', 'transactionDate',

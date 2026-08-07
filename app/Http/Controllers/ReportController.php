@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Exports\ConsumerLedgerMultiSheetExport;
 use App\Services\ConsumerLedgerCardBuilder;
 use App\Models\ConsumerZone;
+use App\Models\DisconnectionOrder;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
+use App\Models\User;
 use App\Support\SundryLedgerRemarks;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -2487,6 +2489,178 @@ class ReportController extends Controller
     }
     
     /**
+     * Parse Y-m month input; fall back when invalid.
+     */
+    protected function visualSummaryParseMonth(string $input, Carbon $fallback): Carbon
+    {
+        try {
+            return Carbon::createFromFormat('Y-m', $input)->startOfMonth();
+        } catch (\Throwable $e) {
+            return $fallback->copy()->startOfMonth();
+        }
+    }
+
+    /**
+     * @return \Closure(): \Illuminate\Database\Query\Builder
+     */
+    protected function visualSummaryConsumerSnapshotQuery(string $zoneRoute, Carbon $snapshotEnd): \Closure
+    {
+        return function () use ($zoneRoute, $snapshotEnd) {
+            $q = DB::table(mr_col('consumer_zone'));
+            if ($zoneRoute !== '') {
+                $q->where(mr_col('zone_code'), $zoneRoute);
+            }
+            if (Schema::hasColumn('consumer_zone', 'created_at')) {
+                $q->where(function ($w) use ($snapshotEnd) {
+                    $w->whereNull(mr_col('created_at'))
+                        ->orWhere(mr_col('created_at'), '<=', $snapshotEnd);
+                });
+            }
+
+            return $q;
+        };
+    }
+
+    /**
+     * @return array{0: array<int, string>, 1: array<int, float>, 2: array<int, int>}
+     */
+    protected function visualSummaryConsumptionSeries(Carbon $chartAnchor, Carbon $todayEnd, string $zoneRoute): array
+    {
+        $labels = [];
+        $consumptionData = [];
+        $accountsData = [];
+
+        for ($i = 11; $i >= 0; $i--) {
+            $m = $chartAnchor->copy()->subMonths($i)->startOfMonth();
+            $mStart = $m->copy()->startOfDay();
+            $mEnd = $m->copy()->endOfMonth();
+            if ($mEnd->gt($todayEnd)) {
+                $mEnd = $todayEnd->copy();
+            }
+
+            $labels[] = $m->format('M');
+
+            if ($mStart->gt($todayEnd)) {
+                $consumptionData[] = 0.0;
+                $accountsData[] = 0;
+                continue;
+            }
+
+            $query = DB::table(mr_col('downloaded_readings as dr'))
+                ->join(mr_col('consumer_zone as cz'), mr_col('dr.consumer_zone_id'), '=', mr_col('cz.id'))
+                ->whereBetween(mr_col('dr.reading_date'), [$mStart->toDateString(), $mEnd->toDateString()])
+                ->whereNotNull(mr_col('dr.consumer_zone_id'));
+
+            if ($zoneRoute !== '') {
+                ConsumerZone::applyZoneCodeConstraint($query, $zoneRoute, 'cz.zone_code');
+            }
+
+            $consumptionData[] = (float) (clone $query)->sum(DB::raw('COALESCE(dr.consumption, 0)'));
+            $accountsData[] = (int) (clone $query)->distinct()->count(mr_col('dr.consumer_zone_id'));
+        }
+
+        return [$labels, $consumptionData, $accountsData];
+    }
+
+    /**
+     * @return array{0: array<int, string>, 1: array<int, int>, 2: int}
+     */
+    protected function visualSummaryDisconnectionByZone(string $zoneRoute): array
+    {
+        if (!Schema::hasTable('disconnection_orders')) {
+            return [['—'], [0], 0];
+        }
+
+        $czIdCol = DisconnectionOrder::consumerZoneIdColumn();
+        $query = DisconnectionOrder::query()
+            ->join(mr_col('consumer_zone as cz'), 'cz.id', '=', 'disconnection_orders.' . $czIdCol)
+            ->where(mr_col('disconnection_orders.status'), 'assigned')
+            ->whereNotNull(mr_col('cz.zone_code'))
+            ->where(mr_col('cz.zone_code'), '!=', '');
+
+        if ($zoneRoute !== '') {
+            ConsumerZone::applyZoneCodeConstraint($query, $zoneRoute, 'cz.zone_code');
+        }
+
+        $rows = $query
+            ->select(mr_col('cz.zone_code as zone_code'), DB::raw('COUNT(*) as total'))
+            ->groupBy(mr_col('cz.zone_code'))
+            ->orderBy(mr_col('cz.zone_code'))
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return [['—'], [0], 0];
+        }
+
+        $labels = $rows->map(fn ($r) => 'Zone ' . trim((string) $r->zone_code))->values()->all();
+        $data = $rows->map(fn ($r) => (int) $r->total)->values()->all();
+        $total = array_sum($data);
+
+        return [$labels, $data, $total];
+    }
+
+    /**
+     * @return array{0: int, 1: int, 2: int, 3: int}
+     */
+    protected function visualSummaryConsumerStatusCounts(
+        string $zoneRoute,
+        Carbon $statusMonthStart,
+        Carbon $statusMonthEnd,
+        Carbon $statusSnapshotEnd
+    ): array {
+        $baseQuery = $this->visualSummaryConsumerSnapshotQuery($zoneRoute, $statusSnapshotEnd);
+
+        $activeConsumers = (int) $baseQuery()
+            ->whereRaw("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')")
+            ->count();
+
+        $newConnectionQuery = ConsumerZone::query();
+        if ($zoneRoute !== '') {
+            ConsumerZone::applyZoneCodeConstraint($newConnectionQuery, $zoneRoute);
+        }
+        if (Schema::hasColumn('consumer_zone', 'install_date')) {
+            $newConnectionQuery->whereNotNull(mr_col('install_date'))
+                ->whereBetween(mr_col('install_date'), [$statusMonthStart->toDateString(), $statusMonthEnd->toDateString()]);
+        } elseif (Schema::hasColumn('consumer_zone', 'created_at')) {
+            $newConnectionQuery->whereBetween(mr_col('created_at'), [$statusMonthStart, $statusMonthEnd]);
+        } else {
+            $newConnectionQuery->whereRaw('0 = 1');
+        }
+        $newConnections = (int) $newConnectionQuery->count();
+
+        $disconnectedCount = 0;
+        $reconnectedCount = 0;
+        if (Schema::hasTable('disconnection_orders')) {
+            $czIdCol = DisconnectionOrder::consumerZoneIdColumn();
+            $disconnectedQuery = DisconnectionOrder::query()
+                ->join(mr_col('consumer_zone as cz'), 'cz.id', '=', 'disconnection_orders.' . $czIdCol)
+                ->where(mr_col('disconnection_orders.status'), 'disconnected')
+                ->whereNotNull(mr_col('disconnection_orders.disconnected_at'))
+                ->whereBetween(mr_col('disconnection_orders.disconnected_at'), [$statusMonthStart->toDateString(), $statusMonthEnd->toDateString()]);
+            if ($zoneRoute !== '') {
+                ConsumerZone::applyZoneCodeConstraint($disconnectedQuery, $zoneRoute, 'cz.zone_code');
+            }
+            $disconnectedCount = (int) $disconnectedQuery->count();
+
+            $reconnectedQuery = DisconnectionOrder::query()
+                ->join(mr_col('consumer_zone as cz'), 'cz.id', '=', 'disconnection_orders.' . $czIdCol)
+                ->where(mr_col('disconnection_orders.status'), 'reconnected')
+                ->whereBetween(mr_col('disconnection_orders.updated_at'), [$statusMonthStart, $statusMonthEnd]);
+            if ($zoneRoute !== '') {
+                ConsumerZone::applyZoneCodeConstraint($reconnectedQuery, $zoneRoute, 'cz.zone_code');
+            }
+            $reconnectedCount = (int) $reconnectedQuery->count();
+        }
+
+        return [$activeConsumers, $newConnections, $disconnectedCount, $reconnectedCount];
+    }
+
+    protected function visualSummaryFormatCurrency(float $amount): string
+    {
+        return number_format($amount, 2, '.', ',');
+    }
+
+    /**
      * Visual Summary: KPIs, charts, and tables backed by the database.
      *
      * Query: zone_route (empty = all), bill_month (Y-m).
@@ -2529,20 +2703,19 @@ class ReportController extends Controller
         $zoneRoute = trim((string) $request->input('zone_route', ''));
         $chartAnchor = $now->copy()->startOfMonth();
 
-        $baseConsumerQuery = function () use ($zoneRoute, $snapshotEnd) {
-            $q = DB::table(mr_col('consumer_zone'));
-            if ($zoneRoute !== '') {
-                $q->where(mr_col('zone_code'), $zoneRoute);
-            }
-            if (Schema::hasColumn('consumer_zone', 'created_at')) {
-                $q->where(function ($w) use ($snapshotEnd) {
-                    $w->whereNull(mr_col('created_at'))
-                        ->orWhere(mr_col('created_at'), '<=', $snapshotEnd);
-                });
-            }
+        $statusMonthInput = trim((string) $request->input('status_month', $billMonthInput));
+        $statusMonth = $this->visualSummaryParseMonth($statusMonthInput, $billMonth);
+        $statusMonthStart = $statusMonth->copy()->startOfMonth()->startOfDay();
+        $statusMonthEnd = $statusMonth->copy()->endOfMonth()->endOfDay();
+        $statusSnapshotEnd = $statusMonth->copy()->endOfMonth()->endOfDay();
+        if ($statusSnapshotEnd->gt($todayEnd)) {
+            $statusSnapshotEnd = $todayEnd->copy();
+        }
+        if ($statusMonthEnd->gt($todayEnd)) {
+            $statusMonthEnd = $todayEnd->copy();
+        }
 
-            return $q;
-        };
+        $baseConsumerQuery = $this->visualSummaryConsumerSnapshotQuery($zoneRoute, $snapshotEnd);
 
         $zonesFromConsumers = DB::table(mr_col('consumer_zone'))
             ->whereNotNull(mr_col('zone_code'))
@@ -2560,10 +2733,6 @@ class ReportController extends Controller
         $zoneOptions = $zonesFromConsumers->merge($zonesFromSchedules)->filter()->unique()->sort()->values();
 
         $totalConsumers = (int) $baseConsumerQuery()->count();
-
-        $consumerExistsForStatus = function () use ($baseConsumerQuery) {
-            return $baseConsumerQuery();
-        };
 
         // Same payment scope as Collection Report (consumer_payments + dr/mrs/cz, zone COALESCE, date on paid_at/created_at).
         $applyCollectionReportDateRange = static function ($q, Carbon $from, Carbon $to): void {
@@ -2691,17 +2860,25 @@ class ReportController extends Controller
             }
         }
 
-        $statusCount = function (string $rawSql) use ($consumerExistsForStatus): int {
-            return (int) $consumerExistsForStatus()->whereRaw($rawSql)->count();
-        };
-        $activeConsumers = $statusCount("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')");
-        $pendingConsumers = $statusCount("UPPER(TRIM(COALESCE(status_code, ''))) IN ('P', 'PENDING')");
-        $disconnectedConsumers = $statusCount("UPPER(TRIM(COALESCE(status_code, ''))) IN ('X', 'DISCONNECTED', 'D')");
-        $statusOther = max(0, $totalConsumers - $activeConsumers - $pendingConsumers - $disconnectedConsumers);
+        [$consumptionChartLabels, $consumptionChartData, $accountsChartData] = $this->visualSummaryConsumptionSeries(
+            $chartAnchor,
+            $todayEnd,
+            $zoneRoute
+        );
+
+        [$zoneDisconnectionChartLabels, $zoneDisconnectionChartData, $totalDisconnectionAccounts] = $this->visualSummaryDisconnectionByZone($zoneRoute);
+
+        [$activeConsumers, $newConnections, $disconnectedConsumers, $reconnectedConsumers] = $this->visualSummaryConsumerStatusCounts(
+            $zoneRoute,
+            $statusMonthStart,
+            $statusMonthEnd,
+            $statusSnapshotEnd
+        );
         $statusChartData = [
             $activeConsumers,
-            $pendingConsumers + $statusOther,
+            $newConnections,
             $disconnectedConsumers,
+            $reconnectedConsumers,
         ];
 
         $zoneKeySql = 'cz.zone_code';
@@ -2902,11 +3079,18 @@ class ReportController extends Controller
             'pendingArrears' => $pendingArrears,
             'revenueChartLabels' => $revenueChartLabels,
             'revenueChartData' => $revenueChartData,
+            'consumptionChartLabels' => $consumptionChartLabels,
+            'consumptionChartData' => $consumptionChartData,
+            'accountsChartLabels' => $consumptionChartLabels,
+            'accountsChartData' => $accountsChartData,
             'statusChartData' => $statusChartData,
             'zoneChartLabels' => $zoneChartLabels,
             'zoneChartData' => $zoneChartData,
             'zoneUnpaidChartLabels' => $zoneUnpaidChartLabels,
             'zoneUnpaidChartData' => $zoneUnpaidChartData,
+            'zoneDisconnectionChartLabels' => $zoneDisconnectionChartLabels,
+            'zoneDisconnectionChartData' => $zoneDisconnectionChartData,
+            'totalDisconnectionAccounts' => $totalDisconnectionAccounts,
             'topConsumption' => $topConsumption,
             'topOutstanding' => $topOutstanding,
             'topTablesMonthLabel' => $billMonth->format('F Y'),
@@ -2914,7 +3098,199 @@ class ReportController extends Controller
             'filters' => [
                 'zone_route' => $zoneRoute,
                 'bill_month' => $billMonthInput,
+                'status_month' => $statusMonth->format('Y-m'),
             ],
+        ]);
+    }
+
+    /**
+     * JSON list for Visual Summary consumer status drill-down modal.
+     */
+    public function visualSummaryConsumerStatusList(Request $request)
+    {
+        $request->validate([
+            'type' => ['required', 'string', 'in:active,new_connection,disconnected,reconnected'],
+            'zone_route' => ['nullable', 'string'],
+            'bill_month' => ['nullable', 'string'],
+            'status_month' => ['nullable', 'string'],
+        ]);
+
+        $type = (string) $request->input('type');
+        $zoneRoute = trim((string) $request->input('zone_route', ''));
+        $now = Carbon::now();
+        $todayEnd = $now->copy()->endOfDay();
+        $billMonth = $this->visualSummaryParseMonth(
+            trim((string) $request->input('bill_month', $now->format('Y-m'))),
+            $now
+        );
+        $statusMonthInput = trim((string) $request->input('status_month', $billMonth->format('Y-m')));
+        $statusMonth = $this->visualSummaryParseMonth($statusMonthInput, $billMonth);
+        $statusMonthStart = $statusMonth->copy()->startOfMonth()->startOfDay();
+        $statusMonthEnd = $statusMonth->copy()->endOfMonth()->endOfDay();
+        $statusSnapshotEnd = $statusMonth->copy()->endOfMonth()->endOfDay();
+        if ($statusSnapshotEnd->gt($todayEnd)) {
+            $statusSnapshotEnd = $todayEnd->copy();
+        }
+        if ($statusMonthEnd->gt($todayEnd)) {
+            $statusMonthEnd = $todayEnd->copy();
+        }
+
+        $records = collect();
+
+        if ($type === 'active' || $type === 'new_connection') {
+            $query = ConsumerZone::query();
+            if ($zoneRoute !== '') {
+                ConsumerZone::applyZoneCodeConstraint($query, $zoneRoute);
+            }
+
+            if ($type === 'active') {
+                if (Schema::hasColumn('consumer_zone', 'created_at')) {
+                    $query->where(function ($w) use ($statusSnapshotEnd) {
+                        $w->whereNull(mr_col('created_at'))
+                            ->orWhere(mr_col('created_at'), '<=', $statusSnapshotEnd);
+                    });
+                }
+                $query->whereRaw("UPPER(TRIM(COALESCE(status_code, ''))) IN ('A', 'ACTIVE')");
+            } else {
+                if (Schema::hasColumn('consumer_zone', 'install_date')) {
+                    $query->whereNotNull(mr_col('install_date'))
+                        ->whereBetween(mr_col('install_date'), [$statusMonthStart->toDateString(), $statusMonthEnd->toDateString()]);
+                } elseif (Schema::hasColumn('consumer_zone', 'created_at')) {
+                    $query->whereBetween(mr_col('created_at'), [$statusMonthStart, $statusMonthEnd]);
+                } else {
+                    $query->whereRaw('0 = 1');
+                }
+            }
+
+            $records = $query
+                ->orderBy(mr_col('zone_code'))
+                ->orderBy(mr_col('account_name'))
+                ->limit(500)
+                ->get()
+                ->map(function (ConsumerZone $consumer) {
+                    return [
+                        'account_no' => $consumer->account_no,
+                        'account_name' => $consumer->account_name,
+                        'address' => $consumer->address,
+                        'zone_code' => $consumer->zone_code,
+                        'status' => $consumer->status_label,
+                        'category' => $consumer->category_code,
+                        'meter_number' => $consumer->meter_number,
+                        'created_at' => $consumer->created_at
+                            ? Carbon::parse($consumer->created_at)->format('m/d/Y')
+                            : ($consumer->install_date
+                                ? Carbon::parse($consumer->install_date)->format('m/d/Y')
+                                : '—'),
+                    ];
+                });
+        } elseif (Schema::hasTable('disconnection_orders')) {
+            $czIdCol = DisconnectionOrder::consumerZoneIdColumn();
+            $query = DisconnectionOrder::query()
+                ->with(['consumerZone', 'disconnector'])
+                ->join(mr_col('consumer_zone as cz'), 'cz.id', '=', 'disconnection_orders.' . $czIdCol);
+
+            if ($zoneRoute !== '') {
+                ConsumerZone::applyZoneCodeConstraint($query, $zoneRoute, 'cz.zone_code');
+            }
+
+            if ($type === 'disconnected') {
+                $query->where(mr_col('disconnection_orders.status'), 'disconnected')
+                    ->whereNotNull(mr_col('disconnection_orders.disconnected_at'))
+                    ->whereBetween(mr_col('disconnection_orders.disconnected_at'), [$statusMonthStart->toDateString(), $statusMonthEnd->toDateString()])
+                    ->orderByDesc(mr_col('disconnection_orders.disconnected_at'));
+            } else {
+                $query->where(mr_col('disconnection_orders.status'), 'reconnected')
+                    ->whereBetween(mr_col('disconnection_orders.updated_at'), [$statusMonthStart, $statusMonthEnd])
+                    ->orderByDesc(mr_col('disconnection_orders.updated_at'));
+            }
+
+            $records = $query
+                ->select('disconnection_orders.*')
+                ->limit(500)
+                ->get()
+                ->map(function (DisconnectionOrder $order) use ($type) {
+                    $disconnectedAt = $order->disconnected_at
+                        ? Carbon::parse($order->disconnected_at)->format('m/d/Y')
+                        : '—';
+                    $reconnectedAt = $order->updated_at
+                        ? Carbon::parse($order->updated_at)->format('m/d/Y h:i A')
+                        : '—';
+                    $outstanding = round((float) ($order->total_outstanding ?? 0), 2);
+
+                    return [
+                        'disconnected_at' => $disconnectedAt,
+                        'reconnected_at' => $reconnectedAt,
+                        'account_no' => $order->account_no,
+                        'account_name' => $order->account_name,
+                        'zone_code' => $order->zone_code,
+                        'status' => ucfirst((string) $order->status),
+                        'disconnected_by' => optional($order->disconnector)->name ?? '—',
+                        'reconnected_by' => $type === 'reconnected' ? (optional($order->disconnector)->name ?? '—') : '—',
+                        'outstanding' => '₱ ' . $this->visualSummaryFormatCurrency($outstanding),
+                    ];
+                });
+        }
+
+        return response()->json([
+            'success' => true,
+            'type' => $type,
+            'month_label' => $statusMonth->format('F Y'),
+            'count' => $records->count(),
+            'records' => $records->values(),
+        ]);
+    }
+
+    /**
+     * JSON list for Visual Summary disconnection-by-zone drill-down modal.
+     */
+    public function visualSummaryDisconnectionOrdersByZone(Request $request)
+    {
+        $request->validate([
+            'zone_code' => ['required', 'string'],
+        ]);
+
+        if (!Schema::hasTable('disconnection_orders')) {
+            return response()->json([
+                'success' => true,
+                'count' => 0,
+                'orders' => [],
+            ]);
+        }
+
+        $zoneCode = trim((string) $request->input('zone_code'));
+        $czIdCol = DisconnectionOrder::consumerZoneIdColumn();
+
+        $orders = DisconnectionOrder::query()
+            ->with(['consumerZone', 'disconnector'])
+            ->join(mr_col('consumer_zone as cz'), 'cz.id', '=', 'disconnection_orders.' . $czIdCol)
+            ->where(mr_col('disconnection_orders.status'), 'assigned')
+            ->where(function ($q) use ($zoneCode) {
+                ConsumerZone::applyZoneCodeConstraint($q, $zoneCode, 'cz.zone_code');
+            })
+            ->select('disconnection_orders.*')
+            ->orderByDesc(mr_col('disconnection_orders.created_at'))
+            ->limit(500)
+            ->get()
+            ->map(function (DisconnectionOrder $order) {
+                $outstanding = round((float) ($order->total_outstanding ?? 0), 2);
+
+                return [
+                    'date_saved' => $order->created_at
+                        ? Carbon::parse($order->created_at)->format('m/d/Y h:i A')
+                        : '—',
+                    'account_no' => $order->account_no ?? '—',
+                    'account_name' => $order->account_name ?? '—',
+                    'assigned_to' => optional($order->disconnector)->name ?? '—',
+                    'current_bill' => '₱ ' . $this->visualSummaryFormatCurrency(0),
+                    'outstanding' => '₱ ' . $this->visualSummaryFormatCurrency($outstanding),
+                    'status' => ucfirst((string) ($order->status ?? 'Assigned')),
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'count' => $orders->count(),
+            'orders' => $orders->values(),
         ]);
     }
 
