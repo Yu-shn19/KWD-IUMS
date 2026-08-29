@@ -73,6 +73,7 @@ class ActivityLogger
         'meter-reading.assign' => 'Assigned Meter Reading',
         'meter-reading.unassign' => 'Unassigned Meter Reading',
         'meter-reading.upload-previous-reading' => 'Uploaded Previous Reading',
+        'download-reading.delete-schedule' => 'Deleted Meter Reading Schedule',
 
         // Billing adjustment
         'billing-adjustment.store' => 'Created Billing Adjustment',

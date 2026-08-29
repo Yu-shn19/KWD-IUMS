@@ -343,6 +343,7 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     // Download Reading page
     Route::get('/download-reading', [MeterReadingController::class, 'downloadReadingPage'])->name('download-reading');
     Route::get('/download-reading/summary', [MeterReadingController::class, 'getAssignmentsSummary'])->name('download-reading.summary');
+    Route::post('/download-reading/delete-schedule', [MeterReadingController::class, 'deleteSchedule'])->name('download-reading.delete-schedule');
 
     // Visual Summary page route
     Route::get('/visual-summary', [ReportController::class, 'visualSummary'])->name('visual-summary');
