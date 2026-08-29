@@ -126,10 +126,10 @@ class CreatePenalties extends Command
                 'mrs.bill_date',
                 'mrs.bill_month',
                 'mrs.due_date',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.prepared_by',
                 'dr.id as downloaded_id',
-                'dr.current_bill as downloaded_current_bill'
+                'dr.current_billing as downloaded_current_billing'
             )
             ->where('mrs.consumer_zone_id', $consumerZoneId)
             ->whereNotNull('mrs.due_date')
@@ -140,7 +140,7 @@ class CreatePenalties extends Command
 
         foreach ($schedules as $schedule) {
             $dueDate = Carbon::parse($schedule->due_date);
-            $currentBill = $schedule->downloaded_current_bill ?? $schedule->current_bill ?? 0;
+            $currentBill = $schedule->downloaded_current_billing ?? $schedule->current_billing ?? 0;
             $billMonth = $schedule->bill_month ? Carbon::parse($schedule->bill_month) : null;
 
             if ($currentBill <= 0 || !$dueDate) {

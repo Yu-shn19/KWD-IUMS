@@ -616,14 +616,14 @@ class ConsumerLedgerController extends Controller
                 'mrs.current_reading',
                 'mrs.previous_reading',
                 'mrs.consumption',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'mrs.prepared_by',
                 'mrs.created_at',
                 'mrs.sedr_number',
                 'dr.id as downloaded_id',
-                'dr.current_bill as downloaded_current_bill',
+                'dr.current_billing as downloaded_current_billing',
                 'dr.current_reading as downloaded_current_reading',
                 'dr.consumption as downloaded_consumption'
             );
@@ -662,7 +662,7 @@ class ConsumerLedgerController extends Controller
             }
 
             // Use downloaded_readings data if available (actual submitted data), otherwise schedule's data
-            $currentBill = $schedule->downloaded_current_bill ?? $schedule->current_bill ?? 0;
+            $currentBill = $schedule->downloaded_current_billing ?? $schedule->current_billing ?? 0;
             $currentReading = $schedule->downloaded_current_reading ?? $schedule->current_reading ?? $schedule->previous_reading ?? '';
             $consumption = $schedule->downloaded_consumption ?? $schedule->consumption ?? 0;
 
@@ -1095,11 +1095,11 @@ class ConsumerLedgerController extends Controller
                 'mrs.id as schedule_id',
                 'mrs.bill_date',
                 'mrs.due_date',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.prepared_by',
                 'mrs.created_at',
                 'dr.id as downloaded_id',
-                'dr.current_bill as downloaded_current_bill',
+                'dr.current_billing as downloaded_current_billing',
                 'dr.status',
                 'dr.paid_at'
             );
@@ -1128,13 +1128,13 @@ class ConsumerLedgerController extends Controller
 
         foreach ($schedules as $schedule) {
             $dueDate = Carbon::parse($schedule->due_date);
-            $currentBill = $schedule->downloaded_current_bill ?? $schedule->current_bill ?? 0;
+            $currentBill = $schedule->downloaded_current_billing ?? $schedule->current_billing ?? 0;
 
             // Skip if no current bill or invalid due date
             if ($currentBill <= 0 || !$dueDate) {
                 Log::info('Penalty skipped - no bill or invalid date', [
                     'schedule_id' => $schedule->schedule_id,
-                    'current_bill' => $currentBill,
+                    'current_billing' => $currentBill,
                     'due_date' => $dueDate ? $dueDate->format('Y-m-d') : 'null'
                 ]);
                 continue;
@@ -1160,7 +1160,7 @@ class ConsumerLedgerController extends Controller
                 'due_date' => $dueDate->format('Y-m-d'),
                 'penalty_date' => $penaltyDate->format('Y-m-d'),
                 'today' => $today->format('Y-m-d'),
-                'current_bill' => $currentBill
+                'current_billing' => $currentBill
             ]);
 
             // Check if penalty entry already exists in penalties table
@@ -1385,7 +1385,7 @@ class ConsumerLedgerController extends Controller
                 'cz.account_name',
                 'dr.consumption',
                 'dr.current_reading',
-                'dr.current_bill as downloaded_current_bill',
+                'dr.current_billing as downloaded_current_billing',
                 'dr.reading_date',
                 'dr.status',
                 'cp.payment_method',
@@ -1401,7 +1401,7 @@ class ConsumerLedgerController extends Controller
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
-                'mrs.current_bill as schedule_current_bill',
+                'mrs.current_billing as schedule_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'mrs.previous_reading',
@@ -1455,7 +1455,7 @@ class ConsumerLedgerController extends Controller
             $dueDate = $reading->due_date ? Carbon::parse($reading->due_date) : null;
             
             // Use downloaded_readings.current_bill if available, otherwise schedule's current_bill
-            $currentBill = $reading->downloaded_current_bill ?? $reading->schedule_current_bill ?? 0;
+            $currentBill = $reading->downloaded_current_billing ?? $reading->schedule_current_billing ?? 0;
             
             // Penalty is NOT shown in BILL entry - it will be created as a separate PENALTY row
             // Separate PENALTY entries are created by createPenaltyEntries() method
@@ -1549,7 +1549,7 @@ class ConsumerLedgerController extends Controller
                         'paid_at' => $reading->paid_at,
                         'payment_amount' => $reading->payment_amount,
                         'total_amount' => $reading->total_amount,
-                        'current_bill' => $currentBill
+                        'current_billing' => $currentBill
                     ]);
                 }
                 
@@ -1918,7 +1918,7 @@ class ConsumerLedgerController extends Controller
         $czTable = mr_col('consumer_zone as cz');
         $drConsumerZoneId = mr_col('dr.consumer_zone_id');
         $czId = mr_col('cz.id');
-        $drCurrentBill = mr_col('dr.current_bill');
+        $drCurrentBill = mr_col('dr.current_billing');
         $drReadingDate = mr_col('dr.reading_date');
         $drCreatedAt = mr_col('dr.created_at');
         $cpTable = mr_col('consumer_payments as cp');
@@ -1943,7 +1943,7 @@ class ConsumerLedgerController extends Controller
         $latestBillPaid = false;
 
         if ($latestBillFromDownloaded) {
-            $latestBillAmount = (float)($latestBillFromDownloaded->current_bill ?? 0);
+            $latestBillAmount = (float)($latestBillFromDownloaded->current_billing ?? 0);
             $latestBillPaid = DB::table($cpTable)
                 ->where($cpReadingId, $latestBillFromDownloaded->id ?? null)
                 ->whereNotNull($cpPaymentAmount)

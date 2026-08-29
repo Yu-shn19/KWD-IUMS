@@ -26,7 +26,7 @@ class MeterReadingSchedule extends Model
         'current_reading',
         'reading_date',
         'consumption',
-        'current_bill',
+        'current_billing',
         'arrears',
         'total_amount',
         'status',
@@ -41,7 +41,7 @@ class MeterReadingSchedule extends Model
         'disconnection_date' => 'date',
         'previous_reading_date' => 'date',
         'reading_date' => 'date',
-        'current_bill' => 'decimal:2',
+        'current_billing' => 'decimal:2',
         'arrears' => 'decimal:2',
         'total_amount' => 'decimal:2',
     ];

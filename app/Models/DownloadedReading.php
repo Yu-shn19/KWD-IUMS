@@ -14,7 +14,7 @@ class DownloadedReading extends Model
         'previous_reading',
         'current_reading',
         'consumption',
-        'current_bill',
+        'current_billing',
         'reading_date',
         'status',
         'reader_notes',
@@ -25,7 +25,7 @@ class DownloadedReading extends Model
 
     protected $casts = [
         'reading_date' => 'date',
-        'current_bill' => 'decimal:2',
+        'current_billing' => 'decimal:2',
         'paid_at' => 'datetime',
     ];
 

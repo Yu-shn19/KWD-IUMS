@@ -27,7 +27,7 @@ return new class extends Migration {
 
             $table->integer('consumption')->nullable();
 
-            $table->decimal('current_bill', 12, 2)->nullable();
+            $table->decimal('current_billing', 12, 2)->nullable();
 
             $table->date('reading_date')->nullable();
 

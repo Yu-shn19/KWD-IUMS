@@ -1576,7 +1576,7 @@
                         if (typeof setPaymentStatusForMonth === 'function' && !orValueForDetails) {
                             setPaymentStatusForMonth(data.payment_status === 'paid' ? 'paid' : 'unpaid');
                         }
-                        setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_bill || 0);
+                        setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_billing || 0);
                         const penaltyField = document.getElementById('fieldPenalty');
                         if (penaltyField) {
                             setNumberFieldValue(penaltyField, data.penalty || 0);
@@ -1584,11 +1584,11 @@
                         }
                         setNumberFieldValue(document.getElementById('fieldMaintenance'), data.maintenance || 0);
                         setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.arrears_cy ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.arrears_py ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.current_arrears ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.prio_years ?? 0);
                         latestServerSeniorDiscount = parseNumeric(data.senior_citizen_discount ?? 0);
                         setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                        setNumberFieldValue(document.getElementById('fieldOthers'), data.others || 0);
+                        setNumberFieldValue(document.getElementById('fieldMrArrears'), data.current_mr || 0);
                         setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                         setNumberFieldValue(document.getElementById('fieldFees'), 0);
                         setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -1775,7 +1775,7 @@
                 // Only populate Current Bill and Water Maintenance Charge automatically
                 const currentBillField = document.getElementById('fieldCurrentBill');
                 if (currentBillField) {
-                    const currentBillValue = parseNumeric(billing.current_bill);
+                    const currentBillValue = parseNumeric(billing.current_billing);
                     currentBillField.value = currentBillValue > 0 ? currentBillValue.toFixed(2) : '0.00';
                     // Trigger input event to ensure updateTotals picks it up
                     currentBillField.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1842,7 +1842,7 @@
                     seniorDiscountField.readOnly = true;
                 }
                 
-                setNumberFieldValue(document.getElementById('fieldOthers'), 0);
+                setNumberFieldValue(document.getElementById('fieldMrArrears'), 0);
                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
                 setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -1870,7 +1870,7 @@
                 const hasExactOrMatch = typedOrNumber !== '' && (typedOrNumber === downloadedOr || typedOrNumber === paymentRefOr);
                 const isExplicitOrLookup = useOrForBreakdownLookup === true;
                 const isPaid = isExplicitOrLookup ? hasExactOrMatch : hasMonthPaidRecord;
-                const hasPaymentBreakdown = payment && (payment.current_bill !== undefined || payment.penalty !== undefined || payment.meter_maintenance !== undefined);
+                const hasPaymentBreakdown = payment && (payment.current_billing !== undefined || payment.current_penalty !== undefined || payment.mr_arrears !== undefined);
                 const hasCurrentBalance = (parseFloat(currentBalanceValue) || 0) > 0.009;
                 // Keep saved paid breakdown for paid-month account lookup (including zero balance).
                 // For remaining-balance + explicit OR flow, `isPaid` is false until OR matches, so API recompute still runs.
@@ -1922,7 +1922,7 @@
                     const paymentStatusFromApi = result.data.payment_status === 'paid';
                     setPaymentStatusForMonth(paymentStatusFromApi ? 'paid' : 'unpaid');
                 }
-                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), result.data.current_bill ?? 0);
+                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), result.data.current_billing ?? 0);
                                 const penaltyField = document.getElementById('fieldPenalty');
                                 if (penaltyField) {
                                     setNumberFieldValue(penaltyField, result.data.penalty ?? 0);
@@ -1930,11 +1930,11 @@
                                 }
                                 setNumberFieldValue(document.getElementById('fieldMaintenance'), result.data.maintenance ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
-                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), result.data.arrears_cy ?? 0);
-                                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), result.data.arrears_py ?? 0);
+                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), result.data.current_arrears ?? 0);
+                                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), result.data.prio_years ?? 0);
                                 latestServerSeniorDiscount = parseNumeric(result.data.senior_citizen_discount ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                                setNumberFieldValue(document.getElementById('fieldOthers'), result.data.others ?? 0);
+                                setNumberFieldValue(document.getElementById('fieldMrArrears'), result.data.current_mr ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
                                 setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -1967,21 +1967,21 @@
 
                 if (isPaid) {
                     // When paid: show breakdown from payment record (consumer_payments) when available
-                    const hasPaymentBreakdown = payment && (payment.current_bill !== undefined || payment.penalty !== undefined || payment.meter_maintenance !== undefined);
+                    const hasPaymentBreakdown = payment && (payment.current_billing !== undefined || payment.current_penalty !== undefined || payment.mr_arrears !== undefined);
                     if (hasPaymentBreakdown) {
-                        setNumberFieldValue(document.getElementById('fieldCurrentBill'), payment.current_bill ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldCurrentBill'), payment.current_billing ?? 0);
                         const penaltyField = document.getElementById('fieldPenalty');
                         if (penaltyField) {
-                            setNumberFieldValue(penaltyField, payment.penalty ?? 0);
+                            setNumberFieldValue(penaltyField, payment.current_penalty ?? 0);
                             penaltyField.dispatchEvent(new Event('input', { bubbles: true }));
                         }
-                        setNumberFieldValue(document.getElementById('fieldMaintenance'), payment.meter_maintenance ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldMaintenance'), payment.mr_arrears ?? 0);
                         setNumberFieldValue(document.getElementById('fieldAdvances'), payment.advances ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), payment.arrears_cy ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), payment.arrears_py ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), payment.current_arrears ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), payment.prio_years ?? 0);
                         latestServerSeniorDiscount = parseNumeric(payment.senior_citizen_discount ?? 0);
                         setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                        setNumberFieldValue(document.getElementById('fieldOthers'), payment.others ?? 0);
+                        setNumberFieldValue(document.getElementById('fieldMrArrears'), payment.current_mr ?? 0);
                         const enableSeniorDiscountCheckboxPaid = document.getElementById('enableSeniorDiscount');
                         if (enableSeniorDiscountCheckboxPaid) {
                             enableSeniorDiscountCheckboxPaid.checked = (parseFloat(payment.senior_citizen_discount) || 0) > 0;
@@ -1994,7 +1994,7 @@
                         // - if bill <= balance: keep bill in Current Bill, put remainder in Arrears CY
                         // - if bill > balance: put full balance in Arrears CY and set Current Bill to 0
                         const balanceNow = parseNumeric(currentBalanceValue);
-                        const monthBill = parseNumeric(payment.current_bill ?? 0);
+                        const monthBill = parseNumeric(payment.current_billing ?? 0);
                         if (balanceNow > 0.009) {
                             if (monthBill > 0 && monthBill <= balanceNow) {
                                 setNumberFieldValue(document.getElementById('fieldCurrentBill'), monthBill);
@@ -2212,9 +2212,9 @@
                     }
                     
                     const paidWithBreakdownForMonth = payload.data?.payment?.status === 'paid'
-                        && (payload.data?.payment?.current_bill !== undefined
-                            || payload.data?.payment?.penalty !== undefined
-                            || payload.data?.payment?.meter_maintenance !== undefined);
+                        && (payload.data?.payment?.current_billing !== undefined
+                            || payload.data?.payment?.current_penalty !== undefined
+                            || payload.data?.payment?.mr_arrears !== undefined);
                     const balanceFromPayload = parseNumeric(payload.data?.account?.current_balance);
                     const hasOutstandingBalance = (parseFloat(balanceFromPayload) || 0) > 0.009;
                     const shouldUseOrBreakdownForPaidMonth = currentOrValue !== '' && paidWithBreakdownForMonth && hasOutstandingBalance;
@@ -2339,7 +2339,7 @@
                         return;
                     }
                     useOrForBreakdownLookup = true;
-                    const paidWithBreakdown = payload.data?.payment?.status === 'paid' && (payload.data?.payment?.current_bill !== undefined || payload.data?.payment?.penalty !== undefined);
+                    const paidWithBreakdown = payload.data?.payment?.status === 'paid' && (payload.data?.payment?.current_billing !== undefined || payload.data?.payment?.current_penalty !== undefined);
                     lockPaidOrBreakdown = !!paidWithBreakdown;
                     populateFromLookup(payload.data);
                     if (paymentRemarksField) {
@@ -3015,7 +3015,7 @@
                 const advancesValue = parseNumeric(document.getElementById('fieldAdvances')?.value || 0);
                 const arrearsCyValue = parseNumeric(document.getElementById('fieldArrearsCurrent')?.value || 0);
                 const arrearsPyValue = parseNumeric(document.getElementById('fieldArrearsPrevious')?.value || 0);
-                const othersValue = parseNumeric(document.getElementById('fieldOthers')?.value || 0);
+                const mrArrearsValue = parseNumeric(document.getElementById('fieldMrArrears')?.value || 0);
                 const materialsValue = parseNumeric(document.getElementById('fieldMaterials')?.value || 0);
                 const feesChargesValue = parseNumeric(document.getElementById('fieldFees')?.value || 0);
                 const inspectionFeeValue = parseNumeric(document.getElementById('fieldInspection')?.value || 0);
@@ -3079,14 +3079,14 @@
                         remarks: remarks,
                         official_receipt_number: baseOrNumber,
                         is_update: false,
-                        current_bill: currentBillValue,
+                        current_billing: currentBillValue,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
-                        penalty: penaltyValue,
-                        meter_maintenance: meterMaintenanceValue,
+                        current_penalty: penaltyValue,
+                        mr_arrears: meterMaintenanceValue,
                         advances: advancesValue,
-                        arrears_cy: arrearsCyValue,
-                        arrears_py: arrearsPyValue,
-                        others: othersValue,
+                        current_arrears: arrearsCyValue,
+                        prio_years: arrearsPyValue,
+                        current_mr: mrArrearsValue,
                         materials: materialsValue,
                         fees_charges: feesChargesValue,
                         inspection_fee: inspectionFeeValue,
@@ -3206,7 +3206,7 @@
                     const advancesValue = parseNumeric(document.getElementById('fieldAdvances')?.value || 0);
                     const arrearsCyValue = parseNumeric(document.getElementById('fieldArrearsCurrent')?.value || 0);
                     const arrearsPyValue = parseNumeric(document.getElementById('fieldArrearsPrevious')?.value || 0);
-                    const othersValue = parseNumeric(document.getElementById('fieldOthers')?.value || 0);
+                    const mrArrearsValue = parseNumeric(document.getElementById('fieldMrArrears')?.value || 0);
                     const materialsValue = parseNumeric(document.getElementById('fieldMaterials')?.value || 0);
                     const feesChargesValue = parseNumeric(document.getElementById('fieldFees')?.value || 0);
                     const inspectionFeeValue = parseNumeric(document.getElementById('fieldInspection')?.value || 0);
@@ -3241,14 +3241,14 @@
                         remarks: remarks,
                         official_receipt_number: baseOrNumber,
                         is_update: true,
-                        current_bill: currentBillValue,
+                        current_billing: currentBillValue,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
-                        penalty: penaltyValue,
-                        meter_maintenance: meterMaintenanceValue,
+                        current_penalty: penaltyValue,
+                        mr_arrears: meterMaintenanceValue,
                         advances: advancesValue,
-                        arrears_cy: arrearsCyValue,
-                        arrears_py: arrearsPyValue,
-                        others: othersValue,
+                        current_arrears: arrearsCyValue,
+                        prio_years: arrearsPyValue,
+                        current_mr: mrArrearsValue,
                         materials: materialsValue,
                         fees_charges: feesChargesValue,
                         inspection_fee: inspectionFeeValue,

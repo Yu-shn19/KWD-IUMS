@@ -57,7 +57,7 @@ class ReportController extends Controller
 
     protected function resolveCurrentBill($item, Carbon $asOfDate): float
     {
-        $storedCurrentBill = (float) ($item->current_bill ?? 0);
+        $storedCurrentBill = (float) ($item->current_billing ?? 0);
         if ($storedCurrentBill > 0) {
             return $storedCurrentBill;
         }
@@ -97,13 +97,13 @@ class ReportController extends Controller
                 'mrs.previous_reading as mrs_previous_reading',
                 'mrs.current_reading as mrs_current_reading',
                 'mrs.consumption as mrs_consumption',
-                'mrs.current_bill as mrs_current_bill',
+                'mrs.current_billing as mrs_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'dr.previous_reading as dr_previous_reading',
                 'dr.current_reading as dr_current_reading',
                 'dr.consumption as dr_consumption',
-                'dr.current_bill as dr_current_bill',
+                'dr.current_billing as dr_current_billing',
                 'dr.reading_date',
                 'cl.debit as ledger_debit',
                 'cl.others as ledger_others'
@@ -131,7 +131,7 @@ class ReportController extends Controller
                 $debit = (float) $item->ledger_debit;
                 $baseCurrentBill = max(0, $debit - $others);
             } else {
-                $storedCurrentBill = $item->dr_current_bill ?? $item->mrs_current_bill ?? 0;
+                $storedCurrentBill = $item->dr_current_billing ?? $item->mrs_current_billing ?? 0;
                 $baseCurrentBill = (float) $storedCurrentBill;
 
                 if ($baseCurrentBill <= 0 && $consumption > 0) {
@@ -262,14 +262,14 @@ class ReportController extends Controller
                 'mrs.previous_reading as mrs_previous_reading',
                 'mrs.current_reading as mrs_current_reading',
                 'mrs.consumption as mrs_consumption',
-                'mrs.current_bill as mrs_current_bill',
+                'mrs.current_billing as mrs_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'dr.id as downloaded_id',
                 'dr.previous_reading as dr_previous_reading',
                 'dr.current_reading as dr_current_reading',
                 'dr.consumption as dr_consumption',
-                'dr.current_bill as dr_current_bill',
+                'dr.current_billing as dr_current_billing',
                 'dr.reading_date',
                 'cz.id as consumer_zone_id',
                 'cl.debit as ledger_debit',
@@ -307,7 +307,7 @@ class ReportController extends Controller
                 $baseCurrentBill = max(0, $debit - $others); // Base current bill = debit - others
             } else {
                 // Fallback: use downloaded_readings.current_bill, then meter_reading_schedules.current_bill
-                $storedCurrentBill = $item->dr_current_bill ?? $item->mrs_current_bill ?? 0;
+                $storedCurrentBill = $item->dr_current_billing ?? $item->mrs_current_billing ?? 0;
                 $baseCurrentBill = $storedCurrentBill;
                 
                 // Calculate current bill if not stored
@@ -352,7 +352,7 @@ class ReportController extends Controller
                 'previous_reading' => $previousReading,
                 'current_reading' => $currentReading,
                 'computed_consumption' => round($consumption, 0),
-                'computed_current_bill' => round($currentBill, 2),
+                'computed_current_billing' => round($currentBill, 2),
                 'computed_arrears' => round($arrears, 2),
                 'computed_total' => $totalAmountStored > 0 ? round($totalAmountStored, 2) : $computedTotal,
                 'consumer_zone_id' => $item->consumer_zone_id,
@@ -362,7 +362,7 @@ class ReportController extends Controller
         $totals = [
             'accounts' => $records->count(),
             'consumption' => $records->sum(fn ($item) => $item->computed_consumption),
-            'current_bill' => $records->sum(fn ($item) => $item->computed_current_bill),
+            'current_billing' => $records->sum(fn ($item) => $item->computed_current_billing),
             'arrears' => $records->sum(fn ($item) => $item->computed_arrears),
             'total_amount' => $records->sum(fn ($item) => $item->computed_total),
         ];
@@ -373,7 +373,7 @@ class ReportController extends Controller
             return [
                 'accounts' => $items->count(),
                 'consumption' => $items->sum(fn ($item) => $item->computed_consumption),
-                'current_bill' => $items->sum(fn ($item) => $item->computed_current_bill),
+                'current_billing' => $items->sum(fn ($item) => $item->computed_current_billing),
                 'arrears' => $items->sum(fn ($item) => $item->computed_arrears),
                 'total_amount' => $items->sum(fn ($item) => $item->computed_total),
             ];
@@ -438,14 +438,14 @@ class ReportController extends Controller
                 'mrs.previous_reading as mrs_previous_reading',
                 'mrs.current_reading as mrs_current_reading',
                 'mrs.consumption as mrs_consumption',
-                'mrs.current_bill as mrs_current_bill',
+                'mrs.current_billing as mrs_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'dr.id as downloaded_id',
                 'dr.previous_reading as dr_previous_reading',
                 'dr.current_reading as dr_current_reading',
                 'dr.consumption as dr_consumption',
-                'dr.current_bill as dr_current_bill',
+                'dr.current_billing as dr_current_billing',
                 'dr.reading_date',
                 'cz.id as consumer_zone_id',
                 'cl.debit as ledger_debit',
@@ -481,7 +481,7 @@ class ReportController extends Controller
                 $baseCurrentBill = max(0, $debit - $others); // Base current bill = debit - others
             } else {
                 // Fallback: use downloaded_readings.current_bill, then meter_reading_schedules.current_bill
-                $storedCurrentBill = $item->dr_current_bill ?? $item->mrs_current_bill ?? 0;
+                $storedCurrentBill = $item->dr_current_billing ?? $item->mrs_current_billing ?? 0;
                 $baseCurrentBill = $storedCurrentBill;
                 
                 // Calculate current bill if not stored
@@ -779,7 +779,7 @@ class ReportController extends Controller
                 'mrs.disconnection_date',
                 'mrs.due_date',
                 'mrs.bill_month',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.arrears',
                 'mrs.total_amount'
             )
@@ -836,7 +836,7 @@ class ReportController extends Controller
             foreach ($accountSchedules as $schedule) {
                 $scheduleId = $schedule->schedule_id;
                 $disconDate = Carbon::parse($schedule->disconnection_date);
-                $billAmount = (float)($schedule->total_amount ?? $schedule->current_bill ?? 0);
+                $billAmount = (float)($schedule->total_amount ?? $schedule->current_billing ?? 0);
                 $billMonth = Carbon::parse($schedule->bill_month);
                 
                 // Check if there's a payment made before disconnection date for this bill month
@@ -1046,7 +1046,7 @@ class ReportController extends Controller
                     'address' => $consumer->address ?? '',
                     'status' => $consumer->status_code ?? 'A',
                     'category' => $consumer->category_code ?? '',
-                    'current_bill' => round($totalCurrentBill, 2),
+                    'current_billing' => round($totalCurrentBill, 2),
                     'arrears' => round($totalArrears, 2),
                     'total_due' => round($totalDue, 2),
                     'last_payment' => $lastPaymentDate,
@@ -1135,11 +1135,11 @@ class ReportController extends Controller
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
                 'cp.senior_citizen_discount',
-                'cp.current_bill',
-                'cp.penalty',
-                'cp.meter_maintenance',
-                'cp.arrears_cy',
-                'cp.arrears_py',
+                'cp.current_billing',
+                'cp.current_penalty',
+                'cp.mr_arrears',
+                'cp.current_arrears',
+                'cp.prio_years',
                 'cp.payment_method',
                 'cp.created_by as collector',
                 DB::raw('CASE
@@ -1345,11 +1345,11 @@ class ReportController extends Controller
                 DB::raw('DATE_FORMAT(COALESCE(cp.paid_at, cp.created_at), "%m/%Y") as bill_month'),
                 'cp.payment_amount',
                 'cp.senior_citizen_discount',
-                'cp.current_bill',
-                'cp.penalty',
-                'cp.meter_maintenance',
-                'cp.arrears_cy',
-                'cp.arrears_py',
+                'cp.current_billing',
+                'cp.current_penalty',
+                'cp.mr_arrears',
+                'cp.current_arrears',
+                'cp.prio_years',
                 'cp.payment_method',
                 'cp.created_by as collector',
                 DB::raw('CASE 
@@ -1933,7 +1933,7 @@ class ReportController extends Controller
                 'account_name' => $meta->account_name ?? '',
                 'status_code' => $meta->status_code ?? '',
                 'category_code' => $meta->category_code ?? '',
-                'current_bill' => round($current, 2),
+                'current_billing' => round($current, 2),
                 'current' => round($current, 2),
                 '_30' => round($bucket30, 2),
                 '_60' => round($bucket60, 2),
@@ -2803,7 +2803,7 @@ class ReportController extends Controller
         $collectionEfficiencyBase = $collectionPaymentsBase();
         $applyCollectionReportDateRange($collectionEfficiencyBase, $periodStart, $periodEnd);
         $monthlyCurrentAndArrears = (float) $collectionEfficiencyBase->sum(
-            DB::raw('COALESCE(cp.current_bill, 0) + COALESCE(cp.arrears_cy, 0) + COALESCE(cp.arrears_py, 0)')
+            DB::raw('COALESCE(cp.current_billing, 0) + COALESCE(cp.current_arrears, 0) + COALESCE(cp.prio_years, 0)')
         );
 
         $collectionRate = 0.0;
@@ -2980,7 +2980,7 @@ class ReportController extends Controller
             ->unique()
             ->values();
 
-        $readingBillSql = 'ROUND(COALESCE(dr.current_bill, 0) + CASE WHEN COALESCE(dr.current_bill, 0) > 0 THEN 20 ELSE 0 END, 2)';
+        $readingBillSql = 'ROUND(COALESCE(dr.current_billing, 0) + CASE WHEN COALESCE(dr.current_billing, 0) > 0 THEN 20 ELSE 0 END, 2)';
         $readingPaidSql = '(SELECT COALESCE(SUM(CASE WHEN cp.payment_amount > 0 THEN cp.payment_amount + COALESCE(cp.senior_citizen_discount, 0) ELSE 0 END), 0) FROM consumer_payments cp WHERE cp.reading_id = dr.id)';
         $paidReadingSql = "(LOWER(TRIM(COALESCE(dr.status, ''))) = 'paid' OR ({$readingPaidSql}) + 0.01 >= ({$readingBillSql}))";
 
@@ -2992,7 +2992,7 @@ class ReportController extends Controller
                 'cz.account_name',
                 'cz.zone_code as zone',
                 DB::raw('SUM(COALESCE(dr.consumption, 0)) as total_consumption'),
-                DB::raw('SUM(COALESCE(dr.current_bill, 0)) as total_amount'),
+                DB::raw('SUM(COALESCE(dr.current_billing, 0)) as total_amount'),
                 DB::raw("SUM({$readingBillSql}) as total_amount_billed"),
                 DB::raw("SUM({$readingPaidSql}) as total_amount_paid")
             )
@@ -3281,7 +3281,7 @@ class ReportController extends Controller
                     'account_no' => $order->account_no ?? '—',
                     'account_name' => $order->account_name ?? '—',
                     'assigned_to' => optional($order->disconnector)->name ?? '—',
-                    'current_bill' => '₱ ' . $this->visualSummaryFormatCurrency(0),
+                    'current_billing' => '₱ ' . $this->visualSummaryFormatCurrency(0),
                     'outstanding' => '₱ ' . $this->visualSummaryFormatCurrency($outstanding),
                     'status' => ucfirst((string) ($order->status ?? 'Assigned')),
                 ];

@@ -141,7 +141,7 @@ class MeterReadingController extends Controller
             'dr.previous_reading',
             'dr.current_reading',
             'dr.consumption',
-            'dr.current_bill as downloaded_current_bill',
+            'dr.current_billing as downloaded_current_billing',
             'dr.reading_date',
             'dr.status',
             'dr.reader_notes',
@@ -1227,7 +1227,7 @@ class MeterReadingController extends Controller
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'downloaded_current_billing' => (float) ($payment->current_billing ?? 0),
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -1248,7 +1248,7 @@ class MeterReadingController extends Controller
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'schedule_current_billing' => (float) ($payment->current_billing ?? 0),
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -1275,7 +1275,7 @@ class MeterReadingController extends Controller
                             'dr.previous_reading',
                             'dr.current_reading',
                             'dr.consumption',
-                            'dr.current_bill as downloaded_current_bill',
+                            'dr.current_billing as downloaded_current_billing',
                             'dr.reading_date',
                             'dr.status',
                             'dr.reader_notes',
@@ -1287,7 +1287,7 @@ class MeterReadingController extends Controller
                             'mrs.due_date',
                             'mrs.disconnection_date',
                             'mrs.previous_reading_date',
-                            'mrs.current_bill as schedule_current_bill',
+                            'mrs.current_billing as schedule_current_billing',
                             'mrs.arrears',
                             'mrs.total_amount',
                             'mrs.status as schedule_status'
@@ -1314,7 +1314,7 @@ class MeterReadingController extends Controller
                         'previous_reading' => $drRow->previous_reading ?? $dr->previous_reading ?? 0,
                         'current_reading' => $drRow->current_reading ?? $dr->current_reading ?? null,
                         'consumption' => $drRow->consumption ?? $dr->consumption ?? 0,
-                        'downloaded_current_bill' => $drRow->downloaded_current_bill ?? $dr->current_bill ?? ($drRow->schedule_current_bill ?? 0),
+                        'downloaded_current_billing' => $drRow->downloaded_current_billing ?? $dr->current_billing ?? ($drRow->schedule_current_billing ?? 0),
                         'reading_date' => $drRow->reading_date ?? $dr->reading_date ?? null,
                         'status' => $drRow->status ?? $dr->status ?? 'Prepared',
                         'reader_notes' => $drRow->reader_notes ?? $dr->reader_notes ?? null,
@@ -1338,7 +1338,7 @@ class MeterReadingController extends Controller
                         'due_date' => $drRow->due_date ?? null,
                         'disconnection_date' => $drRow->disconnection_date ?? null,
                         'previous_reading_date' => $drRow->previous_reading_date ?? null,
-                        'schedule_current_bill' => $drRow->schedule_current_bill ?? null,
+                        'schedule_current_billing' => $drRow->schedule_current_billing ?? null,
                         'arrears' => $drRow->arrears ?? null,
                         'total_amount' => $drRow->total_amount ?? null,
                         'schedule_status' => $drRow->schedule_status ?? null,
@@ -1367,7 +1367,7 @@ class MeterReadingController extends Controller
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'downloaded_current_billing' => (float) ($payment->current_billing ?? 0),
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -1388,7 +1388,7 @@ class MeterReadingController extends Controller
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'schedule_current_billing' => (float) ($payment->current_billing ?? 0),
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -1411,7 +1411,7 @@ class MeterReadingController extends Controller
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                    'downloaded_current_bill' => 0.0,
+                    'downloaded_current_billing' => 0.0,
                     'reading_date' => null,
                     'status' => 'Prepared',
                     'reader_notes' => null,
@@ -1432,7 +1432,7 @@ class MeterReadingController extends Controller
                     'due_date' => null,
                     'disconnection_date' => null,
                     'previous_reading_date' => null,
-                    'schedule_current_bill' => 0.0,
+                    'schedule_current_billing' => 0.0,
                     'arrears' => null,
                     'total_amount' => null,
                     'schedule_status' => null,
@@ -1467,7 +1467,7 @@ class MeterReadingController extends Controller
                 'mrs.due_date',
                 'mrs.disconnection_date',
                 'mrs.previous_reading_date',
-                'mrs.current_bill as schedule_current_bill',
+                'mrs.current_billing as schedule_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'mrs.status as schedule_status',
@@ -1534,8 +1534,8 @@ class MeterReadingController extends Controller
                     $readingArray['due_date'] = $schedule->due_date ?? null;
                     $readingArray['disconnection_date'] = $schedule->disconnection_date ?? null;
                     $readingArray['previous_reading_date'] = $schedule->previous_reading_date ?? null;
-                    // Keep downloaded_current_bill if exists, otherwise use schedule's current_bill
-                    $readingArray['schedule_current_bill'] = $schedule->current_bill ?? null;
+                    // Keep downloaded_current_billing if exists, otherwise use schedule's current_bill
+                    $readingArray['schedule_current_billing'] = $schedule->current_billing ?? null;
                     $readingArray['arrears'] = $schedule->arrears ?? null;
                     $readingArray['total_amount'] = $schedule->total_amount ?? null;
                     $readingArray['schedule_status'] = $schedule->status ?? null;
@@ -1581,7 +1581,7 @@ class MeterReadingController extends Controller
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => 0.0,
+                        'downloaded_current_billing' => 0.0,
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -1602,7 +1602,7 @@ class MeterReadingController extends Controller
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => 0.0,
+                        'schedule_current_billing' => 0.0,
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -1631,7 +1631,7 @@ class MeterReadingController extends Controller
                             'previous_reading' => $scheduleRow->previous_reading ?? 0,
                             'current_reading' => $scheduleRow->current_reading ?? null,
                             'consumption' => $scheduleRow->consumption ?? 0,
-                            'current_bill' => $scheduleRow->current_bill ?? 0,
+                            'current_billing' => $scheduleRow->current_billing ?? 0,
                             'reading_date' => $scheduleRow->bill_date ?? $billMonthDate->format('Y-m-d'),
                             'status' => 'Prepared',
                         ]);
@@ -1639,7 +1639,7 @@ class MeterReadingController extends Controller
                     $base = (array) $dr->toArray();
                     $reading = (object) array_merge($base, [
                         'downloaded_id' => $dr->id,
-                        'downloaded_current_bill' => $dr->current_bill ?? $scheduleRow->current_bill ?? null,
+                        'downloaded_current_billing' => $dr->current_billing ?? $scheduleRow->current_billing ?? null,
                         'schedule_id' => $dr->schedule_id,
                         'account_number' => $scheduleRow->account_no ?? $accountNumber,
                         'account_name' => $scheduleRow->account_name ?? '',
@@ -1649,7 +1649,7 @@ class MeterReadingController extends Controller
                         'due_date' => $scheduleRow->due_date ?? null,
                         'disconnection_date' => $scheduleRow->disconnection_date ?? null,
                         'previous_reading_date' => $scheduleRow->previous_reading_date ?? null,
-                        'schedule_current_bill' => $scheduleRow->current_bill ?? null,
+                        'schedule_current_billing' => $scheduleRow->current_billing ?? null,
                         'arrears' => $scheduleRow->arrears ?? null,
                         'total_amount' => $scheduleRow->total_amount ?? null,
                         'schedule_status' => $scheduleRow->status ?? null,
@@ -1699,7 +1699,7 @@ class MeterReadingController extends Controller
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => 0.0,
+                        'downloaded_current_billing' => 0.0,
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -1720,7 +1720,7 @@ class MeterReadingController extends Controller
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => 0.0,
+                        'schedule_current_billing' => 0.0,
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -1786,11 +1786,11 @@ class MeterReadingController extends Controller
         // Calculate current bill if not available
         // Priority: downloaded_readings.current_bill > meter_reading_schedules.current_bill > calculated from consumption
         $consumption = $reading->consumption ?? 0;
-        $downloadedCurrentBill = isset($reading->downloaded_current_bill) && $reading->downloaded_current_bill !== null 
-            ? (float) $reading->downloaded_current_bill 
+        $downloadedCurrentBill = isset($reading->downloaded_current_billing) && $reading->downloaded_current_billing !== null 
+            ? (float) $reading->downloaded_current_billing 
             : null;
-        $scheduleCurrentBill = isset($reading->schedule_current_bill) && $reading->schedule_current_bill !== null 
-            ? (float) $reading->schedule_current_bill 
+        $scheduleCurrentBill = isset($reading->schedule_current_billing) && $reading->schedule_current_billing !== null 
+            ? (float) $reading->schedule_current_billing 
             : null;
         
         // Use downloaded_readings.current_bill if available, otherwise use schedule's current_bill
@@ -1933,7 +1933,7 @@ class MeterReadingController extends Controller
             'current_reading' => $reading->current_reading ?? null,
             'reading_date' => $reading->reading_date ? Carbon::parse($reading->reading_date)->format('Y-m-d') : null,
             'consumption' => $consumption,
-            'current_bill' => round($currentBill, 2),
+            'current_billing' => round($currentBill, 2),
             'meter_maintenance_charge' => $meterMaintenanceCharge,
             'penalty' => $penalty,
             'arrears' => $reading->arrears !== null ? (float) $reading->arrears : 0.0,
@@ -1944,7 +1944,7 @@ class MeterReadingController extends Controller
         // Prepare payment data from downloaded_readings
         $paymentAmount = $reading->payment_amount !== null
             ? (float) $reading->payment_amount
-            : ($reading->total_amount !== null ? (float) $reading->total_amount : ($billingData['current_bill'] + $billingData['arrears']));
+            : ($reading->total_amount !== null ? (float) $reading->total_amount : ($billingData['current_billing'] + $billingData['arrears']));
 
         // Payment status: use paid_at from consumer_payments and consumer_ledgers so user can tell if consumer is already paid
         // Consider paid when either table has paid_at set for this reading/schedule (do not remove or add function once paid)
@@ -2001,14 +2001,14 @@ class MeterReadingController extends Controller
                 'paid_at' => Carbon::parse($paidAtSource)->format('Y-m-d H:i:s'),
             ];
             if ($paymentRow) {
-                $paymentData['current_bill'] = round((float)($paymentRow->current_bill ?? 0), 2);
-                $paymentData['penalty'] = round((float)($paymentRow->penalty ?? 0), 2);
-                $paymentData['meter_maintenance'] = round((float)($paymentRow->meter_maintenance ?? 0), 2);
-                $paymentData['arrears_cy'] = round((float)($paymentRow->arrears_cy ?? 0), 2);
-                $paymentData['arrears_py'] = round((float)($paymentRow->arrears_py ?? 0), 2);
+                $paymentData['current_billing'] = round((float)($paymentRow->current_billing ?? 0), 2);
+                $paymentData['current_penalty'] = round((float)($paymentRow->current_penalty ?? 0), 2);
+                $paymentData['mr_arrears'] = round((float)($paymentRow->mr_arrears ?? 0), 2);
+                $paymentData['current_arrears'] = round((float)($paymentRow->current_arrears ?? 0), 2);
+                $paymentData['prio_years'] = round((float)($paymentRow->prio_years ?? 0), 2);
                 $paymentData['advances'] = round((float)($paymentRow->advances ?? 0), 2);
                 $paymentData['senior_citizen_discount'] = round((float)($paymentRow->senior_citizen_discount ?? 0), 2);
-                $paymentData['others'] = round((float)($paymentRow->others ?? 0), 2);
+                $paymentData['current_mr'] = round((float)($paymentRow->current_mr ?? 0), 2);
             }
         } else {
             $paymentData = [
@@ -2037,14 +2037,14 @@ class MeterReadingController extends Controller
                 ? Carbon::parse($orLookupPayment->paid_at)->format('Y-m-d H:i:s')
                 : ($paymentData['paid_at'] ?? null);
 
-            $paymentData['current_bill'] = round((float) ($orLookupPayment->current_bill ?? 0), 2);
-            $paymentData['penalty'] = round((float) ($orLookupPayment->penalty ?? 0), 2);
-            $paymentData['meter_maintenance'] = round((float) ($orLookupPayment->meter_maintenance ?? 0), 2);
-            $paymentData['arrears_cy'] = round((float) ($orLookupPayment->arrears_cy ?? 0), 2);
-            $paymentData['arrears_py'] = round((float) ($orLookupPayment->arrears_py ?? 0), 2);
+            $paymentData['current_billing'] = round((float) ($orLookupPayment->current_billing ?? 0), 2);
+            $paymentData['current_penalty'] = round((float) ($orLookupPayment->current_penalty ?? 0), 2);
+            $paymentData['mr_arrears'] = round((float) ($orLookupPayment->mr_arrears ?? 0), 2);
+            $paymentData['current_arrears'] = round((float) ($orLookupPayment->current_arrears ?? 0), 2);
+            $paymentData['prio_years'] = round((float) ($orLookupPayment->prio_years ?? 0), 2);
             $paymentData['advances'] = round((float) ($orLookupPayment->advances ?? 0), 2);
             $paymentData['senior_citizen_discount'] = round((float) ($orLookupPayment->senior_citizen_discount ?? 0), 2);
-            $paymentData['others'] = round((float) ($orLookupPayment->others ?? 0), 2);
+            $paymentData['current_mr'] = round((float) ($orLookupPayment->current_mr ?? 0), 2);
         }
 
         // Prepare downloaded reading details
@@ -2339,12 +2339,12 @@ class MeterReadingController extends Controller
                 'mrs.current_reading',
                 'mrs.previous_reading',
                 'mrs.consumption',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.arrears',
                 'mrs.prepared_by',
                 'mrs.created_at',
                 'dr.id as downloaded_id',
-                'dr.current_bill as downloaded_current_bill'
+                'dr.current_billing as downloaded_current_billing'
             )
             ->where(mr_col('mrs.consumer_zone_id'), $consumerZoneId)
             ->whereNotNull(mr_col('mrs.bill_date'));
@@ -2368,7 +2368,7 @@ class MeterReadingController extends Controller
                 continue;
             }
 
-            $currentBill = $schedule->downloaded_current_bill ?? $schedule->current_bill ?? 0;
+            $currentBill = $schedule->downloaded_current_billing ?? $schedule->current_billing ?? 0;
             $others = 20.00;
 
             $ledgerEntries[] = [
@@ -2501,10 +2501,10 @@ class MeterReadingController extends Controller
                 'mrs.id as schedule_id',
                 'mrs.bill_date',
                 'mrs.due_date',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.prepared_by',
                 'dr.id as downloaded_id',
-                'dr.current_bill as downloaded_current_bill',
+                'dr.current_billing as downloaded_current_billing',
                 'dr.status',
                 'dr.paid_at'
             )
@@ -2518,7 +2518,7 @@ class MeterReadingController extends Controller
 
         foreach ($schedules as $schedule) {
             $dueDate = Carbon::parse($schedule->due_date);
-            $currentBill = $schedule->downloaded_current_bill ?? $schedule->current_bill ?? 0;
+            $currentBill = $schedule->downloaded_current_billing ?? $schedule->current_billing ?? 0;
 
             // Skip if no current bill or invalid due date
             if ($currentBill <= 0 || !$dueDate) {
@@ -3505,7 +3505,7 @@ class MeterReadingController extends Controller
                     ->join(mr_col('downloaded_readings as dr'), mr_col('dr.id'), '=', mr_col('cp.reading_id'))
                     ->whereIn(mr_col('dr.schedule_id'), $scheduleIdsForWmc)
                     ->whereNotNull(mr_col('cp.paid_at'))
-                    ->selectRaw('dr.schedule_id as schedule_id, COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
+                    ->selectRaw('dr.schedule_id as schedule_id, COALESCE(SUM(cp.mr_arrears), 0) as paid_wmc')
                     ->groupBy(mr_col('dr.schedule_id'))
                     ->get();
                 foreach ($paidWmcRows as $wmcRow) {
@@ -3524,7 +3524,7 @@ class MeterReadingController extends Controller
                     ->where(mr_col('cp.') . ConsumerPayment::consumerZoneIdColumn(), $consumer->id)
                     ->whereNotNull(mr_col('cp.paid_at'))
                     ->whereRaw('COALESCE(cp.paid_at, cp.created_at) <= ?', [$toMonthDate->format('Y-m-d H:i:s')])
-                    ->selectRaw('COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
+                    ->selectRaw('COALESCE(SUM(cp.mr_arrears), 0) as paid_wmc')
                     ->value(mr_col('paid_wmc'));
             }
 
@@ -3945,7 +3945,7 @@ class MeterReadingController extends Controller
                 $overduePeriodsRange = min($overduePeriodsRange, 12);
                 $currentBill = $currentBillFromRule;
                 $arrearsCy = round($arrearsPrincipal, 2);
-                // Penalty = 10% per bill per period: 195?19.5 (1 period), 390?39 (2 periods). Use per-bill × periods.
+                // Penalty = 10% per bill per period: 195?19.5 (1 period), 390?39 (2 periods). Use per-bill Ã— periods.
                 $perBillPrincipal = $overdueBillCount > 0 ? $arrearsPrincipal / $overdueBillCount : $arrearsPrincipal;
                 $penalty = round($perBillPrincipal * 0.10 * $overduePeriodsRange, 2);
                 $maintenance = round(20 * $overduePeriodsRange, 2); // 20 first period, 40 second
@@ -4147,11 +4147,11 @@ class MeterReadingController extends Controller
         // Determine viewType: PRE-DUE if transaction_date <= due_date, POST-DUE if transaction_date > due_date
         $viewType = ($selectedBillDueDate && $asOfDate->gt($selectedBillDueDate)) ? 'post_due' : 'pre_due';
         $dbBreakdown = $billingController->getBillingBreakdownData((int) $consumer->id, $viewType, $asOfDate, null, $selectedBillMonthYmd);
-        $currentBill = (float) ($dbBreakdown['current_bill'] ?? 0);
+        $currentBill = (float) ($dbBreakdown['current_billing'] ?? 0);
         $penalty = (float) ($dbBreakdown['penalty'] ?? 0);
         $maintenance = (float) ($dbBreakdown['water_maintenance_charge'] ?? 0);
-        $arrearsCy = (float) ($dbBreakdown['arrears_cy'] ?? 0);
-        $arrearsPy = (float) ($dbBreakdown['arrears_py'] ?? 0);
+        $arrearsCy = (float) ($dbBreakdown['current_arrears'] ?? 0);
+        $arrearsPy = (float) ($dbBreakdown['prio_years'] ?? 0);
         $hasDbCurrentBillForSelectedMonth = !empty($selectedBillMonthYmd) && round($currentBill, 2) > 0;
 
         // Carry credit from latest balance before selected range start
@@ -4326,11 +4326,11 @@ class MeterReadingController extends Controller
                     ->orderBy(mr_col('paid_at'), 'desc')
                     ->first();
                 if ($paidPayment) {
-                    $currentBill = (float)($paidPayment->current_bill ?? 0);
-                    $penalty = (float)($paidPayment->penalty ?? 0);
-                    $maintenance = (float)($paidPayment->meter_maintenance ?? 0);
-                    $arrearsCy = (float)($paidPayment->arrears_cy ?? 0);
-                    $arrearsPy = (float)($paidPayment->arrears_py ?? 0);
+                    $currentBill = (float)($paidPayment->current_billing ?? 0);
+                    $penalty = (float)($paidPayment->current_penalty ?? 0);
+                    $maintenance = (float)($paidPayment->mr_arrears ?? 0);
+                    $arrearsCy = (float)($paidPayment->current_arrears ?? 0);
+                    $arrearsPy = (float)($paidPayment->prio_years ?? 0);
                     $seniorCitizenDiscount = (float)($paidPayment->senior_citizen_discount ?? 0);
                 }
             }
@@ -4345,17 +4345,17 @@ class MeterReadingController extends Controller
         if ($orNumberInput !== '') {
             if ($orPayment) {
                 $paymentStatus = 'paid';
-                $currentBill = (float)($orPayment->current_bill ?? 0);
-                $penalty = (float)($orPayment->penalty ?? 0);
-                $orMaintenance = (float)($orPayment->meter_maintenance ?? 0);
+                $currentBill = (float)($orPayment->current_billing ?? 0);
+                $penalty = (float)($orPayment->current_penalty ?? 0);
+                $orMaintenance = (float)($orPayment->mr_arrears ?? 0);
                 // OR fallback rule: if paid OR has zero WMC but ledger breakdown has one, keep ledger WMC.
                 $maintenance = ($orMaintenance <= 0.009 && $ledgerComputedMaintenance > 0.009)
                     ? round($ledgerComputedMaintenance, 2)
                     : $orMaintenance;
-                $arrearsCy = (float)($orPayment->arrears_cy ?? 0);
-                $arrearsPy = (float)($orPayment->arrears_py ?? 0);
+                $arrearsCy = (float)($orPayment->current_arrears ?? 0);
+                $arrearsPy = (float)($orPayment->prio_years ?? 0);
                 $seniorCitizenDiscount = (float)($orPayment->senior_citizen_discount ?? 0);
-                $others = (float)($orPayment->others ?? 0);
+                $others = (float)($orPayment->current_mr ?? 0);
 
                 // Reclassification rule (same intent as penalty split):
                 // when OR has zero WMC but ledger contributes WMC, do not inflate total due.
@@ -4639,7 +4639,7 @@ class MeterReadingController extends Controller
                     $selectedMonthPrincipal = DB::table(mr_col('downloaded_readings'))
                         ->whereIn(mr_col('schedule_id'), $schedulesInRange->toArray())
                         ->orderBy(mr_col('id'), 'desc')
-                        ->value(mr_col('current_bill'));
+                        ->value(mr_col('current_billing'));
                 }
                 $principalForCurrentBill = round(max(0.0, (float) (
                     $selectedMonthPrincipal ?? $principalFromBilling ?? $currentBill
@@ -4691,13 +4691,13 @@ class MeterReadingController extends Controller
             'data' => array_merge([
                 'bill_month_from' => $billMonthFromKey,
                 'bill_month_to' => $billMonthToKey,
-                'current_bill' => round($currentBill, 2),
+                'current_billing' => round($currentBill, 2),
                 'penalty' => round($penalty, 2),
                 'maintenance' => round($maintenance, 2),
                 'others' => round($others, 2),
                 'arrears' => round(max(0, $arrears), 2),
-                'arrears_cy' => round($arrearsCy, 2),
-                'arrears_py' => round($arrearsPy, 2),
+                'current_arrears' => round($arrearsCy, 2),
+                'prio_years' => round($arrearsPy, 2),
                 'senior_citizen_discount' => round($seniorCitizenDiscount, 2),
                 'current_consumption' => $selectedConsumption,
                 'payment_status' => $paymentStatus,

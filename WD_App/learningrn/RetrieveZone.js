@@ -397,7 +397,7 @@ export default function RetrieveZone({ onBack, userData }) {
     const consumption = item.consumption != null ? Number(item.consumption) : (currReading >= prevReading ? currReading - prevReading : 0);
     // Same rule as Read and Bill: high consumption when current > previous AND consumption >= 10
     const isHighConsumption = currReading > prevReading && consumption >= 10;
-    const currentBillNum = item.current_bill != null ? Number(item.current_bill) : 0;
+    const currentBillNum = item.current_billing != null ? Number(item.current_billing) : 0;
     const meterMaintenanceCharge = 20.00;
     const totalCurrent = currentBillNum > 0 ? currentBillNum : meterMaintenanceCharge;
     const currentBillOnly = totalCurrent >= meterMaintenanceCharge ? totalCurrent - meterMaintenanceCharge : 0;

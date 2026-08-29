@@ -274,13 +274,13 @@ class ConsumerLedgerCardBuilder
         if ($payment instanceof ConsumerPayment) {
             $fromPayment = [
                 'pay_sales' => round(
-                    (float) ($payment->current_bill ?? 0)
-                    + (float) ($payment->arrears_cy ?? 0)
-                    + (float) ($payment->arrears_py ?? 0),
+                    (float) ($payment->current_billing ?? 0)
+                    + (float) ($payment->current_arrears ?? 0)
+                    + (float) ($payment->prio_years ?? 0),
                     2
                 ),
-                'pay_penalty' => round((float) ($payment->penalty ?? 0), 2),
-                'pay_mr' => round((float) ($payment->meter_maintenance ?? 0), 2),
+                'pay_penalty' => round((float) ($payment->current_penalty ?? 0), 2),
+                'pay_mr' => round((float) ($payment->mr_arrears ?? 0), 2),
             ];
 
             $sum = round($fromPayment['pay_sales'] + $fromPayment['pay_penalty'] + $fromPayment['pay_mr'], 2);

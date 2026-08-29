@@ -1275,7 +1275,7 @@
                         <td>${row.account_no ?? '—'}</td>
                         <td>${row.account_name ?? '—'}</td>
                         <td>${row.assigned_to ?? '—'}</td>
-                        <td class="text-right">${row.current_bill ?? '0.00'}</td>
+                        <td class="text-right">${row.current_billing ?? '0.00'}</td>
                         <td class="text-right text-danger font-weight-bold">${row.outstanding ?? '0.00'}</td>
                         <td><span class="badge badge-primary">${row.status ?? 'Assigned'}</span></td>
                     `;

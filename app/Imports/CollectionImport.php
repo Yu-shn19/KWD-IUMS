@@ -228,9 +228,10 @@ class CollectionImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithC
                     'PAY_AMOUNT',
                     'amount'
                 ]) ?? 0,
-                'current_bill'   => $this->getRowValue($row, [
-                    'current_bill', 
-                    'current bill', 
+                'current_billing'   => $this->getRowValue($row, [
+                    'current_billing',
+                    'current_bill',
+                    'current bill',
                     'currentbill',
                     'CURRENT_BILL'
                 ]) ?? 0,
@@ -426,12 +427,12 @@ class CollectionImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithC
                 'payment_method' => $collectionData['pay_mode'] ?? null,
                 'payment_amount' => (float) ($collectionData['pay_amount'] ?? 0),
                 'senior_citizen_discount' => (float) ($collectionData['sc_discount'] ?? 0),
-                'current_bill' => (float) ($collectionData['current_bill'] ?? 0),
-                'penalty' => (float) ($collectionData['penalty'] ?? 0),
-                'meter_maintenance' => (float) ($collectionData['meter_rental'] ?? 0),
-                'arrears_cy' => (float) ($collectionData['arrears'] ?? 0),
-                'arrears_py' => (float) ($collectionData['prev_yr'] ?? 0),
-                'others' => (float) ($collectionData['others'] ?? 0),
+                'current_billing' => (float) ($collectionData['current_billing'] ?? 0),
+                'current_penalty' => (float) ($collectionData['penalty'] ?? 0),
+                'mr_arrears' => (float) ($collectionData['meter_rental'] ?? 0),
+                'current_arrears' => (float) ($collectionData['arrears'] ?? 0),
+                'prio_years' => (float) ($collectionData['prev_yr'] ?? 0),
+                'current_mr' => (float) ($collectionData['others'] ?? 0),
                 'advances' => (float) ($collectionData['advances'] ?? 0),
                 'or_number' => $collectionData['or_number'] ?? null,
                 'paid_at' => $paidAt,
