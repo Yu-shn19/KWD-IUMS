@@ -98,4 +98,20 @@ class SundryLedgerRemarks
             ->whereRaw('remarks LIKE ?', ['%' . $needle])
             ->sum('amount');
     }
+
+    /**
+     * Delete LRO CM payment rows created for a billing payment OR #.
+     */
+    public static function deletePaymentCmRowsForOr(?string $orNumber): int
+    {
+        $or = trim((string) ($orNumber ?? ''));
+        if ($or === '') {
+            return 0;
+        }
+
+        return (int) LROLedger::query()
+            ->whereRaw("UPPER(TRIM(COALESCE(type, ''))) = 'CM'")
+            ->where('remarks', 'like', 'Payment OR#' . $or . '%')
+            ->delete();
+    }
 }

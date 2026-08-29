@@ -324,33 +324,36 @@ export const networkStatus = {
     cacheDuration: 15000, // 15 seconds so a quick retry after connection works
   },
 
-  // Test API server connectivity 
+  // Test API server connectivity (works for both http:// and https://)
   testAPIConnectivity: async () => {
     try {
       const apiConfig = getApiConfig();
-      const testUrl = `${apiConfig.baseURL}/reader/login`; 
-      
+      // Use public /test endpoint — GET /reader/login returns 405
+      const testUrl = `${apiConfig.baseURL}/test`;
+      const timeoutMs = Math.min(apiConfig.timeout || 20000, 20000);
+
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); 
-      
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
       try {
-        // Use GET so servers that don't support HEAD still respond
         const response = await fetch(testUrl, {
           method: 'GET',
           signal: controller.signal,
           headers: {
-            'Accept': 'application/json',
+            Accept: 'application/json',
           },
         });
         clearTimeout(timeoutId);
-        
-        // Any response (2xx, 3xx, 4xx) means server is reachable; 5xx or network error = false
+
+        // Any HTTP response means TLS/network reached the server
         const isReachable = response.status >= 200 && response.status < 500;
         return isReachable;
       } catch (fetchError) {
         clearTimeout(timeoutId);
         if (fetchError.name === 'AbortError') {
-          console.log('⏱️ API connectivity test timed out');
+          console.log('⏱️ API connectivity test timed out:', testUrl);
+        } else {
+          console.log('⏱️ API connectivity failed:', testUrl, fetchError?.message);
         }
         return false;
       }

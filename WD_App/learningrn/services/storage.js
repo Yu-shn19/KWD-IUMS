@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   SELECTED_PRINTER: 'selected_printer',
   RECEIPT_FORMAT: 'receipt_format',
   RECEIPT_LOGO: 'receipt_logo',
+  COMPLETED_ACCOUNTS: 'read_and_bill_completed_accounts',
 };
 
 // Token Management
@@ -209,7 +210,59 @@ export const disconnectorPaidStorage = {
 export const ROUTES_BUCKET_READER = routesLocalService.ROUTES_BUCKET_READER;
 export const ROUTES_BUCKET_DISCONNECTOR = routesLocalService.ROUTES_BUCKET_DISCONNECTOR;
 
-// Routes list: SQLite `routes_cache` table (same DB as pending readings). Legacy AsyncStorage migrates once.
+// Durable map of accounts already read/synced — survives route-cache overwrites
+// so Read and Bill never flips Completed back to Pending after refresh.
+export const completedAccountsStorage = {
+  getAll: async () => {
+    try {
+      const raw = await AsyncStorage.getItem(STORAGE_KEYS.COMPLETED_ACCOUNTS);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (error) {
+      console.error('Error reading completed accounts:', error);
+      return {};
+    }
+  },
+
+  markCompleted: async ({ accountNumber, scheduleId, currentReading, consumption, billMonth } = {}) => {
+    try {
+      const key = accountNumber != null ? String(accountNumber).trim().toLowerCase() : null;
+      if (!key) return false;
+      const all = await completedAccountsStorage.getAll();
+      const entry = {
+        status: 'completed',
+        account_number: accountNumber,
+        schedule_id: scheduleId != null ? Number(scheduleId) : null,
+        current_reading: currentReading != null ? Number(currentReading) : null,
+        consumption: consumption != null ? Number(consumption) : 0,
+        bill_month: billMonth || null,
+        completed_at: new Date().toISOString(),
+      };
+      all[key] = entry;
+      // Also index by account tail so overlays still match shortened account displays
+      const tail = key.includes('-') ? key.split('-').pop() : null;
+      if (tail && tail !== key) {
+        all[tail] = entry;
+        all[`tail:${tail}`] = entry;
+      }
+      await AsyncStorage.setItem(STORAGE_KEYS.COMPLETED_ACCOUNTS, JSON.stringify(all));
+      return true;
+    } catch (error) {
+      console.error('Error marking account completed:', error);
+      return false;
+    }
+  },
+
+  clear: async () => {
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEYS.COMPLETED_ACCOUNTS);
+      return true;
+    } catch (error) {
+      console.error('Error clearing completed accounts:', error);
+      return false;
+    }
+  },
+};
 export const routesStorage = {
   saveRoutes: async (routes, bucket = ROUTES_BUCKET_READER) => {
     try {
@@ -370,6 +423,7 @@ export const clearAllData = async () => {
       STORAGE_KEYS.AUTH_TOKEN,
       STORAGE_KEYS.USER_DATA,
       STORAGE_KEYS.LAST_LOGIN,
+      STORAGE_KEYS.COMPLETED_ACCOUNTS,
     ]);
     return true;
   } catch (error) {
@@ -396,6 +450,7 @@ export default {
   rememberMeStorage,
   lastLoginStorage,
   routesStorage,
+  completedAccountsStorage,
   receiptStorage,
   printerStorage,
   receiptFormatStorage,

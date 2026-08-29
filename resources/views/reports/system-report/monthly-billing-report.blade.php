@@ -8,7 +8,7 @@
     $billMonthInput = $billMonthInput ?? $billMonth->format('Y-m');
     $asOf = $asOf ?? \Carbon\Carbon::now();
     $records = $records ?? collect();
-    $totals = $totals ?? ['accounts' => 0, 'consumption' => 0, 'current_bill' => 0, 'arrears' => 0, 'total_amount' => 0];
+    $totals = $totals ?? ['accounts' => 0, 'consumption' => 0, 'current_billing' => 0, 'arrears' => 0, 'total_amount' => 0];
     $summaryByCategory = $summaryByCategory ?? collect();
 @endphp
 
@@ -226,7 +226,7 @@
                                                 @forelse ($records as $record)
                                                     @php
                                                         $consumptionValue = (float) ($record->computed_consumption ?? $record->consumption ?? 0);
-                                                        $currentBillValue = (float) ($record->computed_current_bill ?? $record->current_bill ?? 0);
+                                                        $currentBillValue = (float) ($record->computed_current_billing ?? $record->current_billing ?? 0);
                                                         $arrearsValue = (float) ($record->computed_arrears ?? $record->arrears ?? 0);
                                                         $totalValue = (float) ($record->computed_total ?? $record->total_amount ?? ($currentBillValue + $arrearsValue));
                                                     @endphp
@@ -257,7 +257,7 @@
                                                 <tr>
                                                     <th colspan="11" class="text-right font-weight-bold">Totals</th>
                                                     <th class="text-right font-weight-bold">{{ number_format($totals['consumption'], 0) }}</th>
-                                                    <th class="text-right font-weight-bold">₱{{ number_format($totals['current_bill'], 2) }}</th>
+                                                    <th class="text-right font-weight-bold">₱{{ number_format($totals['current_billing'], 2) }}</th>
                                                     <th class="text-right font-weight-bold">₱{{ number_format($totals['arrears'], 2) }}</th>
                                                     <th class="text-right font-weight-bold">₱{{ number_format($totals['total_amount'], 2) }}</th>
                                                 </tr>
@@ -293,7 +293,7 @@
                                                         <td>{{ $category }}</td>
                                                         <td class="text-right">{{ number_format($summary['accounts']) }}</td>
                                                         <td class="text-right">{{ number_format($summary['consumption'], 0) }} m³</td>
-                                                        <td class="text-right">₱{{ number_format($summary['current_bill'], 2) }}</td>
+                                                        <td class="text-right">₱{{ number_format($summary['current_billing'], 2) }}</td>
                                                         <td class="text-right">₱{{ number_format($summary['total_amount'], 2) }}</td>
                                                     </tr>
                                                 @empty
@@ -306,7 +306,7 @@
                                                         <td>TOTAL</td>
                                                         <td class="text-right">{{ number_format($totals['accounts']) }}</td>
                                                         <td class="text-right">{{ number_format($totals['consumption'], 0) }} m³</td>
-                                                        <td class="text-right">₱{{ number_format($totals['current_bill'], 2) }}</td>
+                                                        <td class="text-right">₱{{ number_format($totals['current_billing'], 2) }}</td>
                                                         <td class="text-right">₱{{ number_format($totals['total_amount'], 2) }}</td>
                                                     </tr>
                                                 @endif

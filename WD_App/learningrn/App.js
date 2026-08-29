@@ -136,14 +136,21 @@ export default function App() {
       
       // Provide user-friendly error messages
       let errorMessage = error.message || 'Login failed. Please try again.';
+      const apiConfig = getApiConfig();
+      const apiUrl = apiConfig.baseURL;
       
       if (error.message.includes('timeout')) {
-        errorMessage = 'The server took too long to respond. Please check your network connection.';
+        errorMessage =
+          `Cannot reach API (timeout).\n\nURL: ${apiUrl}/reader/login\n\n` +
+          `This is usually the server/hosting, not wrong password.\n` +
+          `On the phone browser open:\n${apiUrl}/test\n` +
+          `If that also fails, fix DNS/firewall/HTTPS on the server.`;
       } else if (error.message.includes('Network request failed') || error.message.includes('fetch')) {
-        const apiConfig = getApiConfig();
-        errorMessage = `Cannot connect to server.\n\nURL: ${apiConfig.baseURL}\n\nCheck:\n1. Phone has internet / mobile data or Wi‑Fi\n2. Server is online\n3. Rebuild the APK if you just changed the API URL`;
+        errorMessage =
+          `Cannot connect to server.\n\nURL: ${apiUrl}\n\n` +
+          `Check:\n1. Phone has internet\n2. Open ${apiUrl}/test in browser\n3. Rebuild APK after changing API URL`;
       } else if (error.message.includes('401') || error.message.includes('Invalid credentials')) {
-        errorMessage = 'Invalid email or password. Please check:\n\nEmail: reader@gmail.com\nPassword: reader123';
+        errorMessage = 'Invalid email or password.';
       }
       
       Alert.alert('Login Error', errorMessage);

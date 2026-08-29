@@ -743,11 +743,11 @@
                                         : 0;
 
                                     // Only treat as sundry-only (full amount in Service Rev.) when there is no reading AND no stored breakdown
-                                    $hasStoredBreakdown = ((float)($payment->penalty ?? 0) != 0
-                                        || (float)($payment->meter_maintenance ?? 0) != 0
-                                        || (float)($payment->arrears_cy ?? 0) != 0
-                                        || (float)($payment->arrears_py ?? 0) != 0
-                                        || (float)($payment->current_bill ?? 0) != 0);
+                                    $hasStoredBreakdown = ((float)($payment->current_penalty ?? 0) != 0
+                                        || (float)($payment->mr_arrears ?? 0) != 0
+                                        || (float)($payment->current_arrears ?? 0) != 0
+                                        || (float)($payment->prio_years ?? 0) != 0
+                                        || (float)($payment->current_billing ?? 0) != 0);
                                     $readingId = $payment->reading_id ?? null;
                                     if (empty($readingId) && $amount > 0 && !$hasStoredBreakdown) {
                                         $serviceRev = $amount;
@@ -758,11 +758,11 @@
                                         $meterMaint = 0;
                                     } else {
                                         // Use consumer_payments only for print breakdown (no fallback calculation)
-                                        $current = (float)($payment->current_bill ?? 0);
-                                        $arrearsCY = (float)($payment->arrears_cy ?? 0);
-                                        $arrearsPY = (float)($payment->arrears_py ?? 0);
-                                        $penalty = (float)($payment->penalty ?? 0);
-                                        $meterMaint = (float)($payment->meter_maintenance ?? 0);
+                                        $current = (float)($payment->current_billing ?? 0);
+                                        $arrearsCY = (float)($payment->current_arrears ?? 0);
+                                        $arrearsPY = (float)($payment->prio_years ?? 0);
+                                        $penalty = (float)($payment->current_penalty ?? 0);
+                                        $meterMaint = (float)($payment->mr_arrears ?? 0);
                                         $rebate = (float)($payment->senior_citizen_discount ?? 0);
                                     }
                                 } else {

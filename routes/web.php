@@ -347,6 +347,8 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
 
     // Visual Summary page route
     Route::get('/visual-summary', [ReportController::class, 'visualSummary'])->name('visual-summary');
+    Route::get('/visual-summary/consumer-status-list', [ReportController::class, 'visualSummaryConsumerStatusList'])->name('visual-summary.consumer-status-list');
+    Route::get('/visual-summary/disconnection-orders-by-zone', [ReportController::class, 'visualSummaryDisconnectionOrdersByZone'])->name('visual-summary.disconnection-orders-by-zone');
 
     // Collection Report page routes
     Route::get('/collection-report', [ReportController::class, 'collectionReport'])->name('collection-report');

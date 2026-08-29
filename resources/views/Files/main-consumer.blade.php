@@ -260,7 +260,7 @@
                                         $amount = is_numeric($value) ? (float) $value : 0;
                                         return '₱ ' . number_format($amount, 2);
                                     };
-                                    $latestBillCurrentBill = optional($latestBill)->current_bill ?? 0;
+                                    $latestBillCurrentBill = optional($latestBill)->current_billing ?? 0;
                                     $latestBillMeterRental = optional($latestBill)->meter_rental ?? 0;
                                     $latestBillArrears = optional($latestBill)->arrears ?? 0;
                                     $latestBillMaterials = optional($latestBill)->materials ?? 0;
@@ -1298,7 +1298,7 @@
             const headerText = latestBill ? `Latest Bill - ${formatBillMonth(latestBill.bill_month || latestBill.billMonth)}` : 'Latest Bill - --';
             $('#latestBillHeader').text(headerText);
 
-            const currentBill = parseFloat(latestBill?.current_bill ?? latestBill?.currentBill ?? 0);
+            const currentBill = parseFloat(latestBill?.current_billing ?? latestBill?.current_bill ?? latestBill?.currentBill ?? 0);
             const meterRental = parseFloat(latestBill?.meter_rental ?? latestBill?.meterRental ?? 0);
             const arrears = parseFloat(latestBill?.arrears ?? 0);
             const materials = parseFloat(latestBill?.materials ?? 0);

@@ -591,7 +591,7 @@ class BillMonthDetailsService
                             ->join(mr_col('downloaded_readings as dr'), mr_col('dr.id'), '=', mr_col('cp.reading_id'))
                             ->whereIn(mr_col('dr.schedule_id'), $scheduleIdsForWmc)
                             ->whereNotNull(mr_col('cp.paid_at'))
-                            ->selectRaw('dr.schedule_id as schedule_id, COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
+                            ->selectRaw('dr.schedule_id as schedule_id, COALESCE(SUM(cp.mr_arrears), 0) as paid_wmc')
                             ->groupBy(mr_col('dr.schedule_id'))
                             ->get();
                         foreach ($paidWmcRows as $wmcRow) {
@@ -610,7 +610,7 @@ class BillMonthDetailsService
                             ->where('cp.' . ConsumerPayment::consumerZoneIdColumn(), $s->consumer->id)
                             ->whereNotNull(mr_col('cp.paid_at'))
                             ->whereRaw('COALESCE(cp.paid_at, cp.created_at) <= ?', [$s->toMonthDate->format('Y-m-d H:i:s')])
-                            ->selectRaw('COALESCE(SUM(cp.meter_maintenance), 0) as paid_wmc')
+                            ->selectRaw('COALESCE(SUM(cp.mr_arrears), 0) as paid_wmc')
                             ->value('paid_wmc');
                     }
         
@@ -1240,11 +1240,11 @@ class BillMonthDetailsService
                 // Determine viewType: PRE-DUE if transaction_date <= due_date, POST-DUE if transaction_date > due_date
                 $viewType = ($selectedBillDueDate && $asOfDate->gt($selectedBillDueDate)) ? 'post_due' : 'pre_due';
                 $dbBreakdown = $billingController->getBillingBreakdownData((int) $s->consumer->id, $viewType, $asOfDate, null, $selectedBillMonthYmd);
-                $s->currentBill = (float) ($dbBreakdown['current_bill'] ?? 0);
+                $s->currentBill = (float) ($dbBreakdown['current_billing'] ?? 0);
                 $s->penaltyAmount = (float) ($dbBreakdown['penalty'] ?? 0);
                 $s->maintenance = (float) ($dbBreakdown['water_maintenance_charge'] ?? 0);
-                $s->arrearsCy = (float) ($dbBreakdown['arrears_cy'] ?? 0);
-                $s->arrearsPy = (float) ($dbBreakdown['arrears_py'] ?? 0);
+                $s->arrearsCy = (float) ($dbBreakdown['current_arrears'] ?? 0);
+                $s->arrearsPy = (float) ($dbBreakdown['prio_years'] ?? 0);
                 $hasDbCurrentBillForSelectedMonth = !empty($selectedBillMonthYmd) && round($s->currentBill, 2) > 0;
         
                 // Carry credit from latest balance before selected range start
@@ -1422,11 +1422,11 @@ class BillMonthDetailsService
                             ->orderBy(mr_col('paid_at'), 'desc')
                             ->first();
                         if ($paidPayment) {
-                            $s->currentBill = (float)($paidPayment->current_bill ?? 0);
-                            $s->penaltyAmount = (float)($paidPayment->penalty ?? 0);
-                            $s->maintenance = (float)($paidPayment->meter_maintenance ?? 0);
-                            $s->arrearsCy = (float)($paidPayment->arrears_cy ?? 0);
-                            $s->arrearsPy = (float)($paidPayment->arrears_py ?? 0);
+                            $s->currentBill = (float)($paidPayment->current_billing ?? 0);
+                            $s->penaltyAmount = (float)($paidPayment->current_penalty ?? 0);
+                            $s->maintenance = (float)($paidPayment->mr_arrears ?? 0);
+                            $s->arrearsCy = (float)($paidPayment->current_arrears ?? 0);
+                            $s->arrearsPy = (float)($paidPayment->prio_years ?? 0);
                             $s->seniorCitizenDiscount = (float)($paidPayment->senior_citizen_discount ?? 0);
                         }
                     }
@@ -1441,17 +1441,17 @@ class BillMonthDetailsService
                 if ($s->orNumberInput !== '') {
                     if ($s->orPayment) {
                         $s->paymentStatus = 'paid';
-                        $s->currentBill = (float)($s->orPayment->current_bill ?? 0);
-                        $s->penaltyAmount = (float)($s->orPayment->penalty ?? 0);
-                        $orMaintenance = (float)($s->orPayment->meter_maintenance ?? 0);
+                        $s->currentBill = (float)($s->orPayment->current_billing ?? 0);
+                        $s->penaltyAmount = (float)($s->orPayment->current_penalty ?? 0);
+                        $orMaintenance = (float)($s->orPayment->mr_arrears ?? 0);
                         // OR fallback rule: if paid OR has zero WMC but ledger breakdown has one, keep ledger WMC.
                         $s->maintenance = ($orMaintenance <= 0.009 && $ledgerComputedMaintenance > 0.009)
                             ? round($ledgerComputedMaintenance, 2)
                             : $orMaintenance;
-                        $s->arrearsCy = (float)($s->orPayment->arrears_cy ?? 0);
-                        $s->arrearsPy = (float)($s->orPayment->arrears_py ?? 0);
+                        $s->arrearsCy = (float)($s->orPayment->current_arrears ?? 0);
+                        $s->arrearsPy = (float)($s->orPayment->prio_years ?? 0);
                         $s->seniorCitizenDiscount = (float)($s->orPayment->senior_citizen_discount ?? 0);
-                        $s->others = (float)($s->orPayment->others ?? 0);
+                        $s->others = (float)($s->orPayment->current_mr ?? 0);
         
                         // Reclassification rule (same intent as penalty split):
                         // when OR has zero WMC but ledger contributes WMC, do not inflate total due.
@@ -1738,7 +1738,7 @@ class BillMonthDetailsService
                             $selectedMonthPrincipal = DB::table(mr_col('downloaded_readings'))
                                 ->whereIn(mr_col('schedule_id'), $s->schedulesInRange->toArray())
                                 ->orderBy(mr_col('id'), 'desc')
-                                ->value('current_bill');
+                                ->value('current_billing');
                         }
                         $principalForCurrentBill = round(max(0.0, (float) (
                             $selectedMonthPrincipal ?? $s->principalFromBilling ?? $s->currentBill
@@ -1793,13 +1793,13 @@ class BillMonthDetailsService
                     'data' => array_merge([
                         'bill_month_from' => $s->billMonthFromKey,
                         'bill_month_to' => $s->billMonthToKey,
-                        'current_bill' => round($s->currentBill, 2),
+                        'current_billing' => round($s->currentBill, 2),
                         'penalty' => round($s->penaltyAmount, 2),
                         'maintenance' => round($s->maintenance, 2),
                         'others' => round($s->others, 2),
                         'arrears' => round(max(0, $s->arrears), 2),
-                        'arrears_cy' => round($s->arrearsCy, 2),
-                        'arrears_py' => round($s->arrearsPy, 2),
+                        'current_arrears' => round($s->arrearsCy, 2),
+                        'prio_years' => round($s->arrearsPy, 2),
                         'senior_citizen_discount' => round($s->seniorCitizenDiscount, 2),
                         'current_consumption' => $selectedConsumption,
                         'payment_status' => $s->paymentStatus,

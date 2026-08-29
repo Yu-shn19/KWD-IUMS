@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\ConsumerLedger;
+use App\Support\SundryLedgerRemarks;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
@@ -29,13 +30,13 @@ class ConsumerPayment extends Model
         'payment_method',
         'payment_amount',
         'senior_citizen_discount',
-        'current_bill',
-        'penalty',
-        'meter_maintenance',
-        'arrears_cy',
-        'arrears_py',
+        'current_billing',
+        'current_penalty',
+        'mr_arrears',
+        'current_arrears',
+        'prio_years',
         'advances',
-        'others',
+        'current_mr',
         'amount_tendered',
         'change_amount',
         'or_number',
@@ -245,6 +246,8 @@ class ConsumerPayment extends Model
         parent::boot();
 
         static::deleting(function ($payment) {
+            SundryLedgerRemarks::deletePaymentCmRowsForOr($payment->or_number);
+
             $ledgerEntry = ConsumerLedger::query()
                 ->where(mr_col('consumer_payment_id'), $payment->id)
                 ->where(mr_col('trans'), 'PAYMENT')

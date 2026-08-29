@@ -6,7 +6,9 @@ use App\Imports\LROLedgerImport;
 use App\Models\BillingAdjustment;
 use App\Models\ConsumerZone;
 use App\Models\LROLedger;
+use App\Support\AcctCodeTitles;
 use App\Support\AuthUsername;
+use App\Support\SundryLedgerRemarks;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -287,10 +289,14 @@ class LRO_ConsumerLedgerController extends Controller
                 'debit' => $debit,
                 'credit' => $credit,
                 'trans' => $ledger->acct_code ?? $ledger->type ?? '',
-                'ref' => $ledger->bam_no ?? $ledger->reference ?? '',
+                'ref' => $this->resolveLroLedgerReference($ledger, $typeUpper),
                 'date_display' => $d ? Carbon::parse($d)->format('m/d/Y') : '',
                 'summary_key' => $ledger->acct_code ?: ($ledger->type ?? ''),
-                'summary_title' => $ledger->reference ?? $ledger->remarks ?? ($ledger->acct_code ?: $ledger->type ?? ''),
+                'summary_title' => AcctCodeTitles::resolve(
+                    $ledger->acct_code,
+                    $ledger->remarks,
+                    $ledger->type
+                ),
                 'username' => $resolvedUsername,
             ];
         }
@@ -340,7 +346,11 @@ class LRO_ConsumerLedgerController extends Controller
                         'ref' => $ledger->cba_no ?? '',
                         'date_display' => $d ? Carbon::parse($d)->format('m/d/Y') : '',
                         'summary_key' => $ledger->acct_group ?? $ledger->cba_type ?? '',
-                        'summary_title' => $ledger->cba_remarks ?? $ledger->acct_group ?? $ledger->cba_type ?? '',
+                        'summary_title' => AcctCodeTitles::resolve(
+                            $ledger->acct_group ?? null,
+                            $ledger->cba_remarks ?? null,
+                            $ledger->cba_type ?? null
+                        ),
                         'username' => property_exists($ledger, 'username') ? ($ledger->username ?? '') : '',
                     ];
                 }
@@ -429,6 +439,30 @@ class LRO_ConsumerLedgerController extends Controller
         }
 
         return response()->json($response);
+    }
+
+    /**
+     * DM rows show BAM No.; CM (credit/payment) rows show OR # when available.
+     */
+    private function resolveLroLedgerReference(LROLedger $ledger, string $typeUpper = ''): string
+    {
+        $typeUpper = $typeUpper !== ''
+            ? strtoupper(trim($typeUpper))
+            : strtoupper(trim((string) ($ledger->type ?? '')));
+
+        if ($typeUpper === 'CM') {
+            $orNumber = SundryLedgerRemarks::orNumberFromRemarks($ledger->remarks);
+            if ($orNumber !== null) {
+                return $orNumber;
+            }
+        }
+
+        $bamNo = trim((string) ($ledger->bam_no ?? ''));
+        if ($bamNo !== '') {
+            return $bamNo;
+        }
+
+        return trim((string) ($ledger->reference ?? ''));
     }
 
     /**

@@ -205,7 +205,7 @@ class MeterReadingApiController extends Controller
                     'dr.previous_reading',
                     'dr.current_reading',
                     'dr.consumption',
-                    'dr.current_billing',
+                    'dr.current_bill',
                     'dr.reading_date',
                     'dr.status',
                     'dr.reader_notes',
@@ -421,7 +421,7 @@ class MeterReadingApiController extends Controller
                     'current_reading' => $currentReading,
                     'reading_date' => $request->reading_date ?? now(),
                     'consumption' => $consumption,
-                    'current_billing' => $currentBill,
+                    'current_bill' => $currentBill,
                     'status' => 'Completed',
                 ]));
                 $schedule->refresh();
@@ -434,7 +434,7 @@ class MeterReadingApiController extends Controller
                     'previous_reading' => $previousReading,
                     'current_reading' => $currentReading,
                     'consumption' => $consumption,
-                    'current_billing' => $currentBill,
+                    'current_bill' => $currentBill,
                     'reading_date' => $request->reading_date ?? now(),
                     'status' => 'completed',
                     'reader_notes' => $request->reader_notes,
@@ -546,7 +546,7 @@ class MeterReadingApiController extends Controller
                     'account_number' => $schedule->account_number,
                     'current_reading' => $schedule->current_reading,
                     'consumption' => $schedule->consumption,
-                    'current_billing' => $currentBill,
+                    'current_bill' => $currentBill,
                     'status' => $schedule->status
                 ]);
 
@@ -558,7 +558,7 @@ class MeterReadingApiController extends Controller
                         'account_number' => $schedule->account_number,
                         'current_reading' => $schedule->current_reading,
                         'consumption' => $schedule->consumption,
-                        'current_billing' => $schedule->current_billing,
+                        'current_bill' => $schedule->current_bill,
                         'status' => $schedule->status
                     ],
                     'downloaded_reading' => [
@@ -567,7 +567,7 @@ class MeterReadingApiController extends Controller
                         'reader_id' => $downloaded->reader_id,
                         'current_reading' => $downloaded->current_reading,
                         'consumption' => $downloaded->consumption,
-                        'current_billing' => $downloaded->current_billing,
+                        'current_bill' => $downloaded->current_bill,
                         'status' => $downloaded->status,
                     ]
                 ]);

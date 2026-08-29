@@ -21,6 +21,7 @@ use App\Exports\BillingRecordsExport;
 use App\Imports\DmLedgerImport;
 use App\Services\ConsumerMasterListService;
 use App\Services\DownloadedReadingPaymentService;
+use App\Support\SundryLedgerRemarks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\FromCollection;
@@ -209,7 +210,7 @@ class BillingProcessController extends Controller
                 'prev_read' => $previousReading['reading'],
                 'pres_read' => 0,
                 'volume' => $previousReading['volume'],
-                'current_bill' => $currentBill,
+                'current_billing' => $currentBill,
                 'water_maintenance_charge' => $wmc,
                 'arrears' => $arrears,
                 'total' => $total,
@@ -368,7 +369,7 @@ class BillingProcessController extends Controller
                         
                         // Calculate bill amounts
                         // current_bill is 0 at this point (no reading yet), but we can use estimated if provided
-                        $currentBill = (float)($scheduleData['current_bill'] ?? 0);
+                        $currentBill = (float)($scheduleData['current_billing'] ?? 0);
                         // Water Maintenance Charge should NOT be added during preparation
                         // It will only be added to the ledger when the reading is actually completed
                         $others = 0.00; // Water Maintenance Charge - set to 0 during preparation
@@ -384,7 +385,7 @@ class BillingProcessController extends Controller
                             'latest_ledger_entry_trans' => $latestLedgerEntry ? $latestLedgerEntry->trans : null,
                             'latest_ledger_entry_balance' => $latestLedgerEntry ? (float)($latestLedgerEntry->balance ?? 0) : null,
                             'previous_balance_used' => $previousBalance,
-                            'current_bill' => $currentBill,
+                            'current_billing' => $currentBill,
                             'others' => $others,
                             'debit' => $debit,
                             'new_balance' => $newBalance
@@ -485,7 +486,7 @@ class BillingProcessController extends Controller
                 'dr.current_reading as reading',
                 'dr.consumption as volume',
                 'dr.reading_date as date',
-                'dr.current_bill',
+                'dr.current_billing',
                 'mrs.arrears',
                 'mrs.total_amount'
             )
@@ -500,7 +501,7 @@ class BillingProcessController extends Controller
 
             // If no arrears stored but balance exists, calculate from balance
             if ($arrears == 0 && $latestBalance > 0) {
-                $currentBill = (float) ($latestDownloadedReading->current_bill ?? 0);
+                $currentBill = (float) ($latestDownloadedReading->current_billing ?? 0);
                 $arrears = max(0, $latestBalance - $currentBill);
             }
 
@@ -531,7 +532,7 @@ class BillingProcessController extends Controller
                 'mrs.current_reading as reading',
                 'mrs.consumption as volume',
                 'mrs.reading_date as date',
-                'mrs.current_bill',
+                'mrs.current_billing',
                 'mrs.arrears',
                 'mrs.total_amount'
             )
@@ -546,7 +547,7 @@ class BillingProcessController extends Controller
 
             // If no arrears stored but balance exists, calculate from balance
             if ($arrears == 0 && $latestBalance > 0) {
-                $currentBill = (float) ($latestSchedule->current_bill ?? 0);
+                $currentBill = (float) ($latestSchedule->current_billing ?? 0);
                 $arrears = max(0, $latestBalance - $currentBill);
             }
 
@@ -1059,11 +1060,11 @@ class BillingProcessController extends Controller
         $pastDueCount = 0;
 
         $result = [
-            'current_bill' => round($currentBill, 2),
+            'current_billing' => round($currentBill, 2),
             'penalty' => $penalty,
             'water_maintenance_charge' => $waterMaintenanceCharge,
-            'arrears_cy' => $arrearsCurrentYear,
-            'arrears_py' => $arrearsPreviousYear,
+            'current_arrears' => $arrearsCurrentYear,
+            'prio_years' => $arrearsPreviousYear,
             'advances' => $advances,
             'unpaid_count' => $unpaidCount,
             'past_due_count' => $pastDueCount,
@@ -1073,8 +1074,8 @@ class BillingProcessController extends Controller
         if ($payMonths !== null && $payMonths >= 1 && $payMonths <= 3) {
             $result['amount_due'] = round($currentBill + $arrearsCurrentYear + $arrearsPreviousYear + $penalty + $waterMaintenanceCharge - $advances, 2);
             $result['pay_months'] = $payMonths;
-            $result['arrears_cy_after_pay'] = round($arrearsCurrentYear, 2);
-            $result['arrears_py_after_pay'] = round($arrearsPreviousYear, 2);
+            $result['current_arrears_after_pay'] = round($arrearsCurrentYear, 2);
+            $result['prio_years_after_pay'] = round($arrearsPreviousYear, 2);
         }
 
         return $result;
@@ -1193,7 +1194,7 @@ class BillingProcessController extends Controller
                     'prev_read' => $previousReading['reading'],
                     'pres_read' => 0,
                     'volume' => $previousReading['volume'], // Show latest volume from consumer_ledgers
-                    'current_bill' => 0.00,
+                    'current_billing' => 0.00,
                      'arrears' => $ledgerArrears,
                     'total' => 0.00,
                     'status' => 'Active'
@@ -1264,8 +1265,8 @@ class BillingProcessController extends Controller
         $schedule = $latestReading->schedule;
         $billMonth = $schedule?->bill_month ? Carbon::parse($schedule->bill_month) : null;
 
-        $currentBill = $schedule?->current_bill !== null
-            ? (float) $schedule->current_bill
+        $currentBill = $schedule?->current_billing !== null
+            ? (float) $schedule->current_billing
             : null;
 
         $arrears = $schedule?->arrears !== null
@@ -1286,7 +1287,7 @@ class BillingProcessController extends Controller
 
         $latestBill = [
             'amount' => round($latestAmount, 2),
-            'current_bill' => $currentBill,
+            'current_billing' => $currentBill,
             'arrears' => $arrears,
             'total_amount' => $totalAmount,
             'payment_amount' => $paymentAmount,
@@ -1383,7 +1384,7 @@ class BillingProcessController extends Controller
                 'cz.account_name',
                 'cz.meter_number',
                 'dr.consumption as volume',
-                'dr.current_bill as downloaded_current_bill',
+                'dr.current_billing as downloaded_current_billing',
             ])
             ->where(function ($query) use ($zone) {
                 $query->whereNotNull(mr_col('cz.zone_code'));
@@ -1410,7 +1411,7 @@ class BillingProcessController extends Controller
         })->values();
 
         return $sortedRows->map(function ($item) {
-            $currentBill = (float) ($item->downloaded_current_bill ?? 0);
+            $currentBill = (float) ($item->downloaded_current_billing ?? 0);
             $maintenanceCharge = $currentBill > 0 ? 20.00 : 0.00;
             $totalAmount = $currentBill + $maintenanceCharge;
 
@@ -1460,7 +1461,7 @@ class BillingProcessController extends Controller
         }
 
         return $query->get()->map(function (MeterReadingSchedule $item) {
-            $currentBill = $item->current_bill !== null ? (float) $item->current_bill : 0.0;
+            $currentBill = $item->current_billing !== null ? (float) $item->current_billing : 0.0;
             $arrears = $item->arrears !== null ? (float) $item->arrears : 0.0;
             $maintenanceCharge = $currentBill > 0 ? 20.00 : 0.00;
             $totalAmount = $item->total_amount !== null
@@ -1880,7 +1881,7 @@ class BillingProcessController extends Controller
             'dr.consumption as volume',
             'dr.reading_date',
             'dr.status',
-            'dr.current_bill as downloaded_current_bill',
+            'dr.current_billing as downloaded_current_billing',
             DB::raw('COALESCE(mrs.arrears, 0) as arrears'),
             'cp.payment_method',
             'cp.payment_amount',
@@ -1945,14 +1946,14 @@ class BillingProcessController extends Controller
             $viewType = ($dueDate && $today->lte($dueDate)) ? 'pre_due' : 'post_due';
             $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, $viewType, null, null);
             $penalty = (float) ($breakdown['penalty'] ?? 0);
-            $arrearsCy = (float) ($breakdown['arrears_cy'] ?? 0);
-            $arrearsPy = (float) ($breakdown['arrears_py'] ?? 0);
+            $arrearsCy = (float) ($breakdown['current_arrears'] ?? 0);
+            $arrearsPy = (float) ($breakdown['prio_years'] ?? 0);
         } else {
             $arrearsPy = (float) ($reading->arrears ?? 0);
         }
 
         // Bill Printing: Current Bill from downloaded_readings.current_bill; Water Maintenance = 20
-        $currentBill = (float) ($reading->downloaded_current_bill ?? 0);
+        $currentBill = (float) ($reading->downloaded_current_billing ?? 0);
         $waterMaintenanceCharge = 20.00;
 
         $arrears = $arrearsCy + $arrearsPy;
@@ -1980,10 +1981,10 @@ class BillingProcessController extends Controller
             'volume' => $consumption,
             'penalty_charge' => round($penalty, 2),
             'water_maintenance_charge' => round($waterMaintenanceCharge, 2),
-            'current_bill' => round($currentBill, 2),
+            'current_billing' => round($currentBill, 2),
             'arrears' => round($arrears, 2),
-            'arrears_cy' => round($arrearsCy, 2),
-            'arrears_py' => round($arrearsPy, 2),
+            'current_arrears' => round($arrearsCy, 2),
+            'prio_years' => round($arrearsPy, 2),
             'total' => $total,
             'status' => $statusLabel,
             'status_code' => $statusCode,
@@ -2109,7 +2110,7 @@ class BillingProcessController extends Controller
                     'dr.id as downloaded_id',
                     'dr.current_reading as pres_read',
                     'dr.consumption as volume',
-                    'dr.current_bill as dr_current_bill'
+                    'dr.current_billing as dr_current_billing'
                 );
 
             $rows = $schedulesQuery->get();
@@ -2128,10 +2129,10 @@ class BillingProcessController extends Controller
                 }
 
                 $arrearsBeforeBill = 0.00;
-                $currentBill = (float) ($row->dr_current_bill ?? 0);
+                $currentBill = (float) ($row->dr_current_billing ?? 0);
                 if ($currentBill <= 0 && $consumer) {
                     $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
-                    $currentBill = (float) ($breakdown['current_bill'] ?? 0);
+                    $currentBill = (float) ($breakdown['current_billing'] ?? 0);
                 }
                 // Internal: balance before this schedule's BILLING (for reconcile with ledger footer)
                 if ($consumer && !empty($row->schedule_id)) {
@@ -2181,7 +2182,7 @@ class BillingProcessController extends Controller
                     'prev_read' => $row->prev_read ?? 0,
                     'pres_read' => $row->pres_read ?? 0,
                     'volume' => $row->volume ?? 0,
-                    'current_bill' => round($currentBill, 2),
+                    'current_billing' => round($currentBill, 2),
                     'arrears' => $arrearsColumn,
                     'calculated_penalty' => $calculatedPenalty,
                     'penalty_base' => round($penaltyBase, 2),
@@ -2468,7 +2469,7 @@ class BillingProcessController extends Controller
                     'dr.id as downloaded_id',
                     'dr.current_reading as pres_read',
                     'dr.consumption as volume',
-                    'dr.current_bill as dr_current_bill'
+                    'dr.current_billing as dr_current_billing'
                 )
                 ->get();
 
@@ -2486,10 +2487,10 @@ class BillingProcessController extends Controller
                 }
 
                 $arrearsBeforeBill = 0.00;
-                $currentBill = (float) ($row->dr_current_bill ?? 0);
+                $currentBill = (float) ($row->dr_current_billing ?? 0);
                 if ($currentBill <= 0 && $consumer) {
                     $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
-                    $currentBill = (float) ($breakdown['current_bill'] ?? 0);
+                    $currentBill = (float) ($breakdown['current_billing'] ?? 0);
                 }
 
                 if ($consumer && !empty($row->schedule_id)) {
@@ -2537,7 +2538,7 @@ class BillingProcessController extends Controller
                     'prev_read' => $row->prev_read ?? 0,
                     'pres_read' => $row->pres_read ?? 0,
                     'volume' => $row->volume ?? 0,
-                    'current_bill' => round($currentBill, 2),
+                    'current_billing' => round($currentBill, 2),
                     'arrears' => $arrearsColumn,
                     'calculated_penalty' => $calculatedPenalty,
                     'penalty_base' => round($penaltyBase, 2),
@@ -2587,7 +2588,7 @@ class BillingProcessController extends Controller
                 'items.*.schedule_id' => 'required|integer',
                 'items.*.downloaded_id' => 'nullable|integer',
                 'items.*.consumer_zone_id' => 'nullable|integer',
-                'items.*.current_bill' => 'nullable|numeric|min:0',
+                'items.*.current_billing' => 'nullable|numeric|min:0',
                 'items.*.due_date' => 'nullable|string',
                 'items.*.calculated_penalty' => 'required|numeric|min:0',
             ]);
@@ -2601,7 +2602,7 @@ class BillingProcessController extends Controller
                 $scheduleId = (int) ($item['schedule_id'] ?? 0);
                 $downloadedId = isset($item['downloaded_id']) ? (int) $item['downloaded_id'] : null;
                 $consumerZoneId = isset($item['consumer_zone_id']) ? (int) $item['consumer_zone_id'] : null;
-                $currentBill = (float) ($item['current_bill'] ?? 0);
+                $currentBill = (float) ($item['current_billing'] ?? 0);
                 $dueDateStr = $item['due_date'] ?? null;
                 $calculatedPenalty = (float) ($item['calculated_penalty'] ?? 0);
 
@@ -3024,14 +3025,14 @@ class BillingProcessController extends Controller
             'remarks' => 'nullable|string|max:1000',
             'official_receipt_number' => 'nullable|string|max:20',
             'is_update' => 'nullable|boolean',
-            'current_bill' => 'nullable|numeric|min:0',
+            'current_billing' => 'nullable|numeric|min:0',
             'senior_citizen_discount' => 'nullable|numeric|min:0',
-            'penalty' => 'nullable|numeric|min:0',
-            'meter_maintenance' => 'nullable|numeric|min:0',
-            'arrears_cy' => 'nullable|numeric|min:0',
-            'arrears_py' => 'nullable|numeric|min:0',
+            'current_penalty' => 'nullable|numeric|min:0',
+            'mr_arrears' => 'nullable|numeric|min:0',
+            'current_arrears' => 'nullable|numeric|min:0',
+            'prio_years' => 'nullable|numeric|min:0',
             'advances' => 'nullable|numeric|min:0',
-            'others' => 'nullable|numeric|min:0',
+            'current_mr' => 'nullable|numeric|min:0',
             'materials' => 'nullable|numeric|min:0',
             'fees_charges' => 'nullable|numeric|min:0',
             'inspection_fee' => 'nullable|numeric|min:0',
@@ -3594,22 +3595,20 @@ class BillingProcessController extends Controller
                 'or_number' => 'required|string'
             ]);
 
-            $orNumber = $validated['or_number'];
-            $lroRemarks = 'Payment OR#' . $orNumber;
+            $orNumber = trim($validated['or_number']);
             
             // Find payment by OR number
             $payment = ConsumerPayment::query()->where(mr_col('or_number'), $orNumber)->first();
 
             // If no consumer_payment exists, still clean orphan LRO payment rows for this OR.
             if (!$payment) {
-                $deletedOrphanLroRows = LROLedger::query()->where(mr_col('type'), 'CM')
-                    ->where(mr_col('remarks'), $lroRemarks)
-                    ->delete();
+                $deletedOrphanLroRows = SundryLedgerRemarks::deletePaymentCmRowsForOr($orNumber);
 
                 if ($deletedOrphanLroRows > 0) {
                     return response()->json([
                         'success' => true,
                         'message' => 'No consumer payment found for OR # ' . $orNumber . ', but orphan LRO row(s) were deleted.',
+                        'deleted_lro_rows' => $deletedOrphanLroRows,
                     ]);
                 }
 
@@ -3619,13 +3618,13 @@ class BillingProcessController extends Controller
                 ], 404);
             }
 
+            $orForLro = trim((string) ($payment->or_number ?? $orNumber));
+
             // Delete the payment (cascade delete will handle consumer_ledger payment entries).
             $payment->delete();
 
-            // Always delete corresponding LRO payment rows (CM) tagged by OR in remarks.
-            $deletedLroRows = LROLedger::query()->where(mr_col('type'), 'CM')
-                ->where(mr_col('remarks'), $lroRemarks)
-                ->delete();
+            // Safety net: remove any LRO CM rows still linked to this OR.
+            $deletedLroRows = SundryLedgerRemarks::deletePaymentCmRowsForOr($orForLro);
 
             return response()->json([
                 'success' => true,

@@ -667,7 +667,7 @@ function buildEscPosReceipt(receipt, options = {}) {
 	push(''); // Add spacing before QR code
 	
 	// Add QR code ESC/POS commands (centered)
-	const facebookUrl = 'https://www.facebook.com/HagonoyWD';
+	const facebookUrl = 'https://www.facebook.com/kwd.kiblawan.5';
 	const qrSize = 6; // Module size (1-8, 6 is medium)
 	const qrErrorLevel = 1; // Error correction level (0=L, 1=M, 2=Q, 3=H)
 	
@@ -675,7 +675,7 @@ function buildEscPosReceipt(receipt, options = {}) {
 	let qrCommand = '';
 	
 	// Center alignment command (ESC a 1 = center)
-	qrCommand += '\x1B\x61\x01'; // ESC a 1 = center align
+	qrCommand += '\x1B\x61\x01'; // ESC a 1 = center align	
 	
 	// Select QR code model (Model 2)
 	qrCommand += '\x1D\x28\x6B\x04\x00\x31\x41\x32\x00';

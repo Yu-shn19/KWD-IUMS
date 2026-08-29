@@ -60,7 +60,7 @@ const apiRequest = async (endpoint, options = {}) => {
     
     // Provide more helpful error messages
     if (error.message.includes('Network request failed') || error.message.includes('fetch')) {
-      throw new Error(`Cannot connect to server. Please check:\n1. XAMPP Apache is running\n2. Laravel API is accessible at ${API_BASE_URL}\n3. Your device is on the same network`);
+      throw new Error(`Cannot connect to server at ${API_BASE_URL}. Check internet, HTTPS URL, and that the API is online.`);
     }
     
     throw error;
@@ -311,15 +311,60 @@ export const dashboardAPI = {
 
 // Routes API (uploaded by admin from the website)
 export const routesAPI = {
-  // Get list of route customers for a reader
+  // Get list of route customers for a reader.
+  // Prefers drop-in PHP that matches Download Reading Completed status (needed after reinstall).
   getRoutes: async (params = {}, token) => {
     const query = new URLSearchParams(params).toString();
-    const endpoint = `/reader/schedules${query ? `?${query}` : ''}`;
+    const apiBase = getApiConfig().baseURL.replace(/\/$/, '');
+    const siteBase = apiBase.replace(/\/api$/i, '');
+    const q = query ? `?${query}` : '';
+    const timeoutMs = getApiConfig().timeout || 45000;
 
+    const candidateUrls = [
+      `${siteBase}/mobile-reader-schedules.php${q}`,
+      `${siteBase}/public/mobile-reader-schedules.php${q}`,
+      `${apiBase}/../mobile-reader-schedules.php${q}`,
+    ];
+
+    for (const v2Url of candidateUrls) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const response = await fetch(v2Url, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: token ? `Bearer ${token}` : '',
+          },
+        });
+        clearTimeout(timeoutId);
+        if (!response.ok) continue;
+        const data = await response.json();
+        if (data && data.success && Array.isArray(data.schedules)) {
+          console.log('📡 Schedules from drop-in', v2Url, data.version || '', data.total_schedules);
+          return data;
+        }
+      } catch (e) {
+        console.warn('drop-in schedules miss:', v2Url, e?.message || e);
+      }
+    }
+
+    const endpoint = `/reader/schedules${q}`;
     return apiRequest(endpoint, {
       method: 'GET',
       token
     });
+  },
+
+  /** Check whether live API includes the completed-status fix (for reinstall). */
+  getApiVersion: async () => {
+    try {
+      const data = await apiRequest('/test', { method: 'GET' });
+      return data?.version || null;
+    } catch (_) {
+      return null;
+    }
   },
   // Import/upload routes (JSON array) from web admin or app
   importRoutes: async (routesArray, token) => {

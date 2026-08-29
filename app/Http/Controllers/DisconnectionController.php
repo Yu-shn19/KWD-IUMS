@@ -567,8 +567,8 @@ class DisconnectionController extends Controller
         $consumer->passed_schedules_count = $passedSchedules->count();
         $consumer->last_reading = (float) ($context->latestScheduleReadingsByAccount->get($accountNo, 0) ?? 0);
         $rawCurrentBill = (float) ($context->latestCurrentBillsByAccount->get($accountNo, 0) ?? 0);
-        $consumer->current_bill = $rawCurrentBill;
-        $consumer->current_bill_with_maintenance = round($rawCurrentBill + 20, 2);
+        $consumer->current_billing = $rawCurrentBill;
+        $consumer->current_billing_with_maintenance = round($rawCurrentBill + 20, 2);
         $consumer->aging_current = $agingBuckets['current'];
         $consumer->aging_30_days = $agingBuckets['days_30'];
         $consumer->aging_60_days = $agingBuckets['days_60'];
@@ -1486,8 +1486,8 @@ class DisconnectionController extends Controller
         $consumer->latest_unpaid_date = $unpaidDatesData['latest_unpaid_date'] ?? $consecutiveUnpaid['latest_date'];
         $consumer->last_reading = (float) ($lookupData['latestScheduleReadingsByAccount']->get($consumer->account_no, 0) ?? 0);
         $rawCurrentBill = (float) ($lookupData['latestCurrentBillsByAccount']->get($consumer->account_no, 0) ?? 0);
-        $consumer->current_bill = $rawCurrentBill;
-        $consumer->current_bill_with_maintenance = round($rawCurrentBill + 20, 2);
+        $consumer->current_billing = $rawCurrentBill;
+        $consumer->current_billing_with_maintenance = round($rawCurrentBill + 20, 2);
         $consumer->aging_current = $agingBuckets['current'];
         $consumer->aging_30_days = $agingBuckets['days_30'];
         $consumer->aging_60_days = $agingBuckets['days_60'];
@@ -2424,7 +2424,7 @@ class DisconnectionController extends Controller
     {
         $drTable = mr_col('downloaded_readings as dr');
         $drConsumerZoneId = mr_col('dr.consumer_zone_id');
-        $drCurrentBill = mr_col('dr.current_bill');
+        $drCurrentBill = mr_col('dr.current_billing');
         $drReadingDate = mr_col('dr.reading_date');
         $drCreatedAt = mr_col('dr.created_at');
         $drId = mr_col('dr.id');
@@ -2441,7 +2441,7 @@ class DisconnectionController extends Controller
             ->map(function ($items) {
                 $first = $items->first();
 
-                return $first ? (float) ($first->current_bill ?? 0) : 0.0;
+                return $first ? (float) ($first->current_billing ?? 0) : 0.0;
             });
     }
 }

@@ -390,7 +390,7 @@
                                                                         <td>{{ $consumer->address }}</td>
                                                                         <td>{{ $consumer->meter_number }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->last_reading ?? 0), 0) }}</td>
-                                                                        <td class="text-right">{{ number_format((float)($consumer->current_bill_with_maintenance ?? 20), 2) }}</td>
+                                                                        <td class="text-right">{{ number_format((float)($consumer->current_billing_with_maintenance ?? 20), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_30_days ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_60_days ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_90_days ?? 0) + (float)($consumer->aging_over_90 ?? 0), 2) }}</td>
@@ -503,7 +503,7 @@
                                                         <td>{{ $order->account_no }}</td>
                                                         <td>{{ $order->account_name }}</td>
                                                         <td>{{ optional($order->disconnector)->name ?? 'Unassigned' }}</td>
-                                                        <td class="text-right">{{ number_format((float) ($order->current_bill_with_maintenance ?? 0), 2) }}</td>
+                                                        <td class="text-right">{{ number_format((float) ($order->current_billing_with_maintenance ?? 0), 2) }}</td>
                                                         <td class="text-right text-danger font-weight-bold">{{ number_format((float) $order->total_outstanding, 2) }}</td>
                                                         <td>
                                                             <span class="badge badge-{{ $order->status === 'disconnected' ? 'danger' : ($order->status === 'assigned' ? 'primary' : ($order->status === 'cancelled' ? 'secondary' : 'warning')) }}">
@@ -516,7 +516,7 @@
                                                                 <input type="number"
                                                                        name="current_bill_with_maintenance"
                                                                        class="form-control form-control-sm mr-2"
-                                                                       value="{{ number_format((float) ($order->current_bill_with_maintenance ?? 0), 2, '.', '') }}"
+                                                                       value="{{ number_format((float) ($order->current_billing_with_maintenance ?? 0), 2, '.', '') }}"
                                                                        step="0.01"
                                                                        min="0"
                                                                        style="width: 130px;">
