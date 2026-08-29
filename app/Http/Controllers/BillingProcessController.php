@@ -21,6 +21,7 @@ use App\Exports\BillingRecordsExport;
 use App\Imports\DmLedgerImport;
 use App\Services\ConsumerMasterListService;
 use App\Services\DownloadedReadingPaymentService;
+use App\Support\SundryLedgerRemarks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Collection;
 use Maatwebsite\Excel\Concerns\FromCollection;
@@ -3594,22 +3595,20 @@ class BillingProcessController extends Controller
                 'or_number' => 'required|string'
             ]);
 
-            $orNumber = $validated['or_number'];
-            $lroRemarks = 'Payment OR#' . $orNumber;
+            $orNumber = trim($validated['or_number']);
             
             // Find payment by OR number
             $payment = ConsumerPayment::query()->where(mr_col('or_number'), $orNumber)->first();
 
             // If no consumer_payment exists, still clean orphan LRO payment rows for this OR.
             if (!$payment) {
-                $deletedOrphanLroRows = LROLedger::query()->where(mr_col('type'), 'CM')
-                    ->where(mr_col('remarks'), $lroRemarks)
-                    ->delete();
+                $deletedOrphanLroRows = SundryLedgerRemarks::deletePaymentCmRowsForOr($orNumber);
 
                 if ($deletedOrphanLroRows > 0) {
                     return response()->json([
                         'success' => true,
                         'message' => 'No consumer payment found for OR # ' . $orNumber . ', but orphan LRO row(s) were deleted.',
+                        'deleted_lro_rows' => $deletedOrphanLroRows,
                     ]);
                 }
 
@@ -3619,13 +3618,13 @@ class BillingProcessController extends Controller
                 ], 404);
             }
 
+            $orForLro = trim((string) ($payment->or_number ?? $orNumber));
+
             // Delete the payment (cascade delete will handle consumer_ledger payment entries).
             $payment->delete();
 
-            // Always delete corresponding LRO payment rows (CM) tagged by OR in remarks.
-            $deletedLroRows = LROLedger::query()->where(mr_col('type'), 'CM')
-                ->where(mr_col('remarks'), $lroRemarks)
-                ->delete();
+            // Safety net: remove any LRO CM rows still linked to this OR.
+            $deletedLroRows = SundryLedgerRemarks::deletePaymentCmRowsForOr($orForLro);
 
             return response()->json([
                 'success' => true,

@@ -199,7 +199,7 @@
                                         <option value="AR">AR (Consumer ledger)</option>
                                         <option value="LRO">LRO</option>
                                     </select>
-                                    <small class="d-block mt-1 small text-muted">AR = consumer ledger adjustments; LRO = LRO ledger. Sundry acct codes (19901xxx) use LRO + DM only.</small>
+                                    <small class="d-block mt-1 small text-muted">AR = consumer ledger (DM, CM, Others — no acct code). LRO = LRO ledger (DM only — select acct code).</small>
                                 </div>
                             </div>
                             <div class="row">
@@ -514,8 +514,62 @@
             return y + '-' + m + '-' + day;
         }
         
-        // Apply Type-specific UI rules (e.g. Others)
-        var bamPrevLedger = null;
+        // Apply ledger/type UI rules
+        function bamSetTypeOptionEnabled(value, enabled) {
+            var typeEl = document.getElementById('bamType');
+            if (!typeEl) return;
+            for (var i = 0; i < typeEl.options.length; i++) {
+                if (typeEl.options[i].value === value) {
+                    typeEl.options[i].disabled = !enabled;
+                    typeEl.options[i].hidden = !enabled;
+                }
+            }
+        }
+
+        function bamSetAcctCodeEnabled(enabled) {
+            var acctDisplay = document.getElementById('bamAcctCodeDisplay');
+            var acctHidden = document.getElementById('bamAcctCode');
+            var acctDropdown = document.getElementById('bamAcctCodeDropdown');
+            if (!acctDisplay || !acctHidden) return;
+
+            acctDisplay.disabled = !enabled;
+            acctDisplay.style.cursor = enabled ? 'pointer' : 'not-allowed';
+            acctDisplay.style.backgroundColor = enabled ? '#fff' : '#e9ecef';
+
+            if (!enabled) {
+                acctHidden.value = '';
+                acctDisplay.value = '';
+                acctDisplay.placeholder = '— Select Acct Code —';
+                if (acctDropdown) acctDropdown.style.display = 'none';
+            }
+        }
+
+        function bamApplyLedgerRules() {
+            var ledgerEl = document.getElementById('bamAr');
+            var typeEl = document.getElementById('bamType');
+            if (!ledgerEl || !typeEl) return;
+
+            if (ledgerEl.value === 'LRO') {
+                // LRO: DM only; acct code required path
+                bamSetTypeOptionEnabled('CM', false);
+                bamSetTypeOptionEnabled('Others', false);
+                bamSetTypeOptionEnabled('DM', true);
+                if (typeEl.value !== 'DM') {
+                    bamSetSelected('bamType', 'DM');
+                }
+                bamSetAcctCodeEnabled(true);
+            } else {
+                // AR: all three types; no acct code
+                bamSetTypeOptionEnabled('CM', true);
+                bamSetTypeOptionEnabled('Others', true);
+                bamSetTypeOptionEnabled('DM', true);
+                bamSetAcctCodeEnabled(false);
+            }
+
+            bamApplyTypeRules();
+            bamApplyStatusOptions();
+        }
+
         function bamApplyTypeRules() {
             var typeEl    = document.getElementById('bamType');
             var ledgerEl  = document.getElementById('bamAr');
@@ -525,34 +579,23 @@
             if (!typeEl || !ledgerEl || !accountEl || !nameEl || !bamNoEl) return;
 
             var isOthers = (typeEl.value === 'Others');
+            var isAr = ledgerEl.value === 'AR';
 
-            if (isOthers) {
-                if (bamPrevLedger === null) bamPrevLedger = ledgerEl.value || 'AR';
-                ledgerEl.value = 'LRO';
-                ledgerEl.disabled = true;
-
+            if (isOthers && isAr) {
                 accountEl.value = '';
                 accountEl.disabled = true;
-
-                // Allow manual name input for Others
                 nameEl.readOnly = false;
                 nameEl.placeholder = 'Enter name...';
                 bamNoEl.readOnly = false;
             } else {
-                ledgerEl.disabled = false;
-                if (bamPrevLedger !== null) ledgerEl.value = bamPrevLedger;
-                bamPrevLedger = null;
-
                 accountEl.disabled = false;
-
                 nameEl.readOnly = true;
                 nameEl.placeholder = 'Consumer name (from selection)';
                 bamNoEl.readOnly = true;
-                if ((nameEl.value || '').trim() && !accountEl.value) nameEl.value = '';
+                if ((nameEl.value || '').trim() && !accountEl.value && !isOthers) nameEl.value = '';
             }
 
             bamApplySundryRules();
-            bamApplyStatusOptions();
         }
 
         function bamApplySundryRules() {
@@ -561,20 +604,12 @@
             var typeEl = document.getElementById('bamType');
             if (!acctHidden || !ledgerEl || !typeEl) return;
 
+            if (ledgerEl.value !== 'LRO') return;
+
             var code = (acctHidden.value || '').trim();
             var sundryCodes = ['19901020', '19901030', '19901040'];
-            var isSundry = sundryCodes.indexOf(code) !== -1;
-            var isOthers = typeEl.value === 'Others';
-
-            if (isSundry && !isOthers) {
-                bamSetSelected('bamAr', 'LRO');
+            if (sundryCodes.indexOf(code) !== -1) {
                 bamSetSelected('bamType', 'DM');
-                ledgerEl.disabled = true;
-            } else if (!isOthers) {
-                if (!code) {
-                    bamSetSelected('bamAr', 'AR');
-                }
-                ledgerEl.disabled = false;
             }
         }
 
@@ -611,9 +646,7 @@
             bamSetVal('bamRemarks', entry.remarks || '');
             bamSetSelected('bamStatus', entry.status || 'Approved');
             bamSetVal('bamCorrectReading', entry.correct_reading !== null && entry.correct_reading !== undefined ? entry.correct_reading : '0');
-            bamApplyTypeRules();
-            bamApplySundryRules();
-            bamApplyStatusOptions();
+            bamApplyLedgerRules();
         }
 
         // Reset the form to a blank new-entry state; pass nextBamNo from server response
@@ -634,7 +667,7 @@
             // Clear edit-mode IDs so next save is treated as new
             bamSetVal('bamLroId', '');
             bamSetVal('bamArId', '');
-            bamApplyTypeRules();
+            bamApplyLedgerRules();
         }
 
         // ─── Tab behavior ────────────────────────────────────────────────────────
@@ -888,6 +921,7 @@
                 if (!acctDisplay || !acctHidden || !acctDropdown) return;
 
                 acctDisplay.addEventListener('click', function() {
+                    if (acctDisplay.disabled) return;
                     acctDropdown.style.display = acctDropdown.style.display === 'none' ? 'block' : 'none';
                 });
                 acctDropdown.querySelectorAll('.bam-acct-option').forEach(function(opt) {
@@ -917,8 +951,11 @@
             var ledgerEl = document.getElementById('bamAr');
             var amountEl = document.getElementById('bamAmount');
             if (!typeEl) return;
-            typeEl.addEventListener('change', bamApplyTypeRules);
-            if (ledgerEl) ledgerEl.addEventListener('change', bamApplyStatusOptions);
+            typeEl.addEventListener('change', function() {
+                bamApplyTypeRules();
+                bamApplyStatusOptions();
+            });
+            if (ledgerEl) ledgerEl.addEventListener('change', bamApplyLedgerRules);
             if (amountEl) {
                 amountEl.addEventListener('focus', function() {
                     amountEl.value = bamNormalizeAmountForEdit(amountEl.value);
@@ -928,8 +965,8 @@
                     amountEl.value = bamFormatAmountValue(amountEl.value);
                 });
             }
-            document.addEventListener('DOMContentLoaded', bamApplyTypeRules);
-            bamApplyTypeRules();
+            document.addEventListener('DOMContentLoaded', bamApplyLedgerRules);
+            bamApplyLedgerRules();
         })();
     </script>
 </body>

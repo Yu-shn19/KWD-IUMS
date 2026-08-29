@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\ConsumerLedger;
+use App\Support\SundryLedgerRemarks;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
@@ -245,6 +246,8 @@ class ConsumerPayment extends Model
         parent::boot();
 
         static::deleting(function ($payment) {
+            SundryLedgerRemarks::deletePaymentCmRowsForOr($payment->or_number);
+
             $ledgerEntry = ConsumerLedger::query()
                 ->where(mr_col('consumer_payment_id'), $payment->id)
                 ->where(mr_col('trans'), 'PAYMENT')
