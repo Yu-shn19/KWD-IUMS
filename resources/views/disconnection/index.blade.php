@@ -677,8 +677,8 @@
         <div id="disconnection-print-sheet" class="disconnection-print-sheet" aria-hidden="true">
             <div class="print-report">
                 <div class="print-header">
-                    <h1 class="print-title">HAGONOY WATER DISTRICT</h1>
-                    <p class="print-meta">Guihing, Hagonoy</p>
+                    <h1 class="print-title">{{ $branding['org_name_upper'] }}</h1>
+                    <p class="print-meta">{{ $branding['org_address'] }}</p>
                     <h2 class="print-subtitle">CONSUMERS FOR DISCONNECTION</h2>
                     <p class="print-meta">{{ $billingMonthHeader }}</p>
                 </div>

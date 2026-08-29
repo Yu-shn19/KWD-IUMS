@@ -101,6 +101,7 @@ class ActivityLogger
 
         // Settings / pricing
         'settings.consumer-edit-pin.update' => 'Changed Consumer Edit PIN',
+        'settings.system.update' => 'Updated System Branding Settings',
         'pricing-tiers.store' => 'Created Pricing Tier',
         'pricing-tiers.update' => 'Updated Pricing Tier',
         'pricing-tiers.destroy' => 'Deleted Pricing Tier',

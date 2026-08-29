@@ -605,8 +605,8 @@
                 </style>
 
                 <div class="print-header">
-                    <h1>HAGONOY WATER DISTRICT</h1>
-                    <p>Guihing, Hagonoy</p>
+                    <h1>{{ $branding['org_name_upper'] }}</h1>
+                    <p>{{ $branding['org_address'] }}</p>
                     <h2>DAILY BILLING REPORT</h2>
                     <p id="printBillMonth"></p>
                     <p class="print-zone" id="printZone"></p>

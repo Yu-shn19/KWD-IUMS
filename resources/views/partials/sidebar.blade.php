@@ -3,9 +3,9 @@
   <!-- Brand Section -->
   <a class="sidebar-brand" href="/">
     <div class="sidebar-brand-icon">
-      <img src="{{ url('WDMS/img/logo/KlogoC.png') }}" alt="Logo" class="brand-logo">
+      <img src="{{ $branding['logo_url'] }}" alt="{{ $branding['org_name'] }} Logo" class="brand-logo">
     </div>
-    <div class="sidebar-brand-text">eKWD-IUMS</div>
+    <div class="sidebar-brand-text">{{ $branding['org_short_name'] }}</div>
   </a>
   <div class="sidebar-divider-modern"></div>
 
@@ -151,7 +151,7 @@
     </a>
     <div id="collapseOptions" class="collapse" aria-labelledby="headingTable" data-parent="#accordionSidebar">
       <div class="collapse-inner-modern">
-              <a class="collapse-item" href="#">
+              <a class="collapse-item" href="{{ route('settings.system') }}">
           <i class="fas fa-circle small-icon"></i> System Setting
         </a>
         <a class="collapse-item" href="{{ route('settings.consumer-edit-pin') }}">

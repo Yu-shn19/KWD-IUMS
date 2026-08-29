@@ -11,7 +11,7 @@
 <div class="notice-document{{ $compact ? ' notice-document--compact' : '' }}{{ $forPrint ? ' notice-document--a4-print' : '' }}">
     <header class="nd-header">
         <div class="nd-logo-box">
-            <img src="{{ url('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District Logo">
+            <img src="{{ $branding['logo_url'] }}" alt="{{ $branding['org_name'] }} Logo">
         </div>
         <h2 class="nd-title">NOTICE OF DISCONNECTION</h2>
         <span class="nd-header-spacer" aria-hidden="true"></span>
