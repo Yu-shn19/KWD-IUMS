@@ -244,13 +244,13 @@ class DownloadedReadingPaymentService
             'amount_tendered' => round($validated['amount_tendered'], 2),
             'change_amount' => $change,
             'senior_citizen_discount' => round($validated['senior_citizen_discount'] ?? 0, 2),
-            'current_bill' => round($validated['current_bill'] ?? 0, 2),
-            'penalty' => round($validated['penalty'] ?? 0, 2),
-            'meter_maintenance' => round($validated['meter_maintenance'] ?? 0, 2),
-            'arrears_cy' => round($validated['arrears_cy'] ?? 0, 2),
-            'arrears_py' => round($validated['arrears_py'] ?? 0, 2),
+            'current_billing' => round($validated['current_billing'] ?? 0, 2),
+            'current_penalty' => round($validated['current_penalty'] ?? 0, 2),
+            'mr_arrears' => round($validated['mr_arrears'] ?? 0, 2),
+            'current_arrears' => round($validated['current_arrears'] ?? 0, 2),
+            'prio_years' => round($validated['prio_years'] ?? 0, 2),
             'advances' => round($validated['advances'] ?? 0, 2),
-            'others' => round($validated['others'] ?? 0, 2),
+            'current_mr' => round($validated['current_mr'] ?? 0, 2),
             'materials' => round($validated['materials'] ?? 0, 2),
             'fees_charges' => round($validated['fees_charges'] ?? 0, 2),
             'inspection_fee' => round($validated['inspection_fee'] ?? 0, 2),
@@ -599,7 +599,7 @@ class DownloadedReadingPaymentService
             return;
         }
 
-        $billAmount = (float) ($schedule->current_bill ?? $downloaded->current_bill ?? 0);
+        $billAmount = (float) ($schedule->current_billing ?? $downloaded->current_billing ?? 0);
         $totalPaid = ConsumerPayment::query()->where(mr_col('reading_id'), $downloaded->id)
             ->whereNotNull(mr_col('paid_at'))
             ->whereDate(mr_col('paid_at'), '<=', $dueDate->format('Y-m-d'))
@@ -672,7 +672,7 @@ class DownloadedReadingPaymentService
             'reading' => 0,
             'volume' => 0,
             'billamount' => 0,
-            'penalty' => round((float) ($validated['penalty'] ?? 0), 2),
+            'penalty' => round((float) ($validated['current_penalty'] ?? 0), 2),
             'others' => 0,
             'debit' => 0,
             'credit' => $billPaymentAmount,
@@ -818,8 +818,8 @@ class DownloadedReadingPaymentService
             'reading' => 0,
             'volume' => 0,
             'billamount' => 0,
-            'penalty' => 0,
-            'others' => 0,
+            'current_penalty' => 0,
+            'current_mr' => 0,
             'debit' => 0,
             'credit' => $scDiscount,
             'balance' => round($newBalance - $scDiscount, 2),

@@ -131,7 +131,7 @@ class ReaderController extends Controller
                     'mrs.previous_reading',
                     'mrs.current_reading',
                     'mrs.consumption',
-                    'mrs.current_bill',
+                    'mrs.current_billing',
                     'mrs.arrears',
                     'mrs.status',
                     'cz.zone_code as zone',
@@ -186,7 +186,7 @@ class ReaderController extends Controller
                     'previous_reading' => $r['previous_reading'] ?? null,
                     'current_reading' => $r['current_reading'] ?? null,
                     'consumption' => $r['consumption'] ?? null,
-                    'current_bill' => $r['current_bill'] ?? null,
+                    'current_billing' => $r['current_billing'] ?? null,
                     'arrears' => $r['arrears'] ?? null,
                     'status' => $r['status'] ?? null,
                 ];

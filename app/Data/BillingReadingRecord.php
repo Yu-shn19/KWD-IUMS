@@ -25,7 +25,7 @@ class BillingReadingRecord
 
     public float|int|null $consumption = 0;
 
-    public ?float $downloaded_current_bill = null;
+    public ?float $downloaded_current_billing = null;
 
     public ?string $reading_date = null;
 
@@ -67,7 +67,7 @@ class BillingReadingRecord
 
     public ?string $previous_reading_date = null;
 
-    public ?float $schedule_current_bill = null;
+    public ?float $schedule_current_billing = null;
 
     public ?float $arrears = null;
 

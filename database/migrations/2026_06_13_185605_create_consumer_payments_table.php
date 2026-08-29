@@ -22,16 +22,16 @@ return new class extends Migration {
             $table->decimal('payment_amount', 12, 2);
 
             $table->decimal('senior_citizen_discount', 12, 2)->default(0);
-            $table->decimal('current_bill', 12, 2)->default(0);
-            $table->decimal('penalty', 12, 2)->default(0);
+            $table->decimal('current_billing', 12, 2)->default(0);
+            $table->decimal('current_penalty', 12, 2)->default(0);
 
-            $table->decimal('meter_maintenance', 12, 2)->default(0);
+            $table->decimal('mr_arrears', 12, 2)->default(0);
 
-            $table->decimal('arrears_cy', 12, 2)->default(0);
-            $table->decimal('arrears_py', 12, 2)->default(0);
+            $table->decimal('current_arrears', 12, 2)->default(0);
+            $table->decimal('prio_years', 12, 2)->default(0);
 
             $table->decimal('advances', 12, 2)->default(0);
-            $table->decimal('others', 12, 2)->default(0);
+            $table->decimal('current_mr', 12, 2)->default(0);
 
             $table->decimal('amount_tendered', 12, 2)->default(0);
             $table->decimal('change_amount', 12, 2)->default(0);

@@ -295,7 +295,7 @@ class CollectionController extends Controller
                     // We will still allow SC discount PAYMENT to be created if missing.
                     $hasMainPayment = (bool) $existingPayment;
 
-                    $penaltyAmount = (float)($collection->penalty ?? 0);
+                    $penaltyAmount = (float)($collection->current_penalty ?? 0);
                     $paymentAmount = (float)$collection->pay_amount;
                     // sc_discount can be stored as negative (discount). Use absolute value as credit.
                     $rawScDiscount = (float)($collection->sc_discount ?? 0);
@@ -505,7 +505,7 @@ class CollectionController extends Controller
                             'volume' => null,
                             'billamount' => 0,
                             'penalty' => 0, // Penalty is already in separate PENALTY row
-                            'others' => (float)($collection->others ?? 0),
+                            'others' => (float)($collection->current_mr ?? 0),
                             'debit' => 0,
                             'credit' => $paymentAmount,
                             'balance' => $newBalance,
@@ -898,7 +898,7 @@ class CollectionController extends Controller
                             return [
                                 'id' => $col->id,
                                 'coll_date' => $col->coll_date ? $col->coll_date->format('Y-m-d') : null,
-                                'penalty' => $col->penalty,
+                                'penalty' => $col->current_penalty,
                                 'pay_amount' => $col->pay_amount,
                                 'or_number' => $col->or_number
                             ];
@@ -927,7 +927,7 @@ class CollectionController extends Controller
                                 return [
                                     'coll_date' => $collDate,
                                     'is_late' => $isLate,
-                                    'penalty' => $col->penalty,
+                                    'penalty' => $col->current_penalty,
                                     'pay_amount' => $col->pay_amount
                                 ];
                             })->toArray()
@@ -938,7 +938,7 @@ class CollectionController extends Controller
                     // Check if any of the late collections have penalty data
                     // Do not generate penalty if there's no penalty amount in the collection records
                     $hasCollectionPenalty = $lateCollections->filter(function($col) {
-                        return isset($col->penalty) && (float)$col->penalty > 0;
+                        return isset($col->current_penalty) && (float)$col->current_penalty > 0;
                     })->isNotEmpty();
                     
                     if (!$hasCollectionPenalty) {
@@ -948,7 +948,7 @@ class CollectionController extends Controller
                             'account_no' => $accountNo,
                             'due_date' => $dueDateStr,
                             'late_collections_count' => $lateCollections->count(),
-                            'penalty_amounts' => $lateCollections->pluck('penalty')->toArray()
+                            'penalty_amounts' => $lateCollections->pluck('current_penalty')->toArray()
                         ]);
                         continue;
                     }
@@ -957,7 +957,7 @@ class CollectionController extends Controller
                     // Get the first late collection that has a penalty amount
                     $collectionPenalty = null;
                     foreach ($lateCollections as $lateCol) {
-                        $penaltyAmt = (float)($lateCol->penalty ?? 0);
+                        $penaltyAmt = (float)($lateCol->current_penalty ?? 0);
                         if ($penaltyAmt > 0) {
                             $collectionPenalty = $lateCol;
                             break;
@@ -970,12 +970,12 @@ class CollectionController extends Controller
                         Log::info('No collection with penalty amount found', [
                             'account_no' => $accountNo,
                             'late_collections_count' => $lateCollections->count(),
-                            'penalty_amounts' => $lateCollections->pluck('penalty')->toArray()
+                            'penalty_amounts' => $lateCollections->pluck('current_penalty')->toArray()
                         ]);
                         continue;
                     }
                     
-                    $penaltyAmount = (float)($collectionPenalty->penalty ?? 0);
+                    $penaltyAmount = (float)($collectionPenalty->current_penalty ?? 0);
                     
                     Log::info('Found collection with penalty', [
                         'account_no' => $accountNo,
@@ -1378,7 +1378,7 @@ class CollectionController extends Controller
                     'mrs.bill_month',
                     'mrs.bill_date',
                     'mrs.due_date',
-                    'mrs.current_bill',
+                    'mrs.current_billing',
                     'mrs.arrears',
                     'cz.id as consumer_zone_id',
                     'cz.account_no',
@@ -1404,7 +1404,7 @@ class CollectionController extends Controller
                     $consumerZoneId = $schedule->consumer_zone_id;
                     $dueDate = Carbon::parse($schedule->due_date);
                     $billMonth = Carbon::parse($schedule->bill_month);
-                    $currentBill = (float)($schedule->current_bill ?? 0);
+                    $currentBill = (float)($schedule->current_billing ?? 0);
 
                     if (!$consumerZoneId || $currentBill <= 0) {
                         $skippedCount++;

@@ -1428,8 +1428,8 @@
                         <td class="text-right py-3 px-3">${record.prev_read || '0'}</td>
                         <td class="text-right py-3 px-3 font-weight-bold">${record.pres_read || '0'}</td>
                         <td class="text-right py-3 px-3"><span class="badge badge-light">${record.volume || '0'}</span></td>
-                        <td class="text-right py-3 px-3">₱ ${formatNumber(record.current_bill || 0)}</td>
-                        <td class="text-right py-3 px-3 text-warning">₱ ${formatNumber((record.current_bill || 0) > 0 ? 20.00 : 0.00)}</td>
+                        <td class="text-right py-3 px-3">₱ ${formatNumber(record.current_billing || 0)}</td>
+                        <td class="text-right py-3 px-3 text-warning">₱ ${formatNumber((record.current_billing || 0) > 0 ? 20.00 : 0.00)}</td>
                         <td class="text-right py-3 px-3 ${(record.arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.arrears || 0)}</td>
                         <td class="text-right py-3 px-3 text-danger">
                             <span class="font-weight-bold">₱ ${formatNumber(record.calculated_penalty || 0)}</span>
@@ -1487,7 +1487,7 @@
                     const accNum = (record.account_number || '').toString().trim();
                     const accName = (record.account_name || '').toString().trim();
                     // Bill Printing: no arrears; Total Amount = Current Bill + Water Maintenance Charge only
-                    const currentBill = parseFloat(record.current_bill) || 0;
+                    const currentBill = parseFloat(record.current_billing) || 0;
                     const waterMaintenance = currentBill > 0 ? 20.00 : 0.00;
                     const totalAmount = currentBill + waterMaintenance;
                     const row = `
@@ -1898,7 +1898,7 @@
                             <td class="text-right py-3 px-3">
                                 <span class="badge badge-light">${record.volume}</span>
                             </td>
-                            <td class="text-right py-3 px-3">₱ ${formatNumber(record.current_bill)}</td>
+                            <td class="text-right py-3 px-3">₱ ${formatNumber(record.current_billing)}</td>
                             <td class="text-right py-3 px-3 ${(record.water_maintenance_charge || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.water_maintenance_charge || 0)}</td>
                             <td class="text-right py-3 px-3 ${(record.arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.arrears || 0)}</td>
                             <td class="text-right py-3 px-3">
@@ -2514,7 +2514,7 @@
                                 schedule_id: record.schedule_id,
                                 downloaded_id: record.downloaded_id || null,
                                 consumer_zone_id: record.consumer_zone_id || null,
-                                current_bill: record.current_bill || 0,
+                                current_billing: record.current_billing || 0,
                                 due_date: record.due_date || '',
                                 account_number: record.account_number || '',
                                 calculated_penalty: record.calculated_penalty != null ? record.calculated_penalty : undefined
@@ -2602,7 +2602,7 @@
                     const accountNumber = record.account_number || record.account_no || '-';
                     const accountName = record.account_name || record.name || '-';
                     const volume = record.volume || record.consumption || 0;
-                    const currentBill = record.current_bill || record.total || 0;
+                    const currentBill = record.current_billing || record.total || 0;
                     const waterMaintenance = (currentBill > 0) ? 20.00 : 0.00;
                     
                     row.innerHTML = `
@@ -2667,7 +2667,7 @@
                 currentBillingData.forEach(record => {
                     const category = resolveCategoryCode(record);
                     const volume = parseFloat(record.volume ?? record.consumption ?? 0) || 0;
-                    const currentBill = parseFloat(record.current_bill ?? record.total ?? 0) || 0;
+                    const currentBill = parseFloat(record.current_billing ?? record.total ?? 0) || 0;
                     const amount = currentBill;
 
                     if (!categoryData[category]) {

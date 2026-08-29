@@ -520,13 +520,13 @@ class ConsumerController extends Controller
                 'cz.account_no as account_number',
                 'cz.account_name',
                 'dr.consumption',
-                'dr.current_bill as downloaded_current_bill',
+                'dr.current_billing as downloaded_current_billing',
                 'dr.reading_date',
                 'dr.status',
                 'mrs.bill_month',
                 'mrs.bill_date',
                 'mrs.due_date',
-                'mrs.current_bill as schedule_current_bill',
+                'mrs.current_billing as schedule_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'cz.category_code as category'
@@ -556,7 +556,7 @@ class ConsumerController extends Controller
                         'cz.account_no as account_number',
                         'cz.account_name',
                         'dr.consumption',
-                        'dr.current_bill as downloaded_current_bill',
+                        'dr.current_billing as downloaded_current_billing',
                         'dr.reading_date',
                         'dr.status'
                     )
@@ -586,7 +586,7 @@ class ConsumerController extends Controller
                         'bill_month' => $schedule->bill_month ?? null,
                         'bill_date' => $schedule->bill_date ?? null,
                         'due_date' => $schedule->due_date ?? null,
-                        'schedule_current_bill' => $schedule->current_bill ?? null,
+                        'schedule_current_billing' => $schedule->current_billing ?? null,
                         'arrears' => $schedule->arrears ?? null,
                         'total_amount' => $schedule->total_amount ?? null,
                         'category' => $categoryCode,
@@ -606,11 +606,11 @@ class ConsumerController extends Controller
         // Calculate current bill if not available (same logic as lookupBillingRecord)
         // Priority: downloaded_readings.current_bill > meter_reading_schedules.current_bill > calculated from consumption
         $consumption = $reading->consumption ?? 0;
-        $downloadedCurrentBill = isset($reading->downloaded_current_bill) && $reading->downloaded_current_bill !== null 
-            ? (float) $reading->downloaded_current_bill 
+        $downloadedCurrentBill = isset($reading->downloaded_current_billing) && $reading->downloaded_current_billing !== null 
+            ? (float) $reading->downloaded_current_billing 
             : null;
-        $scheduleCurrentBill = isset($reading->schedule_current_bill) && $reading->schedule_current_bill !== null 
-            ? (float) $reading->schedule_current_bill 
+        $scheduleCurrentBill = isset($reading->schedule_current_billing) && $reading->schedule_current_billing !== null 
+            ? (float) $reading->schedule_current_billing 
             : null;
         
         // Use downloaded_readings.current_bill if available, otherwise use schedule's current_bill
@@ -646,7 +646,7 @@ class ConsumerController extends Controller
             'account_no' => trim((string) $accountNumber),
             'bill_month' => $reading->bill_month ?? null,
             'bill_date' => $reading->bill_date ?? null,
-            'current_bill' => round($currentBill, 2),
+            'current_billing' => round($currentBill, 2),
             'meter_rental' => $meterMaintenanceCharge, // Fixed at 20.00 as per billing_payment logic
             'arrears' => round($latestBalance, 2), // Use latest ledger balance as arrears/balance
             'materials' => 0.0, // Default to 0.00 - not stored in meter_reading_schedules

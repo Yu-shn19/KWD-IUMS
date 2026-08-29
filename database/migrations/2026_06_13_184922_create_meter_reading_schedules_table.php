@@ -30,7 +30,7 @@ return new class extends Migration {
             $table->date('reading_date')->nullable();
 
             $table->integer('consumption')->default(0);
-            $table->decimal('current_bill', 12, 2)->default(0);
+            $table->decimal('current_billing', 12, 2)->default(0);
             $table->decimal('arrears', 12, 2)->default(0);
             $table->decimal('total_amount', 12, 2)->default(0);
 

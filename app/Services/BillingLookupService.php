@@ -178,7 +178,7 @@ class BillingLookupService
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'downloaded_current_billing' => (float) ($payment->current_billing ?? 0),
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -199,7 +199,7 @@ class BillingLookupService
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'schedule_current_billing' => (float) ($payment->current_billing ?? 0),
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -226,7 +226,7 @@ class BillingLookupService
                             'dr.previous_reading',
                             'dr.current_reading',
                             'dr.consumption',
-                            'dr.current_bill as downloaded_current_bill',
+                            'dr.current_billing as downloaded_current_billing',
                             'dr.reading_date',
                             'dr.status',
                             'dr.reader_notes',
@@ -238,7 +238,7 @@ class BillingLookupService
                             'mrs.due_date',
                             'mrs.disconnection_date',
                             'mrs.previous_reading_date',
-                            'mrs.current_bill as schedule_current_bill',
+                            'mrs.current_billing as schedule_current_billing',
                             'mrs.arrears',
                             'mrs.total_amount',
                             'mrs.status as schedule_status'
@@ -265,7 +265,7 @@ class BillingLookupService
                         'previous_reading' => $drRow->previous_reading ?? $dr->previous_reading ?? 0,
                         'current_reading' => $drRow->current_reading ?? $dr->current_reading ?? null,
                         'consumption' => $drRow->consumption ?? $dr->consumption ?? 0,
-                        'downloaded_current_bill' => $drRow->downloaded_current_bill ?? $dr->current_bill ?? ($drRow->schedule_current_bill ?? 0),
+                        'downloaded_current_billing' => $drRow->downloaded_current_billing ?? $dr->current_billing ?? ($drRow->schedule_current_billing ?? 0),
                         'reading_date' => $drRow->reading_date ?? $dr->reading_date ?? null,
                         'status' => $drRow->status ?? $dr->status ?? 'Prepared',
                         'reader_notes' => $drRow->reader_notes ?? $dr->reader_notes ?? null,
@@ -289,7 +289,7 @@ class BillingLookupService
                         'due_date' => $drRow->due_date ?? null,
                         'disconnection_date' => $drRow->disconnection_date ?? null,
                         'previous_reading_date' => $drRow->previous_reading_date ?? null,
-                        'schedule_current_bill' => $drRow->schedule_current_bill ?? null,
+                        'schedule_current_billing' => $drRow->schedule_current_billing ?? null,
                         'arrears' => $drRow->arrears ?? null,
                         'total_amount' => $drRow->total_amount ?? null,
                         'schedule_status' => $drRow->schedule_status ?? null,
@@ -318,7 +318,7 @@ class BillingLookupService
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'downloaded_current_billing' => (float) ($payment->current_billing ?? 0),
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -339,7 +339,7 @@ class BillingLookupService
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => (float) ($payment->current_bill ?? 0),
+                        'schedule_current_billing' => (float) ($payment->current_billing ?? 0),
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -362,7 +362,7 @@ class BillingLookupService
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                    'downloaded_current_bill' => 0.0,
+                    'downloaded_current_billing' => 0.0,
                     'reading_date' => null,
                     'status' => 'Prepared',
                     'reader_notes' => null,
@@ -383,7 +383,7 @@ class BillingLookupService
                     'due_date' => null,
                     'disconnection_date' => null,
                     'previous_reading_date' => null,
-                    'schedule_current_bill' => 0.0,
+                    'schedule_current_billing' => 0.0,
                     'arrears' => null,
                     'total_amount' => null,
                     'schedule_status' => null,
@@ -424,7 +424,7 @@ class BillingLookupService
                 'mrs.due_date',
                 'mrs.disconnection_date',
                 'mrs.previous_reading_date',
-                'mrs.current_bill as schedule_current_bill',
+                'mrs.current_billing as schedule_current_billing',
                 'mrs.arrears',
                 'mrs.total_amount',
                 'mrs.status as schedule_status',
@@ -509,8 +509,8 @@ class BillingLookupService
                     $readingArray['due_date'] = $schedule->due_date ?? null;
                     $readingArray['disconnection_date'] = $schedule->disconnection_date ?? null;
                     $readingArray['previous_reading_date'] = $schedule->previous_reading_date ?? null;
-                    // Keep downloaded_current_bill if exists, otherwise use schedule's current_bill
-                    $readingArray['schedule_current_bill'] = $schedule->current_bill ?? null;
+                    // Keep downloaded_current_billing if exists, otherwise use schedule's current_bill
+                    $readingArray['schedule_current_billing'] = $schedule->current_billing ?? null;
                     $readingArray['arrears'] = $schedule->arrears ?? null;
                     $readingArray['total_amount'] = $schedule->total_amount ?? null;
                     $readingArray['schedule_status'] = $schedule->status ?? null;
@@ -585,7 +585,7 @@ class BillingLookupService
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => 0.0,
+                        'downloaded_current_billing' => 0.0,
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -606,7 +606,7 @@ class BillingLookupService
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => 0.0,
+                        'schedule_current_billing' => 0.0,
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -644,7 +644,7 @@ class BillingLookupService
                             'previous_reading' => $scheduleRow->previous_reading ?? 0,
                             'current_reading' => $scheduleRow->current_reading ?? null,
                             'consumption' => $scheduleRow->consumption ?? 0,
-                            'current_bill' => $scheduleRow->current_bill ?? 0,
+                            'current_billing' => $scheduleRow->current_billing ?? 0,
                             'reading_date' => $scheduleRow->bill_date ?? $state->billMonthDate->format('Y-m-d'),
                             'status' => 'Prepared',
                         ]);
@@ -652,7 +652,7 @@ class BillingLookupService
                     $base = (array) $dr->toArray();
                     $state->reading = BillingReadingRecord::make(array_merge($base, [
                         'downloaded_id' => $dr->id,
-                        'downloaded_current_bill' => $dr->current_bill ?? $scheduleRow->current_bill ?? null,
+                        'downloaded_current_billing' => $dr->current_billing ?? $scheduleRow->current_billing ?? null,
                         'schedule_id' => $dr->schedule_id,
                         'account_number' => $scheduleRow->account_no ?? $state->accountNumber,
                         'account_name' => $scheduleRow->account_name ?? '',
@@ -662,7 +662,7 @@ class BillingLookupService
                         'due_date' => $scheduleRow->due_date ?? null,
                         'disconnection_date' => $scheduleRow->disconnection_date ?? null,
                         'previous_reading_date' => $scheduleRow->previous_reading_date ?? null,
-                        'schedule_current_bill' => $scheduleRow->current_bill ?? null,
+                        'schedule_current_billing' => $scheduleRow->current_billing ?? null,
                         'arrears' => $scheduleRow->arrears ?? null,
                         'total_amount' => $scheduleRow->total_amount ?? null,
                         'schedule_status' => $scheduleRow->status ?? null,
@@ -712,7 +712,7 @@ class BillingLookupService
                         'previous_reading' => 0,
                         'current_reading' => null,
                         'consumption' => 0,
-                        'downloaded_current_bill' => 0.0,
+                        'downloaded_current_billing' => 0.0,
                         'reading_date' => null,
                         'status' => 'Prepared',
                         'reader_notes' => null,
@@ -733,7 +733,7 @@ class BillingLookupService
                         'due_date' => null,
                         'disconnection_date' => null,
                         'previous_reading_date' => null,
-                        'schedule_current_bill' => 0.0,
+                        'schedule_current_billing' => 0.0,
                         'arrears' => null,
                         'total_amount' => null,
                         'schedule_status' => null,
@@ -850,11 +850,11 @@ class BillingLookupService
         $state->billMonthDate = $state->billMonthDate ?? ($billMonthFromSchedule ? $billMonthFromSchedule->copy()->startOfMonth() : null);
 
         $consumption = $state->reading->consumption ?? 0;
-        $downloadedCurrentBill = isset($state->reading->downloaded_current_bill) && $state->reading->downloaded_current_bill !== null
-            ? (float) $state->reading->downloaded_current_bill
+        $downloadedCurrentBill = isset($state->reading->downloaded_current_billing) && $state->reading->downloaded_current_billing !== null
+            ? (float) $state->reading->downloaded_current_billing
             : null;
-        $scheduleCurrentBill = isset($state->reading->schedule_current_bill) && $state->reading->schedule_current_bill !== null
-            ? (float) $state->reading->schedule_current_bill
+        $scheduleCurrentBill = isset($state->reading->schedule_current_billing) && $state->reading->schedule_current_billing !== null
+            ? (float) $state->reading->schedule_current_billing
             : null;
 
         $storedCurrentBill = $downloadedCurrentBill ?? $scheduleCurrentBill ?? 0.0;
@@ -868,8 +868,8 @@ class BillingLookupService
 
         $penalty = $this->resolveLookupPenalty($state, $consumer);
         $ledgerOverrides = $this->applyLedgerBillingOverrides($state, $consumer);
-        if ($ledgerOverrides['current_bill'] !== null) {
-            $currentBill = $ledgerOverrides['current_bill'];
+        if ($ledgerOverrides['current_billing'] !== null) {
+            $currentBill = $ledgerOverrides['current_billing'];
         }
         if ($ledgerOverrides['meter_maintenance_charge'] !== null) {
             $meterMaintenanceCharge = $ledgerOverrides['meter_maintenance_charge'];
@@ -887,7 +887,7 @@ class BillingLookupService
             'current_reading' => $state->reading->current_reading ?? null,
             'reading_date' => $state->reading->reading_date ? Carbon::parse($state->reading->reading_date)->format('Y-m-d') : null,
             'consumption' => $consumption,
-            'current_bill' => round($currentBill, 2),
+            'current_billing' => round($currentBill, 2),
             'meter_maintenance_charge' => $meterMaintenanceCharge,
             'penalty' => $penalty,
             'arrears' => $state->reading->arrears !== null ? (float) $state->reading->arrears : 0.0,
@@ -976,13 +976,13 @@ class BillingLookupService
     }
 
     /**
-     * @return array{current_bill: float|null, meter_maintenance_charge: float|null}
+     * @return array{current_billing: float|null, meter_maintenance_charge: float|null}
      */
     private function applyLedgerBillingOverrides(BillingLookupState $state, ?ConsumerZone $consumer): array
     {
         $billMonthForLedger = $state->billMonthDate ?? ($state->reading->bill_month ? Carbon::parse($state->reading->bill_month)->startOfMonth() : null);
         if (!$consumer || !$billMonthForLedger) {
-            return ['current_bill' => null, 'meter_maintenance_charge' => null];
+            return ['current_billing' => null, 'meter_maintenance_charge' => null];
         }
 
         $monthStart = $billMonthForLedger->copy()->startOfMonth();
@@ -997,7 +997,7 @@ class BillingLookupService
             ->first();
 
         if (!$billingEntry) {
-            return ['current_bill' => null, 'meter_maintenance_charge' => null];
+            return ['current_billing' => null, 'meter_maintenance_charge' => null];
         }
 
         $currentBill = null;
@@ -1012,7 +1012,7 @@ class BillingLookupService
         }
 
         return [
-            'current_bill' => $currentBill,
+            'current_billing' => $currentBill,
             'meter_maintenance_charge' => $meterMaintenanceCharge,
         ];
     }
@@ -1025,7 +1025,7 @@ class BillingLookupService
     {
         $paymentAmount = $state->reading->payment_amount !== null
             ? (float) $state->reading->payment_amount
-            : ($state->reading->total_amount !== null ? (float) $state->reading->total_amount : ($billingData['current_bill'] + $billingData['arrears']));
+            : ($state->reading->total_amount !== null ? (float) $state->reading->total_amount : ($billingData['current_billing'] + $billingData['arrears']));
 
         $paymentRow = ConsumerPayment::query()->where(mr_col('reading_id'), $state->reading->downloaded_id ?? null)
             ->whereNotNull(mr_col('paid_at'))
@@ -1077,14 +1077,14 @@ class BillingLookupService
                 'paid_at' => Carbon::parse($paidAtSource)->format('Y-m-d H:i:s'),
             ];
             if ($paymentRow) {
-                $paymentData['current_bill'] = round((float) ($paymentRow->current_bill ?? 0), 2);
-                $paymentData['penalty'] = round((float) ($paymentRow->penalty ?? 0), 2);
-                $paymentData['meter_maintenance'] = round((float) ($paymentRow->meter_maintenance ?? 0), 2);
-                $paymentData['arrears_cy'] = round((float) ($paymentRow->arrears_cy ?? 0), 2);
-                $paymentData['arrears_py'] = round((float) ($paymentRow->arrears_py ?? 0), 2);
+                $paymentData['current_billing'] = round((float) ($paymentRow->current_billing ?? 0), 2);
+                $paymentData['current_penalty'] = round((float) ($paymentRow->current_penalty ?? 0), 2);
+                $paymentData['mr_arrears'] = round((float) ($paymentRow->mr_arrears ?? 0), 2);
+                $paymentData['current_arrears'] = round((float) ($paymentRow->current_arrears ?? 0), 2);
+                $paymentData['prio_years'] = round((float) ($paymentRow->prio_years ?? 0), 2);
                 $paymentData['advances'] = round((float) ($paymentRow->advances ?? 0), 2);
                 $paymentData['senior_citizen_discount'] = round((float) ($paymentRow->senior_citizen_discount ?? 0), 2);
-                $paymentData['others'] = round((float) ($paymentRow->others ?? 0), 2);
+                $paymentData['current_mr'] = round((float) ($paymentRow->current_mr ?? 0), 2);
             }
         } else {
             $paymentData = [
@@ -1111,14 +1111,14 @@ class BillingLookupService
                 ? Carbon::parse($state->orLookupPayment->paid_at)->format('Y-m-d H:i:s')
                 : ($paymentData['paid_at'] ?? null);
 
-            $paymentData['current_bill'] = round((float) ($state->orLookupPayment->current_bill ?? 0), 2);
-            $paymentData['penalty'] = round((float) ($state->orLookupPayment->penalty ?? 0), 2);
-            $paymentData['meter_maintenance'] = round((float) ($state->orLookupPayment->meter_maintenance ?? 0), 2);
-            $paymentData['arrears_cy'] = round((float) ($state->orLookupPayment->arrears_cy ?? 0), 2);
-            $paymentData['arrears_py'] = round((float) ($state->orLookupPayment->arrears_py ?? 0), 2);
+            $paymentData['current_billing'] = round((float) ($state->orLookupPayment->current_billing ?? 0), 2);
+            $paymentData['current_penalty'] = round((float) ($state->orLookupPayment->current_penalty ?? 0), 2);
+            $paymentData['mr_arrears'] = round((float) ($state->orLookupPayment->mr_arrears ?? 0), 2);
+            $paymentData['current_arrears'] = round((float) ($state->orLookupPayment->current_arrears ?? 0), 2);
+            $paymentData['prio_years'] = round((float) ($state->orLookupPayment->prio_years ?? 0), 2);
             $paymentData['advances'] = round((float) ($state->orLookupPayment->advances ?? 0), 2);
             $paymentData['senior_citizen_discount'] = round((float) ($state->orLookupPayment->senior_citizen_discount ?? 0), 2);
-            $paymentData['others'] = round((float) ($state->orLookupPayment->others ?? 0), 2);
+            $paymentData['current_mr'] = round((float) ($state->orLookupPayment->current_mr ?? 0), 2);
         }
 
         return $paymentData;
@@ -1310,7 +1310,7 @@ class BillingLookupService
             'dr.previous_reading',
             'dr.current_reading',
             'dr.consumption',
-            'dr.current_bill as downloaded_current_bill',
+            'dr.current_billing as downloaded_current_billing',
             'dr.reading_date',
             'dr.status',
             'dr.reader_notes',

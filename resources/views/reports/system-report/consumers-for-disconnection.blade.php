@@ -173,7 +173,7 @@
                                                                 <td class="py-1 px-1">{{ $consumer['address'] }}</td>
                                                                 <td class="text-center py-1">{{ $consumer['status'] }}</td>
                                                                 <td class="text-center py-1">{{ $consumer['category'] }}</td>
-                                                                <td class="text-right py-1 px-1">₱ {{ number_format($consumer['current_bill'], 2) }}</td>
+                                                                <td class="text-right py-1 px-1">₱ {{ number_format($consumer['current_billing'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1">₱ {{ number_format($consumer['arrears'], 2) }}</td>
                                                                 <td class="text-right py-1 px-1">₱ {{ number_format($consumer['total_due'], 2) }}</td>
                                                                 <td class="text-center py-1">{{ $consumer['last_payment'] }}</td>
