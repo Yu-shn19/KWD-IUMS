@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="KIBLAWAN WATER DISTRICT-IUMS | Water Management System">
-  <title>Login - KiblawanWD-IUMS</title>
-  <link rel="icon" href="{{ url('WDMS\img\logo\KlogoC.png') }}">
+  <meta name="description" content="{{ $branding['org_short_name'] }} | Water Management System">
+  <title>Login - {{ $branding['org_name'] }}</title>
+  <link rel="icon" href="{{ $branding['favicon_url'] }}">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
@@ -42,7 +42,7 @@
     .bg-layer {
       position: fixed;
       inset: 0;
-      background: url('{{ asset('WDMS/img/logo/hero.jpg') }}') no-repeat center center / cover;
+      background: url('{{ $branding['hero_url'] }}') no-repeat center center / cover;
       transform: scale(1.03);
       z-index: 0;
     }
@@ -349,10 +349,10 @@
     <div class="login-card">
       <div class="login-header">
         <div class="logo-wrap">
-          <img src="{{ url('WDMS\img\logo\KlogoC.png') }}" alt="Kiblawan Water District Logo">
+          <img src="{{ $branding['logo_url'] }}" alt="{{ $branding['org_name'] }} Logo">
         </div>
-        <h1>KIBLAWAN WATER DISTRICT</h1>
-        <p>Integrated Utility Management System</p>
+        <h1>{{ $branding['org_name_upper'] }}</h1>
+        <p>{{ $branding['org_tagline'] }}</p>
       </div>
 
       <div class="login-body">
@@ -410,7 +410,7 @@
       </div>
 
       <div class="login-footer">
-        <span>&copy; {{ date('Y') }} Kiblawan Water District. All rights reserved.</span>
+        <span>&copy; {{ date('Y') }} {{ $branding['org_name'] }}. All rights reserved.</span>
       </div>
     </div>
 

@@ -73,6 +73,7 @@ class ActivityLogger
         'meter-reading.assign' => 'Assigned Meter Reading',
         'meter-reading.unassign' => 'Unassigned Meter Reading',
         'meter-reading.upload-previous-reading' => 'Uploaded Previous Reading',
+        'download-reading.delete-schedule' => 'Deleted Meter Reading Schedule',
 
         // Billing adjustment
         'billing-adjustment.store' => 'Created Billing Adjustment',
@@ -101,6 +102,7 @@ class ActivityLogger
 
         // Settings / pricing
         'settings.consumer-edit-pin.update' => 'Changed Consumer Edit PIN',
+        'settings.system.update' => 'Updated System Branding Settings',
         'pricing-tiers.store' => 'Created Pricing Tier',
         'pricing-tiers.update' => 'Updated Pricing Tier',
         'pricing-tiers.destroy' => 'Deleted Pricing Tier',

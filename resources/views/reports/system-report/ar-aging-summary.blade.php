@@ -144,8 +144,8 @@
                     <!-- Print Header (only visible when printing) -->
                     <div class="print-header" style="display: none;">
                         <div style="text-align: center; margin-bottom: 15px;">
-                            <h1 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: 1px;">HAGONOY WATER DISTRICT</h1>
-                            <p style="margin: 3px 0; font-size: 12px;">Guihing Hagonoy</p>
+                            <h1 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: 1px;">{{ $branding['org_name_upper'] }}</h1>
+                            <p style="margin: 3px 0; font-size: 12px;">{{ $branding['org_address'] }}</p>
                             <h2 style="margin: 8px 0; font-size: 16px; font-weight: bold; letter-spacing: 0.5px;">AGING OF ACCOUNTS</h2>
                             <p style="margin: 3px 0; font-size: 11px;">
                                 @if($selectedZone)

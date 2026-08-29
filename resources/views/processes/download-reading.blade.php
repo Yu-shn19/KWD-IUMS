@@ -259,7 +259,7 @@
                     </button>
                 </div>
                 <div class="modal-body">
-                    <p class="text-muted small mb-2">Enter the edit PIN (4 characters) to update Prev. Read.</p>
+                    <p class="text-muted small mb-2" id="prevReadPinHelp">Enter the edit PIN (4 characters) to update Prev. Read.</p>
                     <input type="password" class="form-control" id="prevReadPinInput" placeholder="PIN" autocomplete="off" maxlength="4" inputmode="text">
                     <div class="invalid-feedback" id="prevReadPinError"></div>
                 </div>
@@ -581,6 +581,7 @@
                                 <th class="text-center" style="min-width: 70px;">Curr. Read</th>
                                 <th class="text-center" style="min-width: 70px;">Consumption</th>
                                 <th class="text-center" style="min-width: 85px;">Status</th>
+                                <th class="text-center" style="min-width: 50px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -623,6 +624,15 @@
                         <td class="text-center" style="font-size: 11px;">
                             <span class="badge badge-${statusClass}">${route.status}</span>
                         </td>
+                        <td class="text-center" style="font-size: 11px;">
+                            <button type="button" class="btn btn-sm btn-outline-danger delete-schedule-btn"
+                                data-schedule-id="${route.id || ''}"
+                                data-account-no="${escapeAttr(route.account_number || '')}"
+                                data-account-name="${escapeAttr(route.account_name || '')}"
+                                title="Delete schedule">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </td>
                     </tr>
                 `;
             });
@@ -634,6 +644,12 @@
             `;
 
             document.getElementById('routesContent').innerHTML = html;
+
+            document.querySelectorAll('#routesContent .delete-schedule-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    requestPinThenDelete(this);
+                });
+            });
 
             // Attach PIN gate + save handlers to prev-read inputs
             document.querySelectorAll('#routesContent .prev-read-input').forEach(function(input) {
@@ -667,9 +683,19 @@
         }
 
         var pendingPrevReadScheduleId = null;
+        var pendingDeleteSchedule = null;
+        var pinModalMode = 'prev-read';
 
-        function requestPinThenEdit(input) {
-            pendingPrevReadScheduleId = input.dataset.scheduleId || null;
+        function escapeAttr(value) {
+            return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        function resetPinModalFields() {
             var pinInput = document.getElementById('prevReadPinInput');
             var errEl = document.getElementById('prevReadPinError');
             if (pinInput) {
@@ -680,10 +706,124 @@
                 errEl.textContent = '';
                 errEl.classList.remove('d-block');
             }
+        }
+
+        function setPinModalCopy(mode) {
+            var titleEl = document.getElementById('prevReadPinModalLabel');
+            var helpEl = document.getElementById('prevReadPinHelp');
+            if (mode === 'delete') {
+                if (titleEl) titleEl.innerHTML = '<i class="fas fa-lock mr-2"></i>Enter PIN to Delete';
+                if (helpEl) helpEl.textContent = 'Enter the 4-digit PIN to delete this schedule.';
+            } else {
+                if (titleEl) titleEl.innerHTML = '<i class="fas fa-lock mr-2"></i>Enter PIN';
+                if (helpEl) helpEl.textContent = 'Enter the edit PIN (4 characters) to update Prev. Read.';
+            }
+        }
+
+        function showPinModal() {
+            resetPinModalFields();
+            var pinInput = document.getElementById('prevReadPinInput');
             $('#prevReadPinModal').modal('show');
             setTimeout(function() {
                 if (pinInput) pinInput.focus();
             }, 300);
+        }
+
+        function requestPinThenEdit(input) {
+            pinModalMode = 'prev-read';
+            pendingDeleteSchedule = null;
+            pendingPrevReadScheduleId = input.dataset.scheduleId || null;
+            setPinModalCopy('prev-read');
+            showPinModal();
+        }
+
+        function requestPinThenDelete(btn) {
+            pinModalMode = 'delete';
+            pendingPrevReadScheduleId = null;
+            pendingDeleteSchedule = {
+                schedule_id: parseInt(btn.getAttribute('data-schedule-id'), 10),
+                account_no: btn.getAttribute('data-account-no') || '',
+                account_name: btn.getAttribute('data-account-name') || ''
+            };
+            if (!pendingDeleteSchedule.schedule_id || !pendingDeleteSchedule.account_no) {
+                pendingDeleteSchedule = null;
+                pinModalMode = 'prev-read';
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: 'Missing schedule or account number.',
+                    confirmButtonColor: '#d33'
+                });
+                return;
+            }
+            setPinModalCopy('delete');
+            showPinModal();
+        }
+
+        function confirmAndDeleteSchedule(pending) {
+            Swal.fire({
+                title: 'Delete schedule?',
+                text: 'Remove the schedule for ' + pending.account_no + ' (' + pending.account_name + ')?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, delete',
+                confirmButtonColor: '#d33',
+                cancelButtonColor: '#6c757d'
+            }).then(function(result) {
+                if (!result.isConfirmed) return;
+
+                fetch('{{ route("download-reading.delete-schedule") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': csrfToken
+                    },
+                    body: JSON.stringify({
+                        schedule_id: pending.schedule_id,
+                        account_no: pending.account_no
+                    })
+                })
+                .then(function(r) {
+                    return r.json().then(function(data) {
+                        return { ok: r.ok, data: data };
+                    }).catch(function() {
+                        return { ok: false, data: null };
+                    });
+                })
+                .then(function(result) {
+                    if (result.data && result.data.success) {
+                        currentModalRoutes = currentModalRoutes.filter(function(route) {
+                            return parseInt(route.id, 10) !== parseInt(pending.schedule_id, 10);
+                        });
+                        populateRouteZoneFilter(currentModalRoutes);
+                        applyRouteSearch();
+                        updateStatusBadges();
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Success',
+                            text: result.data.message || 'Schedule deleted successfully.',
+                            confirmButtonColor: '#3085d6'
+                        });
+                    } else {
+                        Swal.fire({
+                            icon: 'error',
+                            title: 'Error',
+                            text: (result.data && result.data.message) || 'Failed to delete schedule.',
+                            confirmButtonColor: '#d33'
+                        });
+                    }
+                })
+                .catch(function() {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Error',
+                        text: 'Failed to delete schedule.',
+                        confirmButtonColor: '#d33'
+                    });
+                });
+            });
         }
 
         function unlockPrevReadInput(scheduleId) {
@@ -722,10 +862,18 @@
             .then(function(data) {
                 btn.disabled = false;
                 if (data.success) {
-                    var scheduleId = pendingPrevReadScheduleId;
-                    pendingPrevReadScheduleId = null;
-                    $('#prevReadPinModal').modal('hide');
-                    if (scheduleId) unlockPrevReadInput(scheduleId);
+                    if (pinModalMode === 'delete' && pendingDeleteSchedule) {
+                        var pending = pendingDeleteSchedule;
+                        pendingDeleteSchedule = null;
+                        pinModalMode = 'prev-read';
+                        $('#prevReadPinModal').modal('hide');
+                        confirmAndDeleteSchedule(pending);
+                    } else {
+                        var scheduleId = pendingPrevReadScheduleId;
+                        pendingPrevReadScheduleId = null;
+                        $('#prevReadPinModal').modal('hide');
+                        if (scheduleId) unlockPrevReadInput(scheduleId);
+                    }
                 } else {
                     if (errEl) { errEl.textContent = data.message || 'Invalid PIN.'; errEl.classList.add('d-block'); }
                     if (pinInput) pinInput.classList.add('is-invalid');
@@ -749,6 +897,9 @@
         });
         $('#prevReadPinModal').on('hidden.bs.modal', function() {
             pendingPrevReadScheduleId = null;
+            pendingDeleteSchedule = null;
+            pinModalMode = 'prev-read';
+            setPinModalCopy('prev-read');
         });
 
         function savePrevRead(input) {

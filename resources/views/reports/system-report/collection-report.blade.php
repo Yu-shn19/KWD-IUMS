@@ -680,9 +680,9 @@
                             <tr>
                                 <td colspan="12" class="print-header-cell">
                                     <div class="print-header-inner">
-                                        <img src="{{ asset('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District" class="print-header-logo">
-                                        <h2>HAGONOY WATER DISTRICT</h2>
-                                        <h3>Guihing, Hagonoy</h3>
+                                        <img src="{{ $branding['logo_url'] }}" alt="{{ $branding['org_name'] }}" class="print-header-logo">
+                                        <h2>{{ $branding['org_name_upper'] }}</h2>
+                                        <h3>{{ $branding['org_address'] }}</h3>
                                         <h4>CASHIER'S COLLECTION REPORT</h4>
                                         <h4>{{ \Carbon\Carbon::parse($dateFrom)->format('m/d/Y') }} to {{ \Carbon\Carbon::parse($dateTo)->format('m/d/Y') }}</h4>
                                     </div>

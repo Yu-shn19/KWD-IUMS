@@ -2,13 +2,13 @@
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-  <meta name="description" content="Hagonoy Water District - Integrated Utility Management System">
-  <meta name="author" content="Hagonoy Water District">
+  <meta name="description" content="{{ $branding['org_name'] }} - Integrated Utility Management System">
+  <meta name="author" content="{{ $branding['org_name'] }}">
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta name="theme-color" content="#3b82f6">
   
-  <link href="{{url('WDMS\img\logo\KlogoC.png')}}" rel="icon">
-  <title>KIBLAWAN WATER DISTRICT-IUMS | Water Management System</title>
+  <link href="{{ $branding['favicon_url'] }}" rel="icon">
+  <title>{{ $branding['org_short_name'] }} | Water Management System</title>
   
   <!-- Font Awesome -->
   <link href="{{url('WDMS/vendor/fontawesome-free/css/all.min.css')}}" rel="stylesheet" type="text/css">
