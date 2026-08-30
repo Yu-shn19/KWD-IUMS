@@ -78,7 +78,7 @@ class BillingAdjustmentController extends Controller
     }
 
     /**
-     * Delete a paid AR CM billing adjustment (removes consumer ledger rows and recalculates balances).
+     * Delete an AR billing adjustment (Approved/unpaid only; removes consumer ledger rows and recalculates balances).
      */
     public function destroyAr(int $id)
     {
@@ -87,12 +87,12 @@ class BillingAdjustmentController extends Controller
 
             $billingAdjustment = BillingAdjustment::with('consumerLedgers')->findOrFail($id);
 
-            if (!$this->isPaidArCm($billingAdjustment)) {
+            if ($this->isPaidStatus($billingAdjustment->status)) {
                 DB::rollBack();
 
                 return response()->json([
                     'success' => false,
-                    'message' => 'Only paid AR CM entries can be deleted from the list.',
+                    'message' => 'Paid entries cannot be deleted from the list.',
                 ], 422);
             }
 
@@ -116,7 +116,7 @@ class BillingAdjustmentController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Paid AR CM billing adjustment deleted successfully.',
+                'message' => 'Billing adjustment deleted successfully.',
             ]);
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -492,17 +492,24 @@ class BillingAdjustmentController extends Controller
     }
 
     /**
-     * Delete a paid LRO billing adjustment from lro_ledger.
+     * Delete an LRO billing adjustment from lro_ledger (Approved/unpaid only).
      */
     public function destroyLro(int $id)
     {
         try {
             $entry = LROLedger::findOrFail($id);
 
-            if (!$this->isPaidStatus($entry->status)) {
+            if ($this->isPaidStatus($entry->status)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Only paid LRO entries can be deleted from the list.',
+                    'message' => 'Paid LRO entries cannot be deleted from the list.',
+                ], 422);
+            }
+
+            if ($this->isLroDmChargePaid($entry)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This LRO charge has already been paid and cannot be deleted.',
                 ], 422);
             }
 
@@ -510,7 +517,7 @@ class BillingAdjustmentController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Paid LRO billing adjustment deleted successfully.',
+                'message' => 'LRO billing adjustment deleted successfully.',
             ]);
         } catch (\Throwable $e) {
             Log::error('destroyLro failed', ['id' => $id, 'error' => $e->getMessage()]);
@@ -646,7 +653,7 @@ class BillingAdjustmentController extends Controller
         if ($this->isPaidStatus($entry->status)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Paid LRO entries cannot be edited. Use Delete from the list.',
+                'message' => 'Paid LRO entries cannot be edited or deleted.',
             ], 422);
         }
 
@@ -1283,6 +1290,29 @@ class BillingAdjustmentController extends Controller
         return strtoupper((string) ($billingAdjustment->ledger ?? '')) === 'AR'
             && ($billingAdjustment->type ?? '') === 'CM'
             && $this->isPaidStatus($billingAdjustment->status);
+    }
+
+    /**
+     * True when an LRO DM charge already has a posted CM payment against the same BAM number.
+     */
+    private function isLroDmChargePaid(LROLedger $entry): bool
+    {
+        if (strtoupper(trim((string) ($entry->type ?? ''))) !== 'DM') {
+            return false;
+        }
+
+        $bamNo = trim((string) ($entry->bam_no ?? ''));
+        if ($bamNo === '') {
+            return false;
+        }
+
+        return LROLedger::query()
+            ->where('bam_no', $bamNo)
+            ->when($entry->consumer_zone_id, fn ($q) => $q->where('consumer_zone_id', $entry->consumer_zone_id))
+            ->where('id', '!=', $entry->id)
+            ->whereRaw("UPPER(TRIM(COALESCE(type, ''))) = 'CM'")
+            ->whereRaw("UPPER(TRIM(COALESCE(status, ''))) IN ('POSTED', 'PAID')")
+            ->exists();
     }
 
     private function shouldPostToConsumerLedger(?string $status): bool

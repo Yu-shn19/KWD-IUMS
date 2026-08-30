@@ -2247,6 +2247,14 @@ class MeterReadingController extends Controller
 
             $lroEntriesByOr = $candidateRows->map(function ($row) {
                 $chargeId = SundryLedgerRemarks::chargeIdFromRemarks($row->remarks);
+                $displayRemarks = null;
+                if ($chargeId > 0) {
+                    $chargeRow = LROLedger::query()->find($chargeId, ['remarks']);
+                    $displayRemarks = trim((string) ($chargeRow?->remarks ?? ''));
+                    if ($displayRemarks === '') {
+                        $displayRemarks = null;
+                    }
+                }
 
                 return [
                     'id' => $row->id,
@@ -2261,7 +2269,7 @@ class MeterReadingController extends Controller
                     'ar_type' => $row->ar_type,
                     'acct_code' => $row->acct_code,
                     'reference' => $row->acct_code,
-                    'remarks' => $row->remarks,
+                    'remarks' => $displayRemarks,
                     'status' => $row->status,
                 ];
             })->values()->toArray();
@@ -2280,7 +2288,7 @@ class MeterReadingController extends Controller
                     ->where(mr_col('status'), 'Approved')
                     ->orderBy(mr_col('date'), 'asc')
                     ->orderBy(mr_col('id'), 'asc')
-                    ->get(['id', 'ledger', 'acct_code', 'bam_no', 'amount', 'status']);
+                    ->get(['id', 'ledger', 'acct_code', 'bam_no', 'amount', 'status', 'remarks']);
 
                 foreach ($dmRows as $row) {
                     $dmAmount   = (float)($row->amount ?? 0);
@@ -2310,6 +2318,7 @@ class MeterReadingController extends Controller
                         'bam_no'        => $bamRef,
                         'amount'        => $remaining,
                         'name'          => $consumerForBalance->account_name ?? '',
+                        'remarks'       => $row->remarks,
                     ];
 
                     if (count($sundries) >= 4) {
@@ -2436,6 +2445,7 @@ class MeterReadingController extends Controller
                         'amount'        => (float) ($row->amount ?? 0),
                         'name'          => $row->account_name,
                         'account'       => $row->account_no,
+                        'remarks'       => $row->remarks,
                     ];
                 })->values(),
             ],
@@ -4078,7 +4088,7 @@ class MeterReadingController extends Controller
                 $overduePeriodsRange = min($overduePeriodsRange, 12);
                 $currentBill = $currentBillFromRule;
                 $arrearsCy = round($arrearsPrincipal, 2);
-                // Penalty = 10% per bill per period: 195→19.5 (1 period), 390→39 (2 periods). Use per-bill × periods.
+                // Penalty = 10% per bill per period: 195â19.5 (1 period), 390â39 (2 periods). Use per-bill Ã periods.
                 $perBillPrincipal = $overdueBillCount > 0 ? $arrearsPrincipal / $overdueBillCount : $arrearsPrincipal;
                 $penalty = round($perBillPrincipal * 0.10 * $overduePeriodsRange, 2);
                 $maintenance = round(20 * $overduePeriodsRange, 2); // 20 first period, 40 second

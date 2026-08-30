@@ -1182,7 +1182,8 @@ class BillingLookupService
         $consumerZoneId = $consumer?->id;
 
         $baseLroQuery = LROLedger::with('consumerZone')
-            ->where(mr_col('remarks'), $orRemarks)
+            ->whereRaw("UPPER(TRIM(COALESCE(ledger, ''))) = 'LRO'")
+            ->where(mr_col('remarks'), 'like', $orRemarks . '%')
             ->orderBy('date', 'asc')
             ->orderBy(mr_col('id'), 'asc');
 
@@ -1191,8 +1192,20 @@ class BillingLookupService
             : (clone $baseLroQuery)->get();
 
         return $candidateRows->map(function ($row) {
+            $chargeId = SundryLedgerRemarks::chargeIdFromRemarks($row->remarks);
+            $displayRemarks = null;
+            if ($chargeId > 0) {
+                $chargeRow = LROLedger::query()->find($chargeId, ['remarks']);
+                $displayRemarks = trim((string) ($chargeRow?->remarks ?? ''));
+                if ($displayRemarks === '') {
+                    $displayRemarks = null;
+                }
+            }
+
             return [
                 'id' => $row->id,
+                'lro_ledger_id' => $chargeId,
+                'ledger' => $row->ledger ?? 'LRO',
                 'type' => $row->type,
                 'date' => $row->date,
                 'account' => $row->account_no,
@@ -1201,8 +1214,8 @@ class BillingLookupService
                 'amount' => (float) ($row->amount ?? 0),
                 'ar_type' => $row->ar_type,
                 'acct_code' => $row->acct_code,
-                'reference' => $row->reference,
-                'remarks' => $row->remarks,
+                'reference' => $row->acct_code,
+                'remarks' => $displayRemarks,
                 'status' => $row->status,
             ];
         })->values()->toArray();
@@ -1226,7 +1239,7 @@ class BillingLookupService
                 ->where(mr_col('status'), 'Approved')
                 ->orderBy('date', 'asc')
                 ->orderBy(mr_col('id'), 'asc')
-                ->get(['id', 'ledger', 'acct_code', 'bam_no', 'amount', 'status']);
+                ->get(['id', 'ledger', 'acct_code', 'bam_no', 'amount', 'status', 'remarks']);
 
             foreach ($dmRows as $row) {
                 $dmAmount = (float) ($row->amount ?? 0);
@@ -1255,6 +1268,7 @@ class BillingLookupService
                     'bam_no' => $bamRef,
                     'amount' => $remaining,
                     'name' => $consumer->account_name ?? '',
+                    'remarks' => $row->remarks,
                 ];
 
                 if (count($sundries) >= 4) {
