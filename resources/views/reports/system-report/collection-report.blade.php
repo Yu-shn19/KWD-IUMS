@@ -702,10 +702,10 @@
                         </tr>
                         <tr>
                             <th>Current<br>Billing</th>
+                            <th>Meter<br>Maintenance</th>
                             <th>Current<br>Arrears</th>
                             <th>Prio<br>Years</th>
                             <th>Current<br>Penalty</th>
-                            <th>Meter<br>Maintenance</th>
                             <th>MR<br>Arrears</th>
                         </tr>
                     </thead>
@@ -759,8 +759,8 @@
                                         $arrearsCY = (float)($payment->current_arrears ?? 0);
                                         $arrearsPY = (float)($payment->prio_years ?? 0);
                                         $penalty = (float)($payment->current_penalty ?? 0);
-                                        $meterMaint = (float)($payment->mr_arrears ?? 0);
-                                        $mrArrears = (float)($payment->current_mr ?? 0);
+                                        $meterMaint = (float)($payment->current_mr ?? 0);
+                                        $mrArrears = (float)($payment->mr_arrears ?? 0);
                                         $rebate = (float)($payment->senior_citizen_discount ?? 0);
                                     }
                                 } else {
@@ -802,10 +802,10 @@
                                 <td class="text-center">{{ $record['account_name'] ?? '' }}</td>
                                 <td class="text-center">{{ number_format($amount, 2) }}</td>
                                 <td class="text-center">{{ $current > 0 ? number_format($current, 2) : '' }}</td>
+                                <td class="text-center">{{ $meterMaint > 0 ? number_format($meterMaint, 2) : '' }}</td>
                                 <td class="text-center">{{ $arrearsCY > 0 ? number_format($arrearsCY, 2) : '' }}</td>
                                 <td class="text-center">{{ $arrearsPY > 0 ? number_format($arrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $penalty > 0 ? number_format($penalty, 2) : '' }}</td>
-                                <td class="text-center">{{ $meterMaint > 0 ? number_format($meterMaint, 2) : '' }}</td>
                                 <td class="text-center">{{ $mrArrears > 0 ? number_format($mrArrears, 2) : '' }}</td>
                                 <td class="text-center">{{ $serviceRev > 0 ? number_format($serviceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $rebate > 0 ? number_format($rebate, 2) : '' }}</td>
@@ -818,10 +818,10 @@
                                 <td colspan="2" class="text-center">Total Amount:</td>
                                 <td class="text-center">{{ number_format($pageTotal, 2) }}</td>
                                 <td class="text-center">{{ $pageCurrent > 0 ? number_format($pageCurrent, 2) : '' }}</td>
+                                <td class="text-center">{{ $pageMeterMaint > 0 ? number_format($pageMeterMaint, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageArrearsCY > 0 ? number_format($pageArrearsCY, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageArrearsPY > 0 ? number_format($pageArrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $pagePenalty > 0 ? number_format($pagePenalty, 2) : '' }}</td>
-                                <td class="text-center">{{ $pageMeterMaint > 0 ? number_format($pageMeterMaint, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageMrArrears > 0 ? number_format($pageMrArrears, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageServiceRev > 0 ? number_format($pageServiceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageRebate > 0 ? number_format($pageRebate, 2) : '' }}</td>
@@ -832,10 +832,10 @@
                                 <td colspan="2" class="text-center">Grand Total :</td>
                                 <td class="text-center">{{ number_format($grandTotal, 2) }}</td>
                                 <td class="text-center">{{ $totalCurrent > 0 ? number_format($totalCurrent, 2) : '' }}</td>
+                                <td class="text-center">{{ $totalMeterMaint > 0 ? number_format($totalMeterMaint, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalArrearsCY > 0 ? number_format($totalArrearsCY, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalArrearsPY > 0 ? number_format($totalArrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalPenalty > 0 ? number_format($totalPenalty, 2) : '' }}</td>
-                                <td class="text-center">{{ $totalMeterMaint > 0 ? number_format($totalMeterMaint, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalMrArrears > 0 ? number_format($totalMrArrears, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalServiceRev > 0 ? number_format($totalServiceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalRebate > 0 ? number_format($totalRebate, 2) : '' }}</td>
