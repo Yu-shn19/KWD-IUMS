@@ -636,10 +636,9 @@
             $totalArrearsPY = 0;
             $totalPenalty = 0;
             $totalMeterMaint = 0;
+            $totalMrArrears = 0;
             $totalServiceRev = 0;
             $totalRebate = 0;
-            $totalMisc = 0;
-            $totalAJCs = 0;
         @endphp
 
         @foreach($pages as $pageIndex => $pageRecords)
@@ -653,18 +652,17 @@
                 $pageArrearsPY = 0;
                 $pagePenalty = 0;
                 $pageMeterMaint = 0;
+                $pageMrArrears = 0;
                 $pageServiceRev = 0;
                 $pageRebate = 0;
-                $pageMisc = 0;
-                $pageAJCs = 0;
             @endphp
 
             <div class="print-page {{ $isLastPage ? 'is-last' : '' }}">
                 <table class="print-table">
                     <colgroup>
-                        <col style="width: 10%;">
-                        <col style="width: 22%;">
                         <col style="width: 9%;">
+                        <col style="width: 20%;">
+                        <col style="width: 8%;">
                         <col style="width: 7.5%;">
                         <col style="width: 7.5%;">
                         <col style="width: 7.5%;">
@@ -672,13 +670,12 @@
                         <col style="width: 7.5%;">
                         <col style="width: 7.5%;">
                         <col style="width: 7.5%;">
-                        <col style="width: 6%;">
-                        <col style="width: 6%;">
+                        <col style="width: 7.5%;">
                     </colgroup>
                     <thead>
                         @if($pageIndex === 0)
                             <tr>
-                                <td colspan="12" class="print-header-cell">
+                                <td colspan="11" class="print-header-cell">
                                     <div class="print-header-inner">
                                         <img src="{{ asset('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District" class="print-header-logo">
                                         <h2>HAGONOY WATER DISTRICT</h2>
@@ -689,28 +686,27 @@
                                 </td>
                             </tr>
                             <tr>
-                                <td colspan="12" class="print-section-title" style="border: 1px solid #000; border-bottom-width: 2px; padding: 8px 12px;">ACCOUNTS CREDITED</td>
+                                <td colspan="11" class="print-section-title" style="border: 1px solid #000; border-bottom-width: 2px; padding: 8px 12px;">ACCOUNTS CREDITED</td>
                             </tr>
                             <tr>
-                                <td colspan="12" class="print-subsection" style="border: 1px solid #000; padding: 8px 12px;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</td>
+                                <td colspan="11" class="print-subsection" style="border: 1px solid #000; padding: 8px 12px;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</td>
                             </tr>
                         @endif
                         <tr>
                             <th rowspan="2">OR #</th>
                             <th rowspan="2">PAYOR</th>
                             <th rowspan="2">AMOUNT<br>COLLECTED</th>
-                            <th colspan="7" style="text-align: center;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</th>
-                            <th rowspan="2">Misc.</th>
-                            <th rowspan="2">AJCs</th>
+                            <th colspan="6" style="text-align: center;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</th>
+                            <th rowspan="2">Service Rev.<br>(648)</th>
+                            <th rowspan="2">Rebate<br>(895)</th>
                         </tr>
                         <tr>
-                            <th>Current</th>
-                            <th>Arrears<br>(CY)</th>
-                            <th>Arrears<br>(PY)</th>
-                            <th>Penalty</th>
+                            <th>Current<br>Billing</th>
+                            <th>Current<br>Arrears</th>
+                            <th>Prio<br>Years</th>
+                            <th>Current<br>Penalty</th>
                             <th>Meter<br>Maintenance</th>
-                            <th>Service Rev.<br>(648)</th>
-                            <th>Rebate<br>(895)</th>
+                            <th>MR<br>Arrears</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -725,10 +721,9 @@
                                 $arrearsPY = 0;
                                 $penalty = 0;
                                 $meterMaint = 0;
+                                $mrArrears = 0;
                                 $serviceRev = 0;
                                 $rebate = 0;
-                                $misc = 0;
-                                $ajcs = 0;
 
                                 // Get payment details from consumer_payments
                                 $payment = DB::table('consumer_payments as cp')
@@ -745,6 +740,7 @@
                                     // Only treat as sundry-only (full amount in Service Rev.) when there is no reading AND no stored breakdown
                                     $hasStoredBreakdown = ((float)($payment->current_penalty ?? 0) != 0
                                         || (float)($payment->mr_arrears ?? 0) != 0
+                                        || (float)($payment->current_mr ?? 0) != 0
                                         || (float)($payment->current_arrears ?? 0) != 0
                                         || (float)($payment->prio_years ?? 0) != 0
                                         || (float)($payment->current_billing ?? 0) != 0);
@@ -756,6 +752,7 @@
                                         $arrearsPY = 0;
                                         $penalty = 0;
                                         $meterMaint = 0;
+                                        $mrArrears = 0;
                                     } else {
                                         // Use consumer_payments only for print breakdown (no fallback calculation)
                                         $current = (float)($payment->current_billing ?? 0);
@@ -763,6 +760,7 @@
                                         $arrearsPY = (float)($payment->prio_years ?? 0);
                                         $penalty = (float)($payment->current_penalty ?? 0);
                                         $meterMaint = (float)($payment->mr_arrears ?? 0);
+                                        $mrArrears = (float)($payment->current_mr ?? 0);
                                         $rebate = (float)($payment->senior_citizen_discount ?? 0);
                                     }
                                 } else {
@@ -772,6 +770,7 @@
                                     $arrearsPY = 0;
                                     $penalty = 0;
                                     $meterMaint = 0;
+                                    $mrArrears = 0;
                                     $rebate = 0;
                                 }
 
@@ -782,10 +781,9 @@
                                 $pageArrearsPY += $arrearsPY;
                                 $pagePenalty += $penalty;
                                 $pageMeterMaint += $meterMaint;
+                                $pageMrArrears += $mrArrears;
                                 $pageServiceRev += $serviceRev;
                                 $pageRebate += $rebate;
-                                $pageMisc += $misc;
-                                $pageAJCs += $ajcs;
 
                                 // Grand totals
                                 $grandTotal += $amount;
@@ -794,10 +792,9 @@
                                 $totalArrearsPY += $arrearsPY;
                                 $totalPenalty += $penalty;
                                 $totalMeterMaint += $meterMaint;
+                                $totalMrArrears += $mrArrears;
                                 $totalServiceRev += $serviceRev;
                                 $totalRebate += $rebate;
-                                $totalMisc += $misc;
-                                $totalAJCs += $ajcs;
                             @endphp
 
                             <tr>
@@ -809,10 +806,9 @@
                                 <td class="text-center">{{ $arrearsPY > 0 ? number_format($arrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $penalty > 0 ? number_format($penalty, 2) : '' }}</td>
                                 <td class="text-center">{{ $meterMaint > 0 ? number_format($meterMaint, 2) : '' }}</td>
+                                <td class="text-center">{{ $mrArrears > 0 ? number_format($mrArrears, 2) : '' }}</td>
                                 <td class="text-center">{{ $serviceRev > 0 ? number_format($serviceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $rebate > 0 ? number_format($rebate, 2) : '' }}</td>
-                                <td class="text-center">{{ $misc > 0 ? number_format($misc, 2) : '' }}</td>
-                                <td class="text-center">{{ $ajcs > 0 ? number_format($ajcs, 2) : '' }}</td>
                             </tr>
                         @endforeach
 
@@ -826,10 +822,9 @@
                                 <td class="text-center">{{ $pageArrearsPY > 0 ? number_format($pageArrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $pagePenalty > 0 ? number_format($pagePenalty, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageMeterMaint > 0 ? number_format($pageMeterMaint, 2) : '' }}</td>
+                                <td class="text-center">{{ $pageMrArrears > 0 ? number_format($pageMrArrears, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageServiceRev > 0 ? number_format($pageServiceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageRebate > 0 ? number_format($pageRebate, 2) : '' }}</td>
-                                <td class="text-center">{{ $pageMisc > 0 ? number_format($pageMisc, 2) : '' }}</td>
-                                <td class="text-center">{{ $pageAJCs > 0 ? number_format($pageAJCs, 2) : '' }}</td>
                             </tr>
                         @else
                             <!-- Grand Total (only on last page) -->
@@ -841,10 +836,9 @@
                                 <td class="text-center">{{ $totalArrearsPY > 0 ? number_format($totalArrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalPenalty > 0 ? number_format($totalPenalty, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalMeterMaint > 0 ? number_format($totalMeterMaint, 2) : '' }}</td>
+                                <td class="text-center">{{ $totalMrArrears > 0 ? number_format($totalMrArrears, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalServiceRev > 0 ? number_format($totalServiceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalRebate > 0 ? number_format($totalRebate, 2) : '' }}</td>
-                                <td class="text-center">{{ $totalMisc > 0 ? number_format($totalMisc, 2) : '' }}</td>
-                                <td class="text-center">{{ $totalAJCs > 0 ? number_format($totalAJCs, 2) : '' }}</td>
                             </tr>
                         @endif
                     </tbody>

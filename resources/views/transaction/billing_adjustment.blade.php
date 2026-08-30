@@ -131,9 +131,7 @@
     .bam-list-search:focus {
         outline: none;
     }
-    .bam-list-search::placeholder {
-        color: #94a3b8;
-    }
+    .bam-list-actions { display: inline-flex; flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 0.25rem; white-space: nowrap; }
     @media (max-width: 768px) {
         .bam-list-header {
             grid-template-columns: 1fr;
@@ -196,10 +194,10 @@
                                 <div class="bam-col">
                                     <label class="form-label">Ledger</label>
                                     <select class="form-control form-control-sm" name="ar" id="bamAr">
-                                        <option value="AR">AR (Consumer ledger)</option>
-                                        <option value="LRO">LRO</option>
+                                        <option value="AR">AR (Account ledger)</option>
+                                        <option value="LRO">LRO (LRO ledger)</option>
                                     </select>
-                                    <small class="d-block mt-1 small text-muted">AR = consumer ledger (DM, CM, Others — no acct code). LRO = LRO ledger (DM only — select acct code).</small>
+                                    <small class="d-block mt-1 small text-muted">AR = consumer ledger (Acct Code disabled). LRO = LRO ledger (Acct Code enabled, Type = DM only).</small>
                                 </div>
                             </div>
                             <div class="row">
@@ -237,13 +235,17 @@
                                             <input type="text" class="form-control form-control-sm" id="bamAcctCodeDisplay" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff;">
                                             <div id="bamAcctCodeDropdown" class="bam-acct-dropdown" style="display: none;">
                                                 <div class="bam-acct-option" data-code="" data-desc="">— Select Acct Code —</div>
-                                                <div class="bam-acct-option" data-code="19901020" data-desc="Advances for Payroll">19901020 Advances for Payroll</div>
-                                                <div class="bam-acct-option" data-code="19901030" data-desc="Advances to Special Disbursing Offices">19901030 Advances to Special Disbursing Offices</div>
-                                                <div class="bam-acct-option" data-code="19901040" data-desc="Advances to Officers and Employees">19901040 Advances to Officers and Employees</div>
-                                                <div class="bam-acct-option" data-code="20102040" data-desc="Loans Payable-Domestic - Non-Current">20102040 Loans Payable-Domestic - Non-Current</div>
-                                                <div class="bam-acct-option" data-code="20401090" data-desc="Customer's Deposit Payable">20401090 Customer's Deposit Payable</div>
-                                                <div class="bam-acct-option" data-code="40201990" data-desc="Other Service Income">40201990 Other Service Income</div>
-                                                <div class="bam-acct-option" data-code="40603990" data-desc="Miscellineous Income">40603990 Miscellineous Income</div>
+                                                <div class="bam-acct-option" data-code="106" data-desc="A/R MATERIALS">106 - A/R MATERIALS</div>
+                                                <div class="bam-acct-option" data-code="107" data-desc="A/R MOTORPLAN">107 - A/R MOTORPLAN</div>
+                                                <div class="bam-acct-option" data-code="110" data-desc="CELLPHONE PLAN">110 - CELLPHONE PLAN</div>
+                                                <div class="bam-acct-option" data-code="101" data-desc="CONNECTION FEE">101 - CONNECTION FEE</div>
+                                                <div class="bam-acct-option" data-code="105" data-desc="MATERIALS NEW CONNECTION">105 - MATERIALS NEW CONNECTION</div>
+                                                <div class="bam-acct-option" data-code="100" data-desc="MEMBERSHIP FEE">100 - MEMBERSHIP FEE</div>
+                                                <div class="bam-acct-option" data-code="109" data-desc="OTHERS">109 - OTHERS</div>
+                                                <div class="bam-acct-option" data-code="108" data-desc="RECONNECTION FEE">108 - RECONNECTION FEE</div>
+                                                <div class="bam-acct-option" data-code="102" data-desc="SECURITY DEPOSIT">102 - SECURITY DEPOSIT</div>
+                                                <div class="bam-acct-option" data-code="104" data-desc="SERVICE FEE">104 - SERVICE FEE</div>
+                                                <div class="bam-acct-option" data-code="103" data-desc="WATER METER">103 - WATER METER</div>
                                             </div>
                                         </div>
                                     </div>
@@ -297,7 +299,6 @@
                                             <th>Trans</th>
                                             <th>Date</th>
                                             <th>Type</th>
-                                            <th>Acct Code</th>
                                             <th>Account No</th>
                                             <th>Account Name</th>
                                             <th class="text-right">Amount</th>
@@ -328,6 +329,18 @@
                                                 }
                                             }
                                             $allEntries = $allEntries->sortByDesc(fn (array $row) => $row['sort_key'] ?? '')->values();
+                                            $paidLroBamNos = collect(isset($lroEntries) ? $lroEntries : [])
+                                                ->filter(function ($entry) {
+                                                    $status = strtoupper(trim((string) ($entry->status ?? '')));
+                                                    $type = strtoupper(trim((string) ($entry->type ?? '')));
+
+                                                    return $type === 'CM' && in_array($status, ['POSTED', 'PAID'], true);
+                                                })
+                                                ->map(fn ($entry) => trim((string) ($entry->bam_no ?? '')))
+                                                ->filter()
+                                                ->unique()
+                                                ->values()
+                                                ->all();
                                         @endphp
 
                                         @forelse($allEntries as $row)
@@ -337,25 +350,43 @@
                                                 $typeBadgeClass = $item->type === 'CM'
                                                     ? 'badge-success'
                                                     : ($item->type === 'DM' ? 'badge-warning' : 'badge-info');
+                                                $acctCodeLabels = [
+                                                    '100' => '100 - MEMBERSHIP FEE',
+                                                    '101' => '101 - CONNECTION FEE',
+                                                    '102' => '102 - SECURITY DEPOSIT',
+                                                    '103' => '103 - WATER METER',
+                                                    '104' => '104 - SERVICE FEE',
+                                                    '105' => '105 - MATERIALS NEW CONNECTION',
+                                                    '106' => '106 - A/R MATERIALS',
+                                                    '107' => '107 - A/R MOTORPLAN',
+                                                    '108' => '108 - RECONNECTION FEE',
+                                                    '109' => '109 - OTHERS',
+                                                    '110' => '110 - CELLPHONE PLAN',
+                                                ];
+                                                $acctCodeKey = (string) ($item->acct_code ?? '');
+                                                $acctCodeLabel = $acctCodeLabels[$acctCodeKey]
+                                                    ?? (\App\Support\AcctCodeTitles::titleFor($acctCodeKey)
+                                                    ?? ($acctCodeKey !== '' ? $acctCodeKey : '-'));
                                             @endphp
                                             @if($row['source'] === 'BAM')
-                                            <tr>
-                                                <td>{{ $row['ledger'] ?? 'AR' }}</td>
+                                            <tr data-acct-code="{{ $acctCodeKey }}">
+                                                <td>{{ $acctCodeLabel }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
                                                 <td><span class="badge {{ $typeBadgeClass }}">{{ $item->type }}</span></td>
-                                                <td>{{ $item->acct_code ?? '-' }}</td>
                                                 <td>{{ $isOthers ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '-') }}</td>
                                                 <td>{{ $isOthers ? '' : ($item->consumerZone->account_name ?? '-') }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
                                                 <td><span class="badge badge-{{ $item->status === 'Approved' ? 'success' : ($item->status === 'Posted' ? 'primary' : ($item->status === 'Cancelled' ? 'danger' : 'secondary')) }}">{{ $item->status === 'Posted' ? 'Paid' : $item->status }}</span></td>
-                                                <td class="text-center">
+                                                <td class="text-center" style="white-space: nowrap;">
                                                     @php
                                                         $bamStatus = strtoupper(trim($item->status ?? ''));
                                                         $isArCmPaid = ($row['ledger'] ?? 'AR') === 'AR'
                                                             && ($item->type ?? '') === 'CM'
                                                             && in_array($bamStatus, ['POSTED', 'PAID'], true);
+                                                        $isBamPaid = in_array($bamStatus, ['POSTED', 'PAID'], true);
                                                     @endphp
+                                                    <div class="bam-list-actions">
                                                     @if($isArCmPaid)
                                                     <button type="button"
                                                             class="btn btn-sm btn-outline-secondary"
@@ -364,28 +395,47 @@
                                                         <i class="fas fa-edit"></i>
                                                     </button>
                                                     @else
-                                                    <a href="{{ route('billing-adjustment.edit', $item->id) }}" class="btn btn-sm btn-outline-primary" title="Edit">
+                                                    <a href="{{ route('billing-adjustment.edit', $item->id) }}" class="btn btn-sm btn-outline-primary bam-edit-btn" title="Edit">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
                                                     @endif
+                                                    @if($isBamPaid)
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            disabled
+                                                            title="Paid entries cannot be deleted">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
+                                                    @else
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-danger bam-delete-btn"
+                                                            data-url="{{ route('billing-adjustment.ar.destroy', $item->id) }}"
+                                                            title="Delete">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
+                                                    @endif
+                                                    </div>
                                                 </td>
                                             </tr>
                                             @else
-                                            <tr>
-                                                <td>{{ $row['ledger'] ?? 'LRO' }}</td>
+                                            <tr data-acct-code="{{ $acctCodeKey }}">
+                                                <td>{{ $acctCodeLabel }}</td>
                                                 <td>{{ $item->date ? \Carbon\Carbon::parse($item->date)->format('m/d/Y') : '-' }}</td>
                                                 <td><span class="badge {{ $typeBadgeClass }}">{{ $item->type ?? 'CM' }}</span></td>
-                                                <td>{{ $item->acct_code ?? '-' }}</td>
                                                 <td>{{ $isOthers ? '' : ($item->consumerZone->account_no ?? $item->account_no ?? '') }}</td>
                                                 <td>{{ $isOthers ? ($item->account_name ?? '-') : ($item->consumerZone->account_name ?? $item->account_name ?? '-') }}</td>
                                                 <td class="text-right font-weight-bold">{{ number_format($item->amount ?? 0, 2) }}</td>
                                                 <td>{{ $item->bam_no ?? '-' }}</td>
                                                 <td><span class="badge badge-{{ ($item->status ?? 'Pending') === 'Approved' ? 'success' : (($item->status ?? 'Pending') === 'Posted' ? 'primary' : (($item->status ?? 'Pending') === 'Cancelled' ? 'danger' : 'secondary')) }}">{{ ($item->status ?? 'Pending') === 'Posted' ? 'Paid' : ($item->status ?? 'Pending') }}</span></td>
-                                                <td class="text-center">
+                                                <td class="text-center" style="white-space: nowrap;">
                                                     @php
                                                         $lroStatus = strtoupper(trim($item->status ?? ''));
                                                         $isLroPaid = in_array($lroStatus, ['POSTED', 'PAID'], true);
+                                                        $isLroChargePaid = strtoupper(trim((string) ($item->type ?? ''))) === 'DM'
+                                                            && in_array(trim((string) ($item->bam_no ?? '')), $paidLroBamNos, true);
+                                                        $cannotDeleteLro = $isLroPaid || $isLroChargePaid;
                                                     @endphp
+                                                    <div class="bam-list-actions">
                                                     @if($isLroPaid)
                                                     <button type="button"
                                                             class="btn btn-sm btn-outline-secondary"
@@ -394,20 +444,36 @@
                                                         <i class="fas fa-edit"></i>
                                                     </button>
                                                     @else
-                                                    <a href="{{ route('billing-adjustment.lro.edit', $item->id) }}" class="btn btn-sm btn-outline-primary" title="Edit">
+                                                    <a href="{{ route('billing-adjustment.lro.edit', $item->id) }}" class="btn btn-sm btn-outline-primary bam-edit-btn" title="Edit">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
                                                     @endif
+                                                    @if($cannotDeleteLro)
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            disabled
+                                                            title="Paid entries cannot be deleted">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
+                                                    @else
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-danger bam-delete-btn"
+                                                            data-url="{{ route('billing-adjustment.lro.destroy', $item->id) }}"
+                                                            title="Delete">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
+                                                    @endif
+                                                    </div>
                                                 </td>
                                             </tr>
                                             @endif
                                         @empty
                                             <tr>
-                                                <td colspan="10" class="text-center text-muted py-4">No billing adjustment transactions recorded yet.</td>
+                                                <td colspan="9" class="text-center text-muted py-4">No billing adjustment transactions recorded yet.</td>
                                             </tr>
                                         @endforelse
                                         <tr id="bamListNoMatchRow" class="d-none">
-                                            <td colspan="10" class="text-center text-muted py-4">No matching records found.</td>
+                                            <td colspan="9" class="text-center text-muted py-4">No matching records found.</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -431,6 +497,29 @@
             <div class="bam-success-title" id="bamSuccessTitle">Billing Adjustment Saved!</div>
             <div class="bam-success-message" id="bamSuccessMessage">Billing adjustment information saved successfully.</div>
             <button type="button" class="bam-success-btn" onclick="document.getElementById('bamSuccessModal').classList.remove('show');">OK</button>
+        </div>
+    </div>
+
+    <!-- PIN Modal for Edit / Delete -->
+    <div class="modal fade" id="bamActionPinModal" tabindex="-1" aria-labelledby="bamActionPinModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="bamActionPinModalLabel">
+                        <i class="fas fa-lock me-2"></i>Enter PIN
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-2" id="bamActionPinHint">Enter the edit PIN to continue.</p>
+                    <input type="password" class="form-control" id="bamActionPinInput" placeholder="PIN" autocomplete="off" maxlength="20">
+                    <div class="invalid-feedback" id="bamActionPinError"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="bamActionPinVerifyBtn"><i class="fas fa-check me-1"></i>Verify</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -506,6 +595,16 @@
                 if (el.options[i].value === val) { el.selectedIndex = i; return; }
             }
         }
+        function bamAcctCodeDisplayText(code) {
+            var c = String(code || '').trim();
+            if (!c) return '';
+            var opt = document.querySelector('#bamAcctCodeDropdown .bam-acct-option[data-code="' + c.replace(/"/g, '') + '"]');
+            if (opt) {
+                var label = String(opt.textContent || '').trim();
+                if (label) return label;
+            }
+            return c;
+        }
         function bamLocalTodayYmd() {
             var d = new Date();
             var y = d.getFullYear();
@@ -514,62 +613,8 @@
             return y + '-' + m + '-' + day;
         }
         
-        // Apply ledger/type UI rules
-        function bamSetTypeOptionEnabled(value, enabled) {
-            var typeEl = document.getElementById('bamType');
-            if (!typeEl) return;
-            for (var i = 0; i < typeEl.options.length; i++) {
-                if (typeEl.options[i].value === value) {
-                    typeEl.options[i].disabled = !enabled;
-                    typeEl.options[i].hidden = !enabled;
-                }
-            }
-        }
-
-        function bamSetAcctCodeEnabled(enabled) {
-            var acctDisplay = document.getElementById('bamAcctCodeDisplay');
-            var acctHidden = document.getElementById('bamAcctCode');
-            var acctDropdown = document.getElementById('bamAcctCodeDropdown');
-            if (!acctDisplay || !acctHidden) return;
-
-            acctDisplay.disabled = !enabled;
-            acctDisplay.style.cursor = enabled ? 'pointer' : 'not-allowed';
-            acctDisplay.style.backgroundColor = enabled ? '#fff' : '#e9ecef';
-
-            if (!enabled) {
-                acctHidden.value = '';
-                acctDisplay.value = '';
-                acctDisplay.placeholder = '— Select Acct Code —';
-                if (acctDropdown) acctDropdown.style.display = 'none';
-            }
-        }
-
-        function bamApplyLedgerRules() {
-            var ledgerEl = document.getElementById('bamAr');
-            var typeEl = document.getElementById('bamType');
-            if (!ledgerEl || !typeEl) return;
-
-            if (ledgerEl.value === 'LRO') {
-                // LRO: DM only; acct code required path
-                bamSetTypeOptionEnabled('CM', false);
-                bamSetTypeOptionEnabled('Others', false);
-                bamSetTypeOptionEnabled('DM', true);
-                if (typeEl.value !== 'DM') {
-                    bamSetSelected('bamType', 'DM');
-                }
-                bamSetAcctCodeEnabled(true);
-            } else {
-                // AR: all three types; no acct code
-                bamSetTypeOptionEnabled('CM', true);
-                bamSetTypeOptionEnabled('Others', true);
-                bamSetTypeOptionEnabled('DM', true);
-                bamSetAcctCodeEnabled(false);
-            }
-
-            bamApplyTypeRules();
-            bamApplyStatusOptions();
-        }
-
+        // Apply Type-specific UI rules (e.g. Others)
+        var bamPrevLedger = null;
         function bamApplyTypeRules() {
             var typeEl    = document.getElementById('bamType');
             var ledgerEl  = document.getElementById('bamAr');
@@ -579,23 +624,73 @@
             if (!typeEl || !ledgerEl || !accountEl || !nameEl || !bamNoEl) return;
 
             var isOthers = (typeEl.value === 'Others');
-            var isAr = ledgerEl.value === 'AR';
 
-            if (isOthers && isAr) {
+            if (isOthers) {
+                if (bamPrevLedger === null) bamPrevLedger = ledgerEl.value || 'AR';
+                ledgerEl.value = 'LRO';
+                ledgerEl.disabled = true;
+
                 accountEl.value = '';
                 accountEl.disabled = true;
+
+                // Allow manual name input for Others
                 nameEl.readOnly = false;
                 nameEl.placeholder = 'Enter name...';
                 bamNoEl.readOnly = false;
             } else {
+                ledgerEl.disabled = false;
+                if (bamPrevLedger !== null) ledgerEl.value = bamPrevLedger;
+                bamPrevLedger = null;
+
                 accountEl.disabled = false;
+
                 nameEl.readOnly = true;
                 nameEl.placeholder = 'Consumer name (from selection)';
                 bamNoEl.readOnly = true;
-                if ((nameEl.value || '').trim() && !accountEl.value && !isOthers) nameEl.value = '';
+                if ((nameEl.value || '').trim() && !accountEl.value) nameEl.value = '';
             }
 
             bamApplySundryRules();
+            bamApplyLedgerFieldRules();
+            bamApplyStatusOptions();
+        }
+
+        function bamSetAcctCodeEnabled(enabled) {
+            var acctDisplay = document.getElementById('bamAcctCodeDisplay');
+            var acctDropdown = document.getElementById('bamAcctCodeDropdown');
+            if (!acctDisplay) return;
+            acctDisplay.disabled = !enabled;
+            acctDisplay.style.cursor = enabled ? 'pointer' : 'not-allowed';
+            acctDisplay.style.backgroundColor = enabled ? '#fff' : '#e9ecef';
+            if (!enabled && acctDropdown) {
+                acctDropdown.style.display = 'none';
+            }
+        }
+
+        function bamApplyLedgerFieldRules() {
+            var typeEl = document.getElementById('bamType');
+            var ledgerEl = document.getElementById('bamAr');
+            if (!typeEl || !ledgerEl) return;
+
+            var isOthers = typeEl.value === 'Others';
+            var isLro = ledgerEl.value === 'LRO';
+
+            bamSetAcctCodeEnabled(isLro);
+
+            Array.prototype.forEach.call(typeEl.options, function(opt) {
+                if (isLro && !isOthers) {
+                    var lock = opt.value !== 'DM';
+                    opt.hidden = lock;
+                    opt.disabled = lock;
+                } else {
+                    opt.hidden = false;
+                    opt.disabled = false;
+                }
+            });
+
+            if (isLro && !isOthers && typeEl.value !== 'DM') {
+                bamSetSelected('bamType', 'DM');
+            }
         }
 
         function bamApplySundryRules() {
@@ -604,12 +699,17 @@
             var typeEl = document.getElementById('bamType');
             if (!acctHidden || !ledgerEl || !typeEl) return;
 
-            if (ledgerEl.value !== 'LRO') return;
-
             var code = (acctHidden.value || '').trim();
             var sundryCodes = ['19901020', '19901030', '19901040'];
-            if (sundryCodes.indexOf(code) !== -1) {
+            var isSundry = sundryCodes.indexOf(code) !== -1;
+            var isOthers = typeEl.value === 'Others';
+
+            if (isSundry && !isOthers) {
+                bamSetSelected('bamAr', 'LRO');
                 bamSetSelected('bamType', 'DM');
+                ledgerEl.disabled = true;
+            } else if (!isOthers) {
+                ledgerEl.disabled = false;
             }
         }
 
@@ -642,11 +742,14 @@
             bamSetVal('bamNo', entry.bam_no || '');
             bamSetVal('bamAmount', entry.amount !== null && entry.amount !== undefined ? parseFloat(entry.amount).toFixed(2) : '0.00');
             bamSetVal('bamAcctCode', entry.acct_code || '');
-            bamSetVal('bamAcctCodeDisplay', entry.acct_code || '');
+            bamSetVal('bamAcctCodeDisplay', bamAcctCodeDisplayText(entry.acct_code));
             bamSetVal('bamRemarks', entry.remarks || '');
             bamSetSelected('bamStatus', entry.status || 'Approved');
             bamSetVal('bamCorrectReading', entry.correct_reading !== null && entry.correct_reading !== undefined ? entry.correct_reading : '0');
-            bamApplyLedgerRules();
+            bamApplyTypeRules();
+            bamApplySundryRules();
+            bamApplyLedgerFieldRules();
+            bamApplyStatusOptions();
         }
 
         // Reset the form to a blank new-entry state; pass nextBamNo from server response
@@ -667,7 +770,7 @@
             // Clear edit-mode IDs so next save is treated as new
             bamSetVal('bamLroId', '');
             bamSetVal('bamArId', '');
-            bamApplyLedgerRules();
+            bamApplyTypeRules();
         }
 
         // ─── Tab behavior ────────────────────────────────────────────────────────
@@ -712,17 +815,19 @@
                 rows.forEach(function(row) {
                     if (row.id === 'bamListNoMatchRow') return;
                     var cells = row.querySelectorAll('td');
-                    if (cells.length < 10) return;
+                    if (cells.length < 9) return;
 
-                    var acctCode = normalize(cells[3].textContent);
-                    var accountNo = normalize(cells[4].textContent);
-                    var accountName = normalize(cells[5].textContent);
-                    var reference = normalize(cells[7].textContent);
+                    var acctCode = normalize(cells[0].textContent);
+                    var acctCodeRaw = normalize(row.getAttribute('data-acct-code'));
+                    var accountNo = normalize(cells[3].textContent);
+                    var accountName = normalize(cells[4].textContent);
+                    var reference = normalize(cells[6].textContent);
                     var matches = !query
                         || accountNo.indexOf(query) !== -1
                         || accountName.indexOf(query) !== -1
                         || reference.indexOf(query) !== -1
-                        || acctCode.indexOf(query) !== -1;
+                        || acctCode.indexOf(query) !== -1
+                        || acctCodeRaw.indexOf(query) !== -1;
 
                     row.style.display = matches ? '' : 'none';
                     if (matches) visibleCount++;
@@ -732,6 +837,148 @@
             }
 
             searchInput.addEventListener('input', filterRows);
+        })();
+
+        // ─── List edit / delete (PIN required) ───────────────────────────────────
+        (function() {
+            var table = document.getElementById('bamListTable');
+            if (!table) return;
+            var tokenEl = document.querySelector('#editBillingForm input[name="_token"]');
+            var token = tokenEl ? tokenEl.value : '{{ csrf_token() }}';
+            var pendingAction = null;
+
+            function requestPinThenRun(hint, callback) {
+                pendingAction = callback;
+                var hintEl = document.getElementById('bamActionPinHint');
+                if (hintEl) hintEl.textContent = hint || 'Enter the edit PIN to continue.';
+                $('#bamActionPinInput').val('');
+                $('#bamActionPinError').text('').removeClass('d-block');
+                $('#bamActionPinInput').removeClass('is-invalid');
+                $('#bamActionPinModal').modal('show');
+                setTimeout(function() {
+                    var pinInput = document.getElementById('bamActionPinInput');
+                    if (pinInput) pinInput.focus();
+                }, 300);
+            }
+
+            var verifyBtn = document.getElementById('bamActionPinVerifyBtn');
+            if (verifyBtn) {
+                verifyBtn.addEventListener('click', function() {
+                    var pinInput = document.getElementById('bamActionPinInput');
+                    var errEl = document.getElementById('bamActionPinError');
+                    var pin = (pinInput && pinInput.value) ? pinInput.value.trim() : '';
+                    if (!pin) {
+                        if (errEl) { errEl.textContent = 'Enter PIN.'; errEl.classList.add('d-block'); }
+                        if (pinInput) pinInput.classList.add('is-invalid');
+                        return;
+                    }
+                    verifyBtn.disabled = true;
+                    fetch('{{ route("consumer.verify-edit-pin") }}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRF-TOKEN': token
+                        },
+                        body: JSON.stringify({ pin: pin })
+                    }).then(function(r) { return r.json(); }).then(function(data) {
+                        verifyBtn.disabled = false;
+                        if (data.success) {
+                            $('#bamActionPinModal').modal('hide');
+                            var cb = pendingAction;
+                            pendingAction = null;
+                            if (typeof cb === 'function') cb();
+                        } else {
+                            if (errEl) { errEl.textContent = data.message || 'Invalid PIN.'; errEl.classList.add('d-block'); }
+                            if (pinInput) pinInput.classList.add('is-invalid');
+                        }
+                    }).catch(function() {
+                        verifyBtn.disabled = false;
+                        if (errEl) { errEl.textContent = 'Request failed.'; errEl.classList.add('d-block'); }
+                        if (pinInput) pinInput.classList.add('is-invalid');
+                    });
+                });
+            }
+            $('#bamActionPinInput').on('keydown', function(e) {
+                if (e.which === 13 && verifyBtn) verifyBtn.click();
+            });
+
+            function deleteAdjustment(btn) {
+                var url = btn.getAttribute('data-url');
+                if (!url) return;
+                btn.disabled = true;
+
+                fetch(url, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRF-TOKEN': token
+                    }
+                })
+                .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+                .then(function(result) {
+                    var modal = document.getElementById('bamSuccessModal');
+                    var icon = modal.querySelector('.bam-success-icon');
+                    var iconSvg = icon.querySelector('svg');
+                    if (result.ok && result.data.success) {
+                        var row = btn.closest('tr');
+                        if (row) row.remove();
+                        var badge = document.querySelector('#bamListPanel .badge-pill');
+                        if (badge) {
+                            var n = parseInt(badge.textContent, 10);
+                            if (isFinite(n) && n > 0) {
+                                badge.textContent = (n - 1) + ' record(s)';
+                            }
+                        }
+                        icon.classList.remove('error');
+                        iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />';
+                        document.getElementById('bamSuccessTitle').textContent = 'Deleted';
+                        document.getElementById('bamSuccessMessage').textContent = result.data.message || 'Billing adjustment deleted successfully.';
+                    } else {
+                        btn.disabled = false;
+                        icon.classList.add('error');
+                        iconSvg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />';
+                        document.getElementById('bamSuccessTitle').textContent = 'Error';
+                        document.getElementById('bamSuccessMessage').textContent = result.data.message || 'Delete failed.';
+                    }
+                    modal.classList.add('show');
+                })
+                .catch(function() {
+                    btn.disabled = false;
+                    var modal = document.getElementById('bamSuccessModal');
+                    var icon = modal.querySelector('.bam-success-icon');
+                    icon.classList.add('error');
+                    icon.querySelector('svg').innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />';
+                    document.getElementById('bamSuccessTitle').textContent = 'Error';
+                    document.getElementById('bamSuccessMessage').textContent = 'Delete failed. Please try again.';
+                    modal.classList.add('show');
+                });
+            }
+
+            table.addEventListener('click', function(e) {
+                var editBtn = e.target.closest('.bam-edit-btn');
+                if (editBtn) {
+                    e.preventDefault();
+                    var href = editBtn.getAttribute('href');
+                    if (!href) return;
+                    requestPinThenRun('Enter the edit PIN to edit this billing adjustment.', function() {
+                        window.location.href = href;
+                    });
+                    return;
+                }
+
+                var btn = e.target.closest('.bam-delete-btn');
+                if (!btn) return;
+                e.preventDefault();
+                if (btn.disabled) return;
+                requestPinThenRun('Enter the edit PIN to delete this billing adjustment.', function() {
+                    if (!confirm('Delete this billing adjustment? This cannot be undone.')) return;
+                    deleteAdjustment(btn);
+                });
+            });
         })();
 
         // ─── Save button ─────────────────────────────────────────────────────────
@@ -928,9 +1175,14 @@
                     opt.addEventListener('click', function() {
                         var code = this.getAttribute('data-code') || '';
                         var desc = this.getAttribute('data-desc') || '';
+                        var displayText = '';
+                        if (code) {
+                            displayText = String(this.textContent || '').trim();
+                            if (!displayText) displayText = desc.trim() ? (code + ' - ' + desc) : code;
+                        }
                         acctHidden.value = code;
-                        acctDisplay.value = code;
-                        acctDisplay.placeholder = code ? '' : '— Select Acct Code —';
+                        acctDisplay.value = displayText;
+                        acctDisplay.placeholder = displayText ? '' : '— Select Acct Code —';
                         if (remarksInput) remarksInput.value = desc;
                         acctDropdown.style.display = 'none';
                         bamApplySundryRules();
@@ -951,11 +1203,12 @@
             var ledgerEl = document.getElementById('bamAr');
             var amountEl = document.getElementById('bamAmount');
             if (!typeEl) return;
-            typeEl.addEventListener('change', function() {
+            typeEl.addEventListener('change', bamApplyTypeRules);
+            if (ledgerEl) ledgerEl.addEventListener('change', function() {
                 bamApplyTypeRules();
+                bamApplyLedgerFieldRules();
                 bamApplyStatusOptions();
             });
-            if (ledgerEl) ledgerEl.addEventListener('change', bamApplyLedgerRules);
             if (amountEl) {
                 amountEl.addEventListener('focus', function() {
                     amountEl.value = bamNormalizeAmountForEdit(amountEl.value);
@@ -965,8 +1218,8 @@
                     amountEl.value = bamFormatAmountValue(amountEl.value);
                 });
             }
-            document.addEventListener('DOMContentLoaded', bamApplyLedgerRules);
-            bamApplyLedgerRules();
+            document.addEventListener('DOMContentLoaded', bamApplyTypeRules);
+            bamApplyTypeRules();
         })();
     </script>
 </body>
