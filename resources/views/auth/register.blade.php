@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Register - Kiblawan Water District System</title>
+  <title>Register - {{ $branding['org_name'] }}</title>
   <!-- Bootstrap 5 CDN -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     body {
       height: 100vh;
-      background: url('{{ asset('WDMS\img\logo\KlogoC.png') }}') no-repeat center center/cover;
+      background: url('{{ $branding['hero_url'] }}') no-repeat center center/cover;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -66,8 +66,8 @@
   <div class="overlay"></div>
   <div class="register-card text-center">
     <!-- Logo Placeholder -->
-    <img src="{{ url('WDMS/img/logo/logo.png') }}" 
-         alt="Water District Logo" class="logo">
+    <img src="{{ $branding['logo_url'] }}"
+         alt="{{ $branding['org_name'] }} Logo" class="logo">
 
     <h2>Create an Account</h2>
     <form method="POST" action="/register">

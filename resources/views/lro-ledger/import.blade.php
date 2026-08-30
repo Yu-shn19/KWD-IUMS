@@ -70,7 +70,7 @@
                             @endif
 
                             <!-- Import Form -->
-                            <form action="{{ route('lro-ledger.import') }}" method="POST" enctype="multipart/form-data" id="lroLedgerImportForm">
+                            <form action="{{ route('lro-ledger.import.store') }}" method="POST" enctype="multipart/form-data" id="lroLedgerImportForm">
                                 @csrf
                                 <div class="row">
                                     <div class="col-md-12 mb-3">

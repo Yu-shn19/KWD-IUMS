@@ -7,84 +7,39 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        if (Schema::hasTable('consumer_payments')) {
-            Schema::table('consumer_payments', function (Blueprint $table) {
-                if (Schema::hasColumn('consumer_payments', 'current_bill')) {
-                    $table->renameColumn('current_bill', 'current_billing');
-                }
-                if (Schema::hasColumn('consumer_payments', 'penalty')) {
-                    $table->renameColumn('penalty', 'current_penalty');
-                }
-                if (Schema::hasColumn('consumer_payments', 'meter_maintenance')) {
-                    $table->renameColumn('meter_maintenance', 'mr_arrears');
-                }
-                if (Schema::hasColumn('consumer_payments', 'arrears_cy')) {
-                    $table->renameColumn('arrears_cy', 'current_arrears');
-                }
-                if (Schema::hasColumn('consumer_payments', 'arrears_py')) {
-                    $table->renameColumn('arrears_py', 'prio_years');
-                }
-                if (Schema::hasColumn('consumer_payments', 'others')) {
-                    $table->renameColumn('others', 'current_mr');
-                }
-            });
-        }
+        $this->renameIfExists('consumer_payments', 'current_bill', 'current_billing');
+        $this->renameIfExists('consumer_payments', 'penalty', 'current_penalty');
+        $this->renameIfExists('consumer_payments', 'meter_maintenance', 'mr_arrears');
+        $this->renameIfExists('consumer_payments', 'arrears_cy', 'current_arrears');
+        $this->renameIfExists('consumer_payments', 'arrears_py', 'prio_years');
+        $this->renameIfExists('consumer_payments', 'others', 'current_mr');
 
-        if (Schema::hasTable('downloaded_readings')) {
-            Schema::table('downloaded_readings', function (Blueprint $table) {
-                if (Schema::hasColumn('downloaded_readings', 'current_bill')) {
-                    $table->renameColumn('current_bill', 'current_billing');
-                }
-            });
-        }
-
-        if (Schema::hasTable('meter_reading_schedules')) {
-            Schema::table('meter_reading_schedules', function (Blueprint $table) {
-                if (Schema::hasColumn('meter_reading_schedules', 'current_bill')) {
-                    $table->renameColumn('current_bill', 'current_billing');
-                }
-            });
-        }
+        $this->renameIfExists('downloaded_readings', 'current_bill', 'current_billing');
+        $this->renameIfExists('meter_reading_schedules', 'current_bill', 'current_billing');
     }
 
     public function down(): void
     {
-        if (Schema::hasTable('consumer_payments')) {
-            Schema::table('consumer_payments', function (Blueprint $table) {
-                if (Schema::hasColumn('consumer_payments', 'current_billing')) {
-                    $table->renameColumn('current_billing', 'current_bill');
-                }
-                if (Schema::hasColumn('consumer_payments', 'current_penalty')) {
-                    $table->renameColumn('current_penalty', 'penalty');
-                }
-                if (Schema::hasColumn('consumer_payments', 'mr_arrears')) {
-                    $table->renameColumn('mr_arrears', 'meter_maintenance');
-                }
-                if (Schema::hasColumn('consumer_payments', 'current_arrears')) {
-                    $table->renameColumn('current_arrears', 'arrears_cy');
-                }
-                if (Schema::hasColumn('consumer_payments', 'prio_years')) {
-                    $table->renameColumn('prio_years', 'arrears_py');
-                }
-                if (Schema::hasColumn('consumer_payments', 'current_mr')) {
-                    $table->renameColumn('current_mr', 'others');
-                }
-            });
+        $this->renameIfExists('consumer_payments', 'current_billing', 'current_bill');
+        $this->renameIfExists('consumer_payments', 'current_penalty', 'penalty');
+        $this->renameIfExists('consumer_payments', 'mr_arrears', 'meter_maintenance');
+        $this->renameIfExists('consumer_payments', 'current_arrears', 'arrears_cy');
+        $this->renameIfExists('consumer_payments', 'prio_years', 'arrears_py');
+        $this->renameIfExists('consumer_payments', 'current_mr', 'others');
+
+        $this->renameIfExists('downloaded_readings', 'current_billing', 'current_bill');
+        $this->renameIfExists('meter_reading_schedules', 'current_billing', 'current_bill');
+    }
+
+    private function renameIfExists(string $table, string $from, string $to): void
+    {
+        if (!Schema::hasTable($table)) {
+            return;
         }
 
-        if (Schema::hasTable('downloaded_readings')) {
-            Schema::table('downloaded_readings', function (Blueprint $table) {
-                if (Schema::hasColumn('downloaded_readings', 'current_billing')) {
-                    $table->renameColumn('current_billing', 'current_bill');
-                }
-            });
-        }
-
-        if (Schema::hasTable('meter_reading_schedules')) {
-            Schema::table('meter_reading_schedules', function (Blueprint $table) {
-                if (Schema::hasColumn('meter_reading_schedules', 'current_billing')) {
-                    $table->renameColumn('current_billing', 'current_bill');
-                }
+        if (Schema::hasColumn($table, $from) && !Schema::hasColumn($table, $to)) {
+            Schema::table($table, function (Blueprint $blueprint) use ($from, $to) {
+                $blueprint->renameColumn($from, $to);
             });
         }
     }

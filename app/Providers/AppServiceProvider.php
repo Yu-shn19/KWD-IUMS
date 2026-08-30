@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Models\DisconnectionOrder;
+use App\Models\Setting;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
@@ -23,6 +24,23 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Paginator::useBootstrapFour();
+
+        View::composer('*', function ($view) {
+            if (isset($view->getData()['branding'])) {
+                return;
+            }
+
+            try {
+                $view->with('branding', Setting::branding());
+            } catch (\Throwable $e) {
+                $view->with('branding', array_merge(Setting::brandingDefaults(), [
+                    'org_name_upper' => mb_strtoupper(Setting::brandingDefaults()['org_name']),
+                    'logo_url' => asset(Setting::brandingDefaults()['logo']),
+                    'favicon_url' => asset(Setting::brandingDefaults()['favicon']),
+                    'hero_url' => asset(Setting::brandingDefaults()['hero_image']),
+                ]));
+            }
+        });
 
         View::composer('partials.navbar', function ($view) {
             $defaults = [

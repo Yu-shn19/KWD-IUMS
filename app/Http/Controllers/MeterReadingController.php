@@ -7,6 +7,7 @@ use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
 use App\Models\ConsumerPayment;
 use App\Models\ConsumerZone;
+use App\Models\ConsumerLedger;
 use App\Models\Penalty;
 use App\Models\LROLedger;
 use App\Support\SundryLedgerRemarks;
@@ -1081,6 +1082,138 @@ class MeterReadingController extends Controller
             'summary' => $summary,
         ]);
     }
+
+    /**
+     * Delete one meter reading schedule from Download Reading (View Routes).
+     * Removes that schedule's BILL/BILLING ledger rows and penalties, then the
+     * schedule itself (downloaded_readings cascade via FK). Recalculates remaining
+     * ledger balances for that consumer only.
+     */
+    public function deleteSchedule(Request $request)
+    {
+        $validated = $request->validate([
+            'schedule_id' => 'required|integer|exists:meter_reading_schedules,id',
+            'account_no' => 'required|string',
+        ]);
+
+        $scheduleId = (int) $validated['schedule_id'];
+        $accountNo = trim((string) $validated['account_no']);
+
+        try {
+            $schedule = MeterReadingSchedule::with('consumerZone')->find($scheduleId);
+            if (!$schedule) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Meter reading schedule not found.',
+                ], 404);
+            }
+
+            $normalizedAccount = str_replace('-', '', $accountNo);
+            $upperAccount = strtoupper($accountNo);
+
+            $consumerMatches = $schedule->consumer_zone_id
+                && ConsumerZone::query()->where(mr_col('id'), $schedule->consumer_zone_id)
+                    ->where(function ($q) use ($accountNo, $normalizedAccount, $upperAccount) {
+                        $q->where(mr_col('account_no'), $accountNo)
+                            ->orWhereRaw("REPLACE(account_no, '-', '') = ?", [$normalizedAccount])
+                            ->orWhereRaw("UPPER(TRIM(account_no)) = ?", [$upperAccount]);
+                    })
+                    ->exists();
+
+            if (!$consumerMatches) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Account number does not match the schedule.',
+                ], 422);
+            }
+
+            $consumerZoneId = $schedule->consumer_zone_id ? (int) $schedule->consumer_zone_id : null;
+            $zone = $schedule->zone;
+            $billMonth = $schedule->bill_month;
+            $accountNumber = $schedule->account_number ?? $accountNo;
+            $deletedBillingLedgers = 0;
+
+            DB::transaction(function () use ($schedule, $scheduleId, $consumerZoneId, &$deletedBillingLedgers) {
+                // 1. BILL/BILLING ledger rows for this schedule only (not PAYMENT/PENALTY/other).
+                $ledgerQuery = ConsumerLedger::query()
+                    ->where(mr_col('schedule_id'), $scheduleId)
+                    ->whereIn(mr_col('trans'), ['BILLING', 'BILL']);
+
+                if ($consumerZoneId) {
+                    $ledgerQuery->where(mr_col('consumer_zone_id'), $consumerZoneId);
+                }
+
+                $deletedBillingLedgers = $ledgerQuery->delete();
+
+                // 2. Query-builder delete ? skips Penalty Eloquent deleting hook (RESTRICT on schedule_id).
+                Penalty::query()->where('schedule_id', $scheduleId)->delete();
+
+                // 3. Schedule delete cascades downloaded_readings; leftover ledger FKs are nulled.
+                $schedule->delete();
+
+                // 4. Recalculate remaining balances for this consumer only.
+                if ($consumerZoneId) {
+                    $this->recalculateConsumerLedgerBalances($consumerZoneId);
+                }
+            });
+
+            Log::info('Meter reading schedule deleted', [
+                'schedule_id' => $scheduleId,
+                'account_number' => $accountNumber,
+                'zone' => $zone,
+                'bill_month' => $billMonth instanceof \DateTimeInterface
+                    ? $billMonth->format('Y-m-d')
+                    : $billMonth,
+                'deleted_billing_ledgers' => $deletedBillingLedgers,
+                'user' => optional(Auth::user())->name,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Schedule deleted successfully.',
+                'schedule_id' => $scheduleId,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('deleteSchedule failed: ' . $e->getMessage(), [
+                'schedule_id' => $scheduleId,
+                'account_no' => $accountNo,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete schedule.',
+            ], 500);
+        }
+    }
+
+    /**
+     * Recompute running balances for one consumer's remaining ledger rows.
+     * running = round(running + debit - credit, 2). Does not trust client amounts.
+     */
+    protected function recalculateConsumerLedgerBalances(int $consumerZoneId): void
+    {
+        $ledgers = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->orderBy(mr_col('date'), 'asc')
+            ->orderBy(mr_col('id'), 'asc')
+            ->get();
+
+        $running = 0.0;
+
+        foreach ($ledgers as $ledger) {
+            $debit = (float) ($ledger->debit ?? 0);
+            $credit = (float) ($ledger->credit ?? 0);
+            $running = round($running + $debit - $credit, 2);
+
+            $stored = $ledger->balance !== null ? round((float) $ledger->balance, 2) : null;
+            if ($stored !== $running) {
+                $ledger->balance = $running;
+                $ledger->save();
+            }
+        }
+    }
+
     /**
      * Display billing payment page focused on downloaded readings
      */
@@ -2114,6 +2247,14 @@ class MeterReadingController extends Controller
 
             $lroEntriesByOr = $candidateRows->map(function ($row) {
                 $chargeId = SundryLedgerRemarks::chargeIdFromRemarks($row->remarks);
+                $displayRemarks = null;
+                if ($chargeId > 0) {
+                    $chargeRow = LROLedger::query()->find($chargeId, ['remarks']);
+                    $displayRemarks = trim((string) ($chargeRow?->remarks ?? ''));
+                    if ($displayRemarks === '') {
+                        $displayRemarks = null;
+                    }
+                }
 
                 return [
                     'id' => $row->id,
@@ -2128,7 +2269,7 @@ class MeterReadingController extends Controller
                     'ar_type' => $row->ar_type,
                     'acct_code' => $row->acct_code,
                     'reference' => $row->acct_code,
-                    'remarks' => $row->remarks,
+                    'remarks' => $displayRemarks,
                     'status' => $row->status,
                 ];
             })->values()->toArray();
@@ -2147,7 +2288,7 @@ class MeterReadingController extends Controller
                     ->where(mr_col('status'), 'Approved')
                     ->orderBy(mr_col('date'), 'asc')
                     ->orderBy(mr_col('id'), 'asc')
-                    ->get(['id', 'ledger', 'acct_code', 'bam_no', 'amount', 'status']);
+                    ->get(['id', 'ledger', 'acct_code', 'bam_no', 'amount', 'status', 'remarks']);
 
                 foreach ($dmRows as $row) {
                     $dmAmount   = (float)($row->amount ?? 0);
@@ -2177,6 +2318,7 @@ class MeterReadingController extends Controller
                         'bam_no'        => $bamRef,
                         'amount'        => $remaining,
                         'name'          => $consumerForBalance->account_name ?? '',
+                        'remarks'       => $row->remarks,
                     ];
 
                     if (count($sundries) >= 4) {
@@ -2303,6 +2445,7 @@ class MeterReadingController extends Controller
                         'amount'        => (float) ($row->amount ?? 0),
                         'name'          => $row->account_name,
                         'account'       => $row->account_no,
+                        'remarks'       => $row->remarks,
                     ];
                 })->values(),
             ],
@@ -3945,7 +4088,7 @@ class MeterReadingController extends Controller
                 $overduePeriodsRange = min($overduePeriodsRange, 12);
                 $currentBill = $currentBillFromRule;
                 $arrearsCy = round($arrearsPrincipal, 2);
-                // Penalty = 10% per bill per period: 195?19.5 (1 period), 390?39 (2 periods). Use per-bill × periods.
+                // Penalty = 10% per bill per period: 195â19.5 (1 period), 390â39 (2 periods). Use per-bill Ã periods.
                 $perBillPrincipal = $overdueBillCount > 0 ? $arrearsPrincipal / $overdueBillCount : $arrearsPrincipal;
                 $penalty = round($perBillPrincipal * 0.10 * $overduePeriodsRange, 2);
                 $maintenance = round(20 * $overduePeriodsRange, 2); // 20 first period, 40 second

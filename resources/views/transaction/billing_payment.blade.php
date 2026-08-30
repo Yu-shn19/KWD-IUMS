@@ -1173,10 +1173,12 @@
                     const isPaidCmRow = String(entry.type || '').trim().toUpperCase() === 'CM';
                     const lroLedgerId = entry.lro_ledger_id || (!isPaidCmRow ? (entry.id || '') : '');
                     const ledger = String(entry.ledger || 'LRO').trim().toUpperCase();
+                    const rawRemarks = String(entry.remarks || '').trim();
+                    const remarkText = /^Payment OR#/i.test(rawRemarks) ? '' : rawRemarks;
                     const opt = code ? document.querySelector('.bam-acct-option[data-code="' + code.replace(/"/g, '&quot;') + '"]') : null;
                     const titleFromDropdown = (opt && opt.getAttribute('data-desc')) ? String(opt.getAttribute('data-desc') || '').trim() : '';
                     const title = titleFromDropdown || String(entry.acct_title || '').trim();
-                    const displayText = title || code || '— Select Acct Code —';
+                    const displayText = remarkText || title || code || '— Select Acct Code —';
 
                     acctHidden.value = code;
                     if (lroLedgerIdHidden) lroLedgerIdHidden.value = lroLedgerId ? String(lroLedgerId) : '';

@@ -247,9 +247,9 @@
                 }
             </style>
             <div class="print-header">
-                <img src="{{ url('WDMS/img/logo/logo.png') }}" alt="Hagonoy Water District" class="print-header-logo">
-                <h1 class="print-title">HAGONOY WATER DISTRICT</h1>
-                <p class="print-meta">Guihing, Hagonoy</p>
+                <img src="{{ $branding['logo_url'] }}" alt="{{ $branding['org_name'] }}" class="print-header-logo">
+                <h1 class="print-title">{{ $branding['org_name_upper'] }}</h1>
+                <p class="print-meta">{{ $branding['org_address'] }}</p>
                 <h2 class="print-subtitle">PENALTY REPORT</h2>
                 <p class="print-zone-line" id="printZoneSelected">Zone: —</p>
                 <p class="print-meta" id="printReportSubtitle">—</p>

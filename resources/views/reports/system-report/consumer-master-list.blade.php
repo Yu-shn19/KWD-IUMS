@@ -355,8 +355,8 @@
     </div>
 
     <div id="readingGuidePrintSheet" aria-hidden="true">
-        <h2 class="rg-title">HAGONOY WATER DISTRICT</h2>
-        <p class="rg-subtitle">Guihing, Hagonoy</p>
+        <h2 class="rg-title">{{ $branding['org_name_upper'] }}</h2>
+        <p class="rg-subtitle">{{ $branding['org_address'] }}</p>
         <h3 class="rg-subtitle">READING GUIDE</h3>
         <p class="rg-meta">Zone No : <span id="rgZoneNo">{{ $filters['zone'] ?? 'ALL' }}</span></p>
         <p class="rg-meta">Print Date : <span id="rgPrintDate"></span></p>

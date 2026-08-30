@@ -189,8 +189,8 @@
     <div id="ledgerPrintRoot" class="ledger-print-root" aria-hidden="true">
         <div class="ledger-print-inner">
             <div class="ledger-print-header text-center">
-                <div class="ledger-print-title">HAGONOY WATER DISTRICT</div>
-                <div class="ledger-print-sub">Guihing, Hagonoy</div>
+                <div class="ledger-print-title">{{ $branding['org_name_upper'] }}</div>
+                <div class="ledger-print-sub">{{ $branding['org_address'] }}</div>
                 <div class="ledger-print-heading">CONSUMER LEDGER</div>
                 <div class="ledger-print-year" id="printLedgerYear">{{ date('Y') }}</div>
             </div>

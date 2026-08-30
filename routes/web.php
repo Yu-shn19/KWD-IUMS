@@ -334,12 +334,16 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     Route::post('/consumer/update-base-reading', [MeterReadingController::class, 'updateConsumerBaseReading'])->name('consumer.update-base-reading');
     
     Route::post('/consumer/verify-edit-pin', [ConsumerController::class, 'verifyEditPin'])->name('consumer.verify-edit-pin');
+    // Settings: System branding (logo, images, district content)
+    Route::get('/settings/system', [SettingController::class, 'showSystemSettings'])->name('settings.system');
+    Route::post('/settings/system', [SettingController::class, 'updateSystemSettings'])->name('settings.system.update');
     // Settings: Consumer edit PIN (for main-consumer page Edit/Delete/Save Previous Reading)
     Route::get('/settings/consumer-edit-pin', [SettingController::class, 'showConsumerEditPin'])->name('settings.consumer-edit-pin');
     Route::post('/settings/consumer-edit-pin', [SettingController::class, 'updateConsumerEditPin'])->name('settings.consumer-edit-pin.update');
     // Download Reading page
     Route::get('/download-reading', [MeterReadingController::class, 'downloadReadingPage'])->name('download-reading');
     Route::get('/download-reading/summary', [MeterReadingController::class, 'getAssignmentsSummary'])->name('download-reading.summary');
+    Route::post('/download-reading/delete-schedule', [MeterReadingController::class, 'deleteSchedule'])->name('download-reading.delete-schedule');
 
     // Visual Summary page route
     Route::get('/visual-summary', [ReportController::class, 'visualSummary'])->name('visual-summary');
@@ -367,7 +371,7 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
 
     // Collection routes
     Route::get('/collection/import', [CollectionController::class, 'index'])->name('collection.import');
-    Route::post('/collection/import', [CollectionController::class, 'import'])->name('collection.import');
+    Route::post('/collection/import', [CollectionController::class, 'import'])->name('collection.import.store');
     Route::post('/collection/sync-to-ledger', [CollectionController::class, 'syncToLedger'])->name('collection.sync-to-ledger');
     Route::post('/collection/sync-sc-discounts', [CollectionController::class, 'syncScDiscountsOnly'])->name('collection.sync-sc-discounts');
     Route::post('/collection/generate-penalties', [CollectionController::class, 'generatePenalties'])->name('collection.generate-penalties');
@@ -382,7 +386,7 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
 
     // LRO Ledger routes
     Route::get('/lro-ledger/import', [LRO_ConsumerLedgerController::class, 'index'])->name('lro-ledger.import');
-    Route::post('/lro-ledger/import', [LRO_ConsumerLedgerController::class, 'import'])->name('lro-ledger.import');
+    Route::post('/lro-ledger/import', [LRO_ConsumerLedgerController::class, 'import'])->name('lro-ledger.import.store');
 
     // Disconnection routes
     Route::get('/disconnection', [DisconnectionController::class, 'index'])->name('disconnection.index');

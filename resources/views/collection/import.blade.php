@@ -70,7 +70,7 @@
                             @endif
 
                             <!-- Import Form -->
-                            <form action="{{ route('collection.import') }}" method="POST" enctype="multipart/form-data" id="collectionImportForm">
+                            <form action="{{ route('collection.import.store') }}" method="POST" enctype="multipart/form-data" id="collectionImportForm">
                                 @csrf
                                 <div class="row">
                                     <div class="col-md-12 mb-3">
