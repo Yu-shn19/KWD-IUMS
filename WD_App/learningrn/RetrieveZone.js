@@ -20,6 +20,7 @@ import { readerDownloadedReadingsAPI, routesAPI } from './services/api';
 import { tokenStorage, userStorage, routesStorage, printerStorage, receiptLogoStorage, receiptFormatStorage } from './services/storage';
 import { isSupported as btSupported, printReceiptEscPos } from './services/bluetoothPrinter';
 import PrinterSelector from './components/PrinterSelector';
+import { applyAdvanceToReceiptBilling } from './utils/waterBilling';
 
 export default function RetrieveZone({ onBack, userData }) {
   const readerId = userData?.id ?? userData?.reader_id ?? null;
@@ -399,13 +400,17 @@ export default function RetrieveZone({ onBack, userData }) {
     const isHighConsumption = currReading > prevReading && consumption >= 10;
     const currentBillNum = item.current_billing != null ? Number(item.current_billing) : 0;
     const meterMaintenanceCharge = 20.00;
-    const totalCurrent = currentBillNum > 0 ? currentBillNum : meterMaintenanceCharge;
-    const currentBillOnly = totalCurrent >= meterMaintenanceCharge ? totalCurrent - meterMaintenanceCharge : 0;
-    const arrearsNum = Math.max(0, parseFloat(item.arrears ?? 0));
+    const totalCurrentRaw = currentBillNum > 0 ? currentBillNum : meterMaintenanceCharge;
+    const currentBillOnly = totalCurrentRaw >= meterMaintenanceCharge ? totalCurrentRaw - meterMaintenanceCharge : 0;
     const others = 0.00;
-    const totalBillNum = totalCurrent + arrearsNum + others;
-    const surchargeNum = parseFloat((currentBillOnly * 0.10).toFixed(2));
-    const totalWithSurchargeNum = totalBillNum + surchargeNum;
+    const receiptBilling = applyAdvanceToReceiptBilling(
+      item.arrears,
+      currentBillOnly,
+      meterMaintenanceCharge,
+      others
+    );
+    const surchargeNum = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
+    const totalWithSurchargeNum = receiptBilling.totalBill + surchargeNum;
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';
     return {
       periodCovered: `${readingDate} / ${dueDateFormatted}`,
@@ -436,12 +441,12 @@ export default function RetrieveZone({ onBack, userData }) {
         isHighConsumption,
       },
       billing: {
-        currentBill: currentBillOnly.toFixed(2),
-        meterMaintenanceCharge: meterMaintenanceCharge.toFixed(2),
-        totalCurrent: totalCurrent.toFixed(2),
-        arrears: arrearsNum.toFixed(2),
+        currentBill: receiptBilling.currentBillAfterAdvance.toFixed(2),
+        meterMaintenanceCharge: receiptBilling.maintenanceAfterCredit.toFixed(2),
+        totalCurrent: receiptBilling.totalCurrent.toFixed(2),
+        arrears: receiptBilling.displayArrears.toFixed(2),
         others: others.toFixed(2),
-        totalBill: totalBillNum.toFixed(2),
+        totalBill: receiptBilling.totalBill.toFixed(2),
         surcharge: surchargeNum.toFixed(2),
         totalWithSurcharge: totalWithSurchargeNum.toFixed(2),
       },
