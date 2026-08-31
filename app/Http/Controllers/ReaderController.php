@@ -133,6 +133,9 @@ class ReaderController extends Controller
                     'mrs.consumption',
                     'mrs.current_billing',
                     'mrs.arrears',
+                    'mrs.prior_years',
+                    'mrs.penalty',
+                    'mrs.meter_rental_arrears',
                     'mrs.status',
                     'cz.zone_code as zone',
                     'cz.account_no as account_number',
@@ -188,6 +191,9 @@ class ReaderController extends Controller
                     'consumption' => $r['consumption'] ?? null,
                     'current_billing' => $r['current_billing'] ?? null,
                     'arrears' => $r['arrears'] ?? null,
+                    'prior_years' => $r['prior_years'] ?? null,
+                    'penalty' => $r['penalty'] ?? null,
+                    'meter_rental_arrears' => $r['meter_rental_arrears'] ?? null,
                     'status' => $r['status'] ?? null,
                 ];
             })->toArray();

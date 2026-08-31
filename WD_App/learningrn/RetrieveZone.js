@@ -407,7 +407,8 @@ export default function RetrieveZone({ onBack, userData }) {
       item.arrears,
       currentBillOnly,
       meterMaintenanceCharge,
-      others
+      others,
+      item
     );
     const surchargeNum = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
     const totalWithSurchargeNum = receiptBilling.totalBill + surchargeNum;
@@ -444,7 +445,10 @@ export default function RetrieveZone({ onBack, userData }) {
         currentBill: receiptBilling.currentBillAfterAdvance.toFixed(2),
         meterMaintenanceCharge: receiptBilling.maintenanceAfterCredit.toFixed(2),
         totalCurrent: receiptBilling.totalCurrent.toFixed(2),
+        priorYears: receiptBilling.priorYears.toFixed(2),
         arrears: receiptBilling.displayArrears.toFixed(2),
+        currentPenalty: receiptBilling.currentPenalty.toFixed(2),
+        mrArrears: receiptBilling.mrArrears.toFixed(2),
         others: others.toFixed(2),
         totalBill: receiptBilling.totalBill.toFixed(2),
         surcharge: surchargeNum.toFixed(2),
@@ -568,7 +572,10 @@ export default function RetrieveZone({ onBack, userData }) {
       <div class="row">TOTAL CURRENT : ${rd.billing.totalCurrent}</div>
 
 
+      <div class="row">Prior Years : ${rd.billing.priorYears}</div>
       <div class="row">Arrears : ${rd.billing.arrears}</div>
+      <div class="row">Current Penalty : ${rd.billing.currentPenalty}</div>
+      <div class="row">MR Arrears : ${rd.billing.mrArrears}</div>
       <div class="row">Others : ${rd.billing.others}</div>
 
       <div class="sep"></div>

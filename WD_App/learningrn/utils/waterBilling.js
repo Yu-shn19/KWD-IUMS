@@ -266,8 +266,30 @@ export function calculateBill(consumption, categoryRaw, rateCode = null, pricing
 /**
  * Receipt breakdown when ledger arrears is negative (advance/credit).
  * Matches web PRE-DUE rule: show advance in Arrears (negative), subtract from Current Bill only.
+ * scheduleCharges: prior_years, penalty, meter_rental_arrears from meter_reading_schedules.
  */
-export function applyAdvanceToReceiptBilling(rawArrears, currentBillOnly, meterMaintenanceCharge, others = 0) {
+export function getScheduleReceiptCharges(source = {}) {
+  const priorYears = parseFloat(source.priorYears ?? source.prior_years ?? 0);
+  const currentPenalty = parseFloat(
+    source.currentPenalty ?? source.penalty ?? source.current_penalty ?? 0
+  );
+  const mrArrears = parseFloat(
+    source.mrArrears ?? source.meter_rental_arrears ?? source.meterRentalArrears ?? 0
+  );
+  return {
+    priorYears: Number.isFinite(priorYears) ? priorYears : 0,
+    currentPenalty: Number.isFinite(currentPenalty) ? currentPenalty : 0,
+    mrArrears: Number.isFinite(mrArrears) ? mrArrears : 0,
+  };
+}
+
+export function applyAdvanceToReceiptBilling(
+  rawArrears,
+  currentBillOnly,
+  meterMaintenanceCharge,
+  others = 0,
+  scheduleSource = {}
+) {
   const raw = parseFloat(rawArrears ?? 0);
   const safeRaw = Number.isFinite(raw) ? raw : 0;
   const advance = safeRaw < 0 ? Math.abs(safeRaw) : 0;
@@ -275,13 +297,19 @@ export function applyAdvanceToReceiptBilling(rawArrears, currentBillOnly, meterM
   const billOnly = Math.max(0, parseFloat(currentBillOnly) || 0);
   const maintenance = Math.max(0, parseFloat(meterMaintenanceCharge) || 0);
   const othersNum = Math.max(0, parseFloat(others) || 0);
+  const { priorYears, currentPenalty, mrArrears } = getScheduleReceiptCharges(scheduleSource);
 
   const currentBillAfterAdvance = round2(Math.max(0, billOnly - advance));
   const totalCurrent = round2(currentBillAfterAdvance + maintenance);
-  const totalBill = round2(totalCurrent + positiveArrears + othersNum);
+  const totalBill = round2(
+    totalCurrent + positiveArrears + priorYears + currentPenalty + mrArrears + othersNum
+  );
 
   return {
     displayArrears: safeRaw,
+    priorYears: round2(priorYears),
+    currentPenalty: round2(currentPenalty),
+    mrArrears: round2(mrArrears),
     currentBillAfterAdvance,
     maintenanceAfterCredit: maintenance,
     totalCurrent,
@@ -302,4 +330,5 @@ export default {
   calculateWaterBill,
   calculateBill,
   applyAdvanceToReceiptBilling,
+  getScheduleReceiptCharges,
 };

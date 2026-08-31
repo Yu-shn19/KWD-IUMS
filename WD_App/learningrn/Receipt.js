@@ -198,7 +198,10 @@ export default function Receipt({ onBack, data }) {
       currentBill: '195.00',
       meterMaintenanceCharge: '20.00',
       totalCurrent: '215.00',
+      priorYears: '0.00',
       arrears: '0.00',
+      currentPenalty: '0.00',
+      mrArrears: '0.00',
       others: '0.00',
       totalBill: '215.00',
       surcharge: '19.50',
@@ -477,8 +480,20 @@ export default function Receipt({ onBack, data }) {
           <Text style={styles.billingValue}>{receiptData.billing?.totalCurrent}</Text>
         </View>
         <View style={[styles.billingLine, styles.compactBillingLine]}>
+          <Text style={styles.billingLabel}>Prior Years</Text>
+          <Text style={styles.billingValue}>{receiptData.billing?.priorYears}</Text>
+        </View>
+        <View style={[styles.billingLine, styles.compactBillingLine]}>
           <Text style={styles.billingLabel}>Arrears</Text>
           <Text style={styles.billingValue}>{receiptData.billing?.arrears}</Text>
+        </View>
+        <View style={[styles.billingLine, styles.compactBillingLine]}>
+          <Text style={styles.billingLabel}>Current Penalty</Text>
+          <Text style={styles.billingValue}>{receiptData.billing?.currentPenalty}</Text>
+        </View>
+        <View style={[styles.billingLine, styles.compactBillingLine]}>
+          <Text style={styles.billingLabel}>MR Arrears</Text>
+          <Text style={styles.billingValue}>{receiptData.billing?.mrArrears}</Text>
         </View>
         <View style={[styles.billingLine, styles.compactBillingLine]}>
           <Text style={styles.billingLabel}>Others</Text>
