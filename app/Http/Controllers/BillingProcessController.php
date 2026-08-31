@@ -183,17 +183,26 @@ class BillingProcessController extends Controller
         $canSave = $isAccountsScope ? true : ($existingCount === 0);
         $sedr = 1;
         $data = [];
-        $ledgerBalanceYear = $billMonth->format('Y');
+        $dmComponentsByConsumer = $this->getLedgerDmComponentsByConsumer(
+            $consumers->pluck(mr_col('id'))->filter()->map(fn ($id) => (int) $id)->unique()->values()->all()
+        );
         foreach ($consumers as $consumer) {
             $accountNoVal = $consumer->account_no ?? '';
             $previousReading = $this->getPreviousReading($accountNoVal);
             $currentBill = 0.00;
             $wmc = 0.00;
-          //  $arrears = (float) ($previousReading['arrears'] ?? 0);
-               // Must match consumer ledger footer Current Balance (same year as bill month)
-           // $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
-            $arrears = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumer->id, $ledgerBalanceYear);
-            $total = $currentBill + $wmc + $arrears;
+            $components = $dmComponentsByConsumer[(int) $consumer->id] ?? [
+                'current_arrears' => 0.0,
+                'penalty' => 0.0,
+                'others' => 0.0,
+                'prio_years' => 0.0,
+            ];
+            // Arrears = current_arrears only (not the ledger footer total).
+            $arrears = (float) $components['current_arrears'];
+            $penalty = (float) $components['penalty'];
+            $meterRentalArrears = (float) $components['others'];
+            $priorYears = (float) $components['prio_years'];
+            $total = round($currentBill + $wmc + $arrears + $penalty + $meterRentalArrears + $priorYears, 2);
             $data[] = [
                 'sedr' => (string) $sedr++,
                 'account_number' => $accountNoVal,
@@ -213,6 +222,9 @@ class BillingProcessController extends Controller
                 'current_billing' => $currentBill,
                 'water_maintenance_charge' => $wmc,
                 'arrears' => $arrears,
+                'penalty' => $penalty,
+                'meter_rental_arrears' => $meterRentalArrears,
+                'prior_years' => $priorYears,
                 'total' => $total,
                 'status' => $consumer->status_label ?? 'Active',
                 'consumer_zone_id' => $consumer->id,
@@ -237,6 +249,61 @@ class BillingProcessController extends Controller
     }
 
     /**
+     * Ledger DM breakdown used by Meter Reading Preparation.
+     * Arrears ← current_arrears; Penalty ← penalty (DM + PENALTY rows);
+     * Meter Rental Arrears ← others on DM only; Prior Years ← prio_years (PY).
+     *
+     * @param  array<int, int>  $consumerZoneIds
+     * @return array<int, array{current_arrears: float, penalty: float, others: float, prio_years: float}>
+     */
+    private function getLedgerDmComponentsByConsumer(array $consumerZoneIds): array
+    {
+        $consumerZoneIds = array_values(array_filter(array_map('intval', $consumerZoneIds)));
+        if ($consumerZoneIds === []) {
+            return [];
+        }
+
+        $hasPrioYears = Schema::hasColumn('consumer_ledgers', 'prio_years');
+        $hasCurrentArrears = Schema::hasColumn('consumer_ledgers', 'current_arrears');
+
+        $query = ConsumerLedger::query()
+            ->whereIn(mr_col('consumer_zone_id'), $consumerZoneIds)
+            ->whereRaw("UPPER(TRIM(trans)) IN ('DM', 'PENALTY')");
+
+        ConsumerLedgerController::applyVisibleLedgerScope($query);
+
+        $currentArrearsSql = $hasCurrentArrears
+            ? "SUM(CASE WHEN UPPER(TRIM(trans)) = 'DM' THEN COALESCE(current_arrears, 0) ELSE 0 END)"
+            : '0';
+        $prioYearsSql = $hasPrioYears
+            ? "SUM(CASE WHEN UPPER(TRIM(trans)) = 'DM' THEN COALESCE(prio_years, 0) ELSE 0 END)"
+            : '0';
+        $othersSql = "SUM(CASE WHEN UPPER(TRIM(trans)) = 'DM' THEN COALESCE(others, 0) ELSE 0 END)";
+        $penaltySql = 'SUM(COALESCE(penalty, 0))';
+
+        $rows = $query
+            ->selectRaw('consumer_zone_id')
+            ->selectRaw("{$currentArrearsSql} as current_arrears")
+            ->selectRaw("{$penaltySql} as penalty")
+            ->selectRaw("{$othersSql} as others")
+            ->selectRaw("{$prioYearsSql} as prio_years")
+            ->groupBy(mr_col('consumer_zone_id'))
+            ->get();
+
+        $result = [];
+        foreach ($rows as $row) {
+            $result[(int) $row->consumer_zone_id] = [
+                'current_arrears' => round((float) ($row->current_arrears ?? 0), 2),
+                'penalty' => round((float) ($row->penalty ?? 0), 2),
+                'others' => round((float) ($row->others ?? 0), 2),
+                'prio_years' => round((float) ($row->prio_years ?? 0), 2),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
      * Save prepared meter reading schedules to database.
      * When save_scope = 'accounts' (Single/Multiple Consumer), allows saving even if zone+bill_month already has schedules (additive).
      */
@@ -248,6 +315,11 @@ class BillingProcessController extends Controller
             'schedules.*.account_number' => 'required|string',
             'schedules.*.zone' => 'required|string',
             'schedules.*.bill_month' => 'required|date',
+            'schedules.*.arrears' => 'nullable|numeric',
+            'schedules.*.penalty' => 'nullable|numeric',
+            'schedules.*.meter_rental_arrears' => 'nullable|numeric',
+            'schedules.*.prior_years' => 'nullable|numeric',
+            'schedules.*.total' => 'nullable|numeric',
             'save_scope' => 'nullable|string|in:zone,accounts',
         ]);
 
@@ -339,7 +411,11 @@ class BillingProcessController extends Controller
                         'disconnection_date' => Carbon::parse($scheduleData['disconnection_date']),
                         'previous_reading_date' => $previousReadingDate,
                         'previous_reading' => $prevRead,
-                        'arrears' => $scheduleData['arrears'] ?? 0.00,
+                        'arrears' => round((float) ($scheduleData['arrears'] ?? 0), 2),
+                        'penalty' => round((float) ($scheduleData['penalty'] ?? 0), 2),
+                        'meter_rental_arrears' => round((float) ($scheduleData['meter_rental_arrears'] ?? 0), 2),
+                        'prior_years' => round((float) ($scheduleData['prior_years'] ?? 0), 2),
+                        'total_amount' => round((float) ($scheduleData['total'] ?? 0), 2),
                         'status' => 'Prepared',
                         'sedr_number' => $scheduleData['sedr'],
                         'prepared_by' => $preparedBy,

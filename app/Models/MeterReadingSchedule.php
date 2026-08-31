@@ -28,6 +28,9 @@ class MeterReadingSchedule extends Model
         'consumption',
         'current_billing',
         'arrears',
+        'penalty',
+        'meter_rental_arrears',
+        'prior_years',
         'total_amount',
         'status',
         'sedr_number',
@@ -43,6 +46,9 @@ class MeterReadingSchedule extends Model
         'reading_date' => 'date',
         'current_billing' => 'decimal:2',
         'arrears' => 'decimal:2',
+        'penalty' => 'decimal:2',
+        'meter_rental_arrears' => 'decimal:2',
+        'prior_years' => 'decimal:2',
         'total_amount' => 'decimal:2',
     ];
 

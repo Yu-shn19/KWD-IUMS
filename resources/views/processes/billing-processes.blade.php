@@ -340,6 +340,9 @@
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px;">Current Bill</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px;">Water Maintenance Charge</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px;">Arrears</th>
+                                                        <th id="thPrepPenalty" class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px; display: none;">Penalty</th>
+                                                        <th id="thMeterRentalArrears" class="py-3 px-3 font-weight-bold text-dark" style="min-width: 130px; display: none;">Meter Rental Arrears</th>
+                                                        <th id="thPriorYears" class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px; display: none;">Prior Years</th>
                                                         <th id="thPenaltySurcharge" class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px; display: none;">Penalty (10%)</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 110px;">Total Amount</th>
                                                         <th class="py-3 px-3 font-weight-bold text-dark" style="min-width: 100px;">Status</th>
@@ -1375,12 +1378,21 @@
                 });
             }
 
+            function setMeterPrepBreakdownColumnsVisible(visible) {
+                const display = visible ? '' : 'none';
+                ['thPrepPenalty', 'thMeterRentalArrears', 'thPriorYears'].forEach(function(id) {
+                    const el = document.getElementById(id);
+                    if (el) el.style.display = display;
+                });
+            }
+
             // Populate table with surcharge candidates (with Include checkbox per row)
             function populateSurchargeTable(data) {
                 const tbody = document.querySelector('table tbody');
                 const thInclude = document.getElementById('thIncludeSurcharge');
                 const thPenalty = document.getElementById('thPenaltySurcharge');
                 tbody.innerHTML = '';
+                setMeterPrepBreakdownColumnsVisible(false);
 
                 if (thInclude) {
                     thInclude.style.display = '';
@@ -1455,6 +1467,7 @@
                 tbody.innerHTML = '';
                 currentDataType = 'downloaded';
                 currentSurchargeData = [];
+                setMeterPrepBreakdownColumnsVisible(false);
                 if (thInclude) thInclude.style.display = 'none';
                 if (thPenalty) thPenalty.style.display = 'none';
                 document.getElementById('applySurchargeBtn').style.display = 'none';
@@ -1853,6 +1866,7 @@
                 tbody.innerHTML = '';
                 currentDataType = 'prepared';
                 currentSurchargeData = [];
+                setMeterPrepBreakdownColumnsVisible(true);
                 if (thInclude) thInclude.style.display = 'none';
                 if (thPenalty) thPenalty.style.display = 'none';
                 document.getElementById('applySurchargeBtn').style.display = 'none';
@@ -1860,7 +1874,7 @@
                 if (!data || data.length === 0) {
                     tbody.innerHTML = `
                         <tr>
-                            <td colspan="16" class="text-center text-muted py-5">
+                            <td colspan="19" class="text-center text-muted py-5">
                                 <div class="py-5">
                                     <i class="fas fa-inbox fa-3x mb-3 text-muted opacity-50"></i>
                                     <h6 class="text-muted">No Billing Records Found</h6>
@@ -1901,6 +1915,9 @@
                             <td class="text-right py-3 px-3">₱ ${formatNumber(record.current_billing)}</td>
                             <td class="text-right py-3 px-3 ${(record.water_maintenance_charge || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.water_maintenance_charge || 0)}</td>
                             <td class="text-right py-3 px-3 ${(record.arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.arrears || 0)}</td>
+                            <td class="text-right py-3 px-3 ${(record.penalty || 0) > 0 ? 'text-danger' : 'text-muted'}">₱ ${formatNumber(record.penalty || 0)}</td>
+                            <td class="text-right py-3 px-3 ${(record.meter_rental_arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.meter_rental_arrears || 0)}</td>
+                            <td class="text-right py-3 px-3 ${(record.prior_years || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.prior_years || 0)}</td>
                             <td class="text-right py-3 px-3">
                                 <span class="font-weight-bold ${record.total > 0 ? 'text-success' : 'text-muted'}">₱ ${formatNumber(record.total)}</span>
                             </td>
@@ -1928,6 +1945,7 @@
                 const thPenalty = document.getElementById('thPenaltySurcharge');
                 currentSurchargeData = [];
                 currentDataType = '';
+                setMeterPrepBreakdownColumnsVisible(false);
                 if (thInclude) thInclude.style.display = 'none';
                 if (thPenalty) thPenalty.style.display = 'none';
                 document.getElementById('applySurchargeBtn').style.display = 'none';
