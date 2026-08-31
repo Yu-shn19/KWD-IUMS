@@ -1278,6 +1278,47 @@
                 const numeric = parseNumeric(value);
                 field.value = numeric.toFixed(2);
             };
+
+            // Labels on screen: Current Billing, Current MR, Prio Years, Current Arrears, Current Penalty, MR Arrears
+            const applyScheduleDownloadedBreakdown = (data) => {
+                if (!data) {
+                    return;
+                }
+                setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_billing ?? 0);
+                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.current_meter_rental ?? 0);
+                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.prio_years ?? 0);
+                const arrearsField = document.getElementById('fieldPenalty');
+                if (arrearsField) {
+                    setNumberFieldValue(arrearsField, data.current_arrears ?? data.arrears ?? 0);
+                    arrearsField.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                setNumberFieldValue(document.getElementById('fieldMaintenance'), data.penalty ?? 0);
+                setNumberFieldValue(document.getElementById('fieldMrArrears'), data.meter_rental_arrears ?? 0);
+            };
+
+            const applySavedPaymentBreakdown = (payment) => {
+                if (!payment) {
+                    return;
+                }
+                setNumberFieldValue(document.getElementById('fieldCurrentBill'), payment.current_billing ?? 0);
+                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), payment.current_mr ?? 0);
+                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), payment.prio_years ?? 0);
+                const arrearsField = document.getElementById('fieldPenalty');
+                if (arrearsField) {
+                    setNumberFieldValue(arrearsField, payment.current_arrears ?? 0);
+                    arrearsField.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                setNumberFieldValue(document.getElementById('fieldMaintenance'), payment.current_penalty ?? 0);
+                setNumberFieldValue(document.getElementById('fieldMrArrears'), payment.mr_arrears ?? 0);
+            };
+
+            const breakdownHasScheduleAmounts = (data) => {
+                if (!data) {
+                    return false;
+                }
+                return ['current_billing', 'current_meter_rental', 'prio_years', 'current_arrears', 'penalty', 'meter_rental_arrears']
+                    .some((key) => parseNumeric(data[key]) > 0.009);
+            };
             
             // ArrowUp / ArrowDown navigation between amount fields (e.g. Penalty -> Maintenance).
             const arrowNavigationFieldIds = [
@@ -1578,19 +1619,10 @@
                         if (typeof setPaymentStatusForMonth === 'function' && !orValueForDetails) {
                             setPaymentStatusForMonth(data.payment_status === 'paid' ? 'paid' : 'unpaid');
                         }
-                        setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_billing || 0);
-                        const penaltyField = document.getElementById('fieldPenalty');
-                        if (penaltyField) {
-                            setNumberFieldValue(penaltyField, data.penalty || 0);
-                            penaltyField.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                        setNumberFieldValue(document.getElementById('fieldMaintenance'), data.maintenance || 0);
+                        applyScheduleDownloadedBreakdown(data);
                         setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.current_arrears ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.prio_years ?? 0);
                         latestServerSeniorDiscount = parseNumeric(data.senior_citizen_discount ?? 0);
                         setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                        setNumberFieldValue(document.getElementById('fieldMrArrears'), data.current_mr || 0);
                         setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                         setNumberFieldValue(document.getElementById('fieldFees'), 0);
                         setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -1608,7 +1640,7 @@
                                 if (typeof updateTotals === 'function') updateTotals();
                             }
                         }
-                        if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown) {
+                        if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown && !breakdownHasScheduleAmounts(data)) {
                             clearPaymentBreakdown();
                         }
                         updateTotals();
@@ -1773,64 +1805,8 @@
                     }
                 }
 
-                // Populate billing fields from downloaded_readings
-                // Only populate Current Bill and Water Maintenance Charge automatically
-                const currentBillField = document.getElementById('fieldCurrentBill');
-                if (currentBillField) {
-                    const currentBillValue = parseNumeric(billing.current_billing);
-                    currentBillField.value = currentBillValue > 0 ? currentBillValue.toFixed(2) : '0.00';
-                    // Trigger input event to ensure updateTotals picks it up
-                    currentBillField.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                
-                // Penalty comes from penalties DB: billing.penalty is from lookup (penalties table by schedule); month selector uses bill-month-details (penalties table + ledger)
-                // Only set penalty from billing.penalty if no month range is selected AND we're not loading from month selector
-                // If month range is selected, penalty will be set by loadBillMonthDetails (penalties DB + ledger)
-                // Do not overwrite penalty if bill month selector has a value (user explicitly selected a month)
-                const penaltyField = document.getElementById('fieldPenalty');
-                const unpaidBillMonth = document.getElementById('unpaidBillMonth');
-                const hasBillMonthSelected = unpaidBillMonth && unpaidBillMonth.value && unpaidBillMonth.value !== '';
-                const isPaidForPenalty = payment.paid_at != null && String(payment.paid_at).trim() !== '';
-                
-                // Only set penalty from billing.penalty if:
-                // 1. No bill month is currently selected (user hasn't used the month selector)
-                // 2. We're not currently loading data from the month selector
-                // 3. Bill is not paid (when paid, show penalty as 0.00 and do not fetch from API so async cannot overwrite)
-                if (penaltyField && !hasBillMonthSelected && !isLoadingFromMonthSelector) {
-                    if (isPaidForPenalty) {
-                        setNumberFieldValue(penaltyField, 0);
-                        penaltyField.dispatchEvent(new Event('input', { bubbles: true }));
-                    } else {
-                    const penaltyValue = parseNumeric(billing.penalty) || 0;
-                    setNumberFieldValue(penaltyField, penaltyValue);
-                        // If lookup returned penalty 0, fetch penalty from ledger for this bill month (so 62.48 from PENALTY row appears)
-                        if (penaltyValue === 0 && account.number && (billing.bill_month_input || billing.bill_month)) {
-                            const billMonth = billing.bill_month_input || billing.bill_month || '';
-                            if (billMonth) {
-                                fetch(`{{ route('billing-payment.bill-month-details') }}?account_number=${encodeURIComponent(account.number)}&bill_month_from=${encodeURIComponent(billMonth)}&bill_month_to=${encodeURIComponent(billMonth)}`)
-                                    .then(r => r.json())
-                                    .then(result => {
-                                        if (result.success && result.data && (parseFloat(result.data.penalty) || 0) > 0) {
-                                            setNumberFieldValue(penaltyField, result.data.penalty);
-                                            penaltyField.dispatchEvent(new Event('input', { bubbles: true }));
-                                            if (typeof updateTotals === 'function') updateTotals();
-                                        }
-                                    })
-                                    .catch(() => {});
-                            }
-                        }
-                    }
-                } else if (hasBillMonthSelected) {
-                    // If bill month is selected, do NOT overwrite the penalty (set by loadBillMonthDetails)
-                }
-                
-                // Water Maintenance Charge (₱20 meter rental) - separate from current bill
-                const maintenanceCharge = billing.meter_maintenance_charge || 20.00;
-                setNumberFieldValue(document.getElementById('fieldMaintenance'), maintenanceCharge);
-                
-                // Do NOT auto-populate arrears - leave at 0.00 for manual entry
-                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), 0);
-                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), 0);
+                // Populate billing fields from downloaded_readings + meter_reading_schedules
+                applyScheduleDownloadedBreakdown(billing);
                 setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
                 
                 // Senior Citizen Discount: Reset to disabled state
@@ -1844,7 +1820,6 @@
                     seniorDiscountField.readOnly = true;
                 }
                 
-                setNumberFieldValue(document.getElementById('fieldMrArrears'), 0);
                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
                 setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -1924,19 +1899,10 @@
                     const paymentStatusFromApi = result.data.payment_status === 'paid';
                     setPaymentStatusForMonth(paymentStatusFromApi ? 'paid' : 'unpaid');
                 }
-                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), result.data.current_billing ?? 0);
-                                const penaltyField = document.getElementById('fieldPenalty');
-                                if (penaltyField) {
-                                    setNumberFieldValue(penaltyField, result.data.penalty ?? 0);
-                                    penaltyField.dispatchEvent(new Event('input', { bubbles: true }));
-                                }
-                                setNumberFieldValue(document.getElementById('fieldMaintenance'), result.data.maintenance ?? 0);
+                                applyScheduleDownloadedBreakdown(result.data);
                                 setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
-                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), result.data.current_arrears ?? 0);
-                                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), result.data.prio_years ?? 0);
                                 latestServerSeniorDiscount = parseNumeric(result.data.senior_citizen_discount ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                                setNumberFieldValue(document.getElementById('fieldMrArrears'), result.data.current_mr ?? 0);
                                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
                                 setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -1954,7 +1920,7 @@
                                         if (typeof updateTotals === 'function') updateTotals();
                                     }
                                 }
-                                if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown) {
+                                if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown && !breakdownHasScheduleAmounts(result.data)) {
                                     clearPaymentBreakdown();
                                 }
                                 if (typeof updateTotals === 'function') updateTotals();
@@ -1971,19 +1937,10 @@
                     // When paid: show breakdown from payment record (consumer_payments) when available
                     const hasPaymentBreakdown = payment && (payment.current_billing !== undefined || payment.current_penalty !== undefined || payment.mr_arrears !== undefined);
                     if (hasPaymentBreakdown) {
-                        setNumberFieldValue(document.getElementById('fieldCurrentBill'), payment.current_billing ?? 0);
-                        const penaltyField = document.getElementById('fieldPenalty');
-                        if (penaltyField) {
-                            setNumberFieldValue(penaltyField, payment.current_penalty ?? 0);
-                            penaltyField.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                        setNumberFieldValue(document.getElementById('fieldMaintenance'), payment.mr_arrears ?? 0);
+                        applySavedPaymentBreakdown(payment);
                         setNumberFieldValue(document.getElementById('fieldAdvances'), payment.advances ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), payment.current_arrears ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), payment.prio_years ?? 0);
                         latestServerSeniorDiscount = parseNumeric(payment.senior_citizen_discount ?? 0);
                         setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                        setNumberFieldValue(document.getElementById('fieldMrArrears'), payment.current_mr ?? 0);
                         const enableSeniorDiscountCheckboxPaid = document.getElementById('enableSeniorDiscount');
                         if (enableSeniorDiscountCheckboxPaid) {
                             enableSeniorDiscountCheckboxPaid.checked = (parseFloat(payment.senior_citizen_discount) || 0) > 0;
@@ -1991,21 +1948,6 @@
                         setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                         setNumberFieldValue(document.getElementById('fieldFees'), 0);
                         setNumberFieldValue(document.getElementById('fieldInspection'), 0);
-                        
-                        // Paid month with remaining balance:
-                        // - if bill <= balance: keep bill in Current Bill, put remainder in Arrears CY
-                        // - if bill > balance: put full balance in Arrears CY and set Current Bill to 0
-                        const balanceNow = parseNumeric(currentBalanceValue);
-                        const monthBill = parseNumeric(payment.current_billing ?? 0);
-                        if (balanceNow > 0.009) {
-                            if (monthBill > 0 && monthBill <= balanceNow) {
-                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), monthBill);
-                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), balanceNow - monthBill);
-                            } else if (monthBill > balanceNow) {
-                                setNumberFieldValue(document.getElementById('fieldCurrentBill'), 0);
-                                setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), balanceNow);
-                            }
-                        }
                     }
                     
                     
@@ -3012,12 +2954,12 @@
 
                 // Get current bill and breakdown values from the form for consumer_payments
                 const currentBillValue = parseNumeric(document.getElementById('fieldCurrentBill')?.value || 0);
-                const penaltyValue = parseNumeric(document.getElementById('fieldPenalty')?.value || 0);
-                const meterMaintenanceValue = parseNumeric(document.getElementById('fieldMaintenance')?.value || 0);
-                const advancesValue = parseNumeric(document.getElementById('fieldAdvances')?.value || 0);
-                const arrearsCyValue = parseNumeric(document.getElementById('fieldArrearsCurrent')?.value || 0);
-                const arrearsPyValue = parseNumeric(document.getElementById('fieldArrearsPrevious')?.value || 0);
+                const currentMrValue = parseNumeric(document.getElementById('fieldArrearsCurrent')?.value || 0);
+                const prioYearsValue = parseNumeric(document.getElementById('fieldArrearsPrevious')?.value || 0);
+                const currentArrearsValue = parseNumeric(document.getElementById('fieldPenalty')?.value || 0);
+                const currentPenaltyValue = parseNumeric(document.getElementById('fieldMaintenance')?.value || 0);
                 const mrArrearsValue = parseNumeric(document.getElementById('fieldMrArrears')?.value || 0);
+                const advancesValue = parseNumeric(document.getElementById('fieldAdvances')?.value || 0);
                 const materialsValue = parseNumeric(document.getElementById('fieldMaterials')?.value || 0);
                 const feesChargesValue = parseNumeric(document.getElementById('fieldFees')?.value || 0);
                 const inspectionFeeValue = parseNumeric(document.getElementById('fieldInspection')?.value || 0);
@@ -3083,12 +3025,12 @@
                         is_update: false,
                         current_billing: currentBillValue,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
-                        current_penalty: penaltyValue,
-                        mr_arrears: meterMaintenanceValue,
+                        current_penalty: currentPenaltyValue,
+                        mr_arrears: mrArrearsValue,
                         advances: advancesValue,
-                        current_arrears: arrearsCyValue,
-                        prio_years: arrearsPyValue,
-                        current_mr: mrArrearsValue,
+                        current_arrears: currentArrearsValue,
+                        prio_years: prioYearsValue,
+                        current_mr: currentMrValue,
                         materials: materialsValue,
                         fees_charges: feesChargesValue,
                         inspection_fee: inspectionFeeValue,
@@ -3203,12 +3145,12 @@
                     const referenceNumber = document.getElementById('referenceNumber')?.value?.trim() || null;
                     const remarks = paymentRemarksField.value?.trim() || null;
                     const currentBillValue = parseNumeric(document.getElementById('fieldCurrentBill')?.value || 0);
-                    const penaltyValue = parseNumeric(document.getElementById('fieldPenalty')?.value || 0);
-                    const meterMaintenanceValue = parseNumeric(document.getElementById('fieldMaintenance')?.value || 0);
-                    const advancesValue = parseNumeric(document.getElementById('fieldAdvances')?.value || 0);
-                    const arrearsCyValue = parseNumeric(document.getElementById('fieldArrearsCurrent')?.value || 0);
-                    const arrearsPyValue = parseNumeric(document.getElementById('fieldArrearsPrevious')?.value || 0);
+                    const currentMrValue = parseNumeric(document.getElementById('fieldArrearsCurrent')?.value || 0);
+                    const prioYearsValue = parseNumeric(document.getElementById('fieldArrearsPrevious')?.value || 0);
+                    const currentArrearsValue = parseNumeric(document.getElementById('fieldPenalty')?.value || 0);
+                    const currentPenaltyValue = parseNumeric(document.getElementById('fieldMaintenance')?.value || 0);
                     const mrArrearsValue = parseNumeric(document.getElementById('fieldMrArrears')?.value || 0);
+                    const advancesValue = parseNumeric(document.getElementById('fieldAdvances')?.value || 0);
                     const materialsValue = parseNumeric(document.getElementById('fieldMaterials')?.value || 0);
                     const feesChargesValue = parseNumeric(document.getElementById('fieldFees')?.value || 0);
                     const inspectionFeeValue = parseNumeric(document.getElementById('fieldInspection')?.value || 0);
@@ -3245,12 +3187,12 @@
                         is_update: true,
                         current_billing: currentBillValue,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
-                        current_penalty: penaltyValue,
-                        mr_arrears: meterMaintenanceValue,
+                        current_penalty: currentPenaltyValue,
+                        mr_arrears: mrArrearsValue,
                         advances: advancesValue,
-                        current_arrears: arrearsCyValue,
-                        prio_years: arrearsPyValue,
-                        current_mr: mrArrearsValue,
+                        current_arrears: currentArrearsValue,
+                        prio_years: prioYearsValue,
+                        current_mr: currentMrValue,
                         materials: materialsValue,
                         fees_charges: feesChargesValue,
                         inspection_fee: inspectionFeeValue,

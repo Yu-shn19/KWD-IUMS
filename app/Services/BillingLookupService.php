@@ -10,6 +10,7 @@ use App\Models\ConsumerPayment;
 use App\Models\ConsumerZone;
 use App\Models\DownloadedReading;
 use App\Models\LROLedger;
+use App\Models\MeterReadingSchedule;
 use App\Support\SundryLedgerRemarks;
 use App\Models\Penalty;
 use App\Models\User;
@@ -862,20 +863,24 @@ class BillingLookupService
 
         $storedCurrentBill = $downloadedCurrentBill ?? $scheduleCurrentBill ?? 0.0;
         $category = $state->reading->category ?? '';
-        $meterMaintenanceCharge = 20.00;
 
-        $currentBill = $storedCurrentBill;
+        $schedule = !empty($state->reading->schedule_id)
+            ? MeterReadingSchedule::find($state->reading->schedule_id)
+            : null;
+        $downloaded = !empty($state->reading->downloaded_id)
+            ? DownloadedReading::find($state->reading->downloaded_id)
+            : null;
+
+        $currentBill = $downloaded && $downloaded->current_billing !== null
+            ? (float) $downloaded->current_billing
+            : (float) ($schedule?->current_billing ?? $storedCurrentBill);
         if ($currentBill <= 0 && $consumption > 0) {
             $currentBill = $this->calculateWaterBill($consumption, $category);
         }
 
-        $penalty = $this->resolveLookupPenalty($state, $consumer);
-        $ledgerOverrides = $this->applyLedgerBillingOverrides($state, $consumer);
-        if ($ledgerOverrides['current_billing'] !== null) {
-            $currentBill = $ledgerOverrides['current_billing'];
-        }
-        if ($ledgerOverrides['meter_maintenance_charge'] !== null) {
-            $meterMaintenanceCharge = $ledgerOverrides['meter_maintenance_charge'];
+        $currentMeterRental = 0.0;
+        if ($downloaded && Schema::hasColumn('downloaded_readings', 'current_meter_rental')) {
+            $currentMeterRental = (float) ($downloaded->current_meter_rental ?? 0);
         }
 
         return [
@@ -891,9 +896,13 @@ class BillingLookupService
             'reading_date' => $state->reading->reading_date ? Carbon::parse($state->reading->reading_date)->format('Y-m-d') : null,
             'consumption' => $consumption,
             'current_billing' => round($currentBill, 2),
-            'meter_maintenance_charge' => $meterMaintenanceCharge,
-            'penalty' => $penalty,
-            'arrears' => $state->reading->arrears !== null ? (float) $state->reading->arrears : 0.0,
+            'current_meter_rental' => round($currentMeterRental, 2),
+            'meter_maintenance_charge' => round($currentMeterRental, 2),
+            'penalty' => round((float) ($schedule?->penalty ?? 0), 2),
+            'current_arrears' => round((float) ($schedule?->arrears ?? 0), 2),
+            'prio_years' => round((float) ($schedule?->prior_years ?? 0), 2),
+            'meter_rental_arrears' => round((float) ($schedule?->meter_rental_arrears ?? 0), 2),
+            'arrears' => round((float) ($schedule?->arrears ?? ($state->reading->arrears !== null ? (float) $state->reading->arrears : 0)), 2),
             'total_amount' => $state->reading->total_amount !== null ? (float) $state->reading->total_amount : 0.0,
             'sedr_number' => $state->reading->sedr_number ?? null,
         ];
