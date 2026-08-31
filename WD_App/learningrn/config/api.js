@@ -13,7 +13,7 @@ export const API_CONFIG = {
 
   // Local php artisan serve
   artisan: {
-    baseURL: 'http://192.168.1.8:8000/api',
+    baseURL: 'http://192.168.1.6:8000/api',
     timeout: 15000,
   },
 
@@ -25,7 +25,7 @@ export const API_CONFIG = {
 };
 
 // Active API — production uses HTTPS
-export const CURRENT_ENV = 'production';
+export const CURRENT_ENV = 'artisan';
 
 export const getApiConfig = () => {
   return API_CONFIG[CURRENT_ENV];

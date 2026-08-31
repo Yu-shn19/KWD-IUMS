@@ -27,7 +27,7 @@ import { networkStatus, syncManager } from './services/offlineQueue';
 import * as readingsLocalService from './services/readingsLocalService';
 import PrinterSelector from './components/PrinterSelector';
 import { getReadingDateFromMeterSchedule } from './utils/dateUtils';
-import { calculateWaterBill, resolveClassification, METER_RENTAL } from './utils/waterBilling';
+import { calculateWaterBill, resolveClassification, METER_RENTAL, applyAdvanceToReceiptBilling } from './utils/waterBilling';
 import { loadPricingTiers } from './services/pricingTiersService';
 
 const KEYPAD_KEYS = ['1','2','3','4','5','6','7','8','9','.','0','⌫'];
@@ -1559,13 +1559,15 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       ? Math.max(0, currentBillCalc - meterMaintenanceCharge)
       : currentBillCalc;
     
-    const totalCurrent = currentBillOnly + meterMaintenanceCharge;
-    // Arrears from API = balance only
-    const arrears = Math.max(0, parseFloat(customer.arrears ?? 0));
     const others = 0.00;
-    const totalBill = totalCurrent + arrears + others;
-    const surcharge = parseFloat((currentBillOnly * 0.10).toFixed(2)); // 10% of current bill (dynamic surcharge)
-    const totalWithSurcharge = totalBill + surcharge;
+    const receiptBilling = applyAdvanceToReceiptBilling(
+      customer.arrears,
+      currentBillOnly,
+      meterMaintenanceCharge,
+      others
+    );
+    const surcharge = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
+    const totalWithSurcharge = receiptBilling.totalBill + surcharge;
 
     // Get reader name from userData
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';
@@ -1594,12 +1596,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         isHighConsumption: isHighConsumption
       },
       billing: {
-        currentBill: currentBillOnly.toFixed(2),
-        meterMaintenanceCharge: meterMaintenanceCharge.toFixed(2),
-        totalCurrent: totalCurrent.toFixed(2),
-        arrears: arrears.toFixed(2),
+        currentBill: receiptBilling.currentBillAfterAdvance.toFixed(2),
+        meterMaintenanceCharge: receiptBilling.maintenanceAfterCredit.toFixed(2),
+        totalCurrent: receiptBilling.totalCurrent.toFixed(2),
+        arrears: receiptBilling.displayArrears.toFixed(2),
         others: others.toFixed(2),
-        totalBill: totalBill.toFixed(2),
+        totalBill: receiptBilling.totalBill.toFixed(2),
         surcharge: surcharge.toFixed(2),
         totalWithSurcharge: totalWithSurcharge.toFixed(2)
       },

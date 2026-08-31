@@ -263,6 +263,33 @@ export function calculateBill(consumption, categoryRaw, rateCode = null, pricing
   return calculateWaterBill(consumption, categoryRaw, rateCode, pricingTiers);
 }
 
+/**
+ * Receipt breakdown when ledger arrears is negative (advance/credit).
+ * Matches web PRE-DUE rule: show advance in Arrears (negative), subtract from Current Bill only.
+ */
+export function applyAdvanceToReceiptBilling(rawArrears, currentBillOnly, meterMaintenanceCharge, others = 0) {
+  const raw = parseFloat(rawArrears ?? 0);
+  const safeRaw = Number.isFinite(raw) ? raw : 0;
+  const advance = safeRaw < 0 ? Math.abs(safeRaw) : 0;
+  const positiveArrears = safeRaw > 0 ? safeRaw : 0;
+  const billOnly = Math.max(0, parseFloat(currentBillOnly) || 0);
+  const maintenance = Math.max(0, parseFloat(meterMaintenanceCharge) || 0);
+  const othersNum = Math.max(0, parseFloat(others) || 0);
+
+  const currentBillAfterAdvance = round2(Math.max(0, billOnly - advance));
+  const totalCurrent = round2(currentBillAfterAdvance + maintenance);
+  const totalBill = round2(totalCurrent + positiveArrears + othersNum);
+
+  return {
+    displayArrears: safeRaw,
+    currentBillAfterAdvance,
+    maintenanceAfterCredit: maintenance,
+    totalCurrent,
+    totalBill,
+    surchargeBase: currentBillAfterAdvance,
+  };
+}
+
 export default {
   METER_RENTAL,
   MINIMUM_CHARGE,
@@ -274,4 +301,5 @@ export default {
   calculateBillFromPricingTier,
   calculateWaterBill,
   calculateBill,
+  applyAdvanceToReceiptBilling,
 };
