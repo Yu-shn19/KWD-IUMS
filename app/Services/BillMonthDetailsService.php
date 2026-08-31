@@ -1776,8 +1776,11 @@ class BillMonthDetailsService
         // Resolve downloaded_reading id for the selected bill month so the frontend can submit payment for that month (avoids "Payment already exists" when paying December after November).
                 $downloadedId = null;
                 $selectedConsumption = null;
+                $firstReading = null;
                 if (!empty($s->schedulesInRange) && $s->schedulesInRange->isNotEmpty()) {
-                    $firstReading = DownloadedReading::whereIn('schedule_id', $s->schedulesInRange)->first();
+                    $firstReading = DownloadedReading::whereIn('schedule_id', $s->schedulesInRange)
+                        ->orderByDesc('id')
+                        ->first();
                     if ($firstReading) {
                         $downloadedId = $firstReading->id;
                         if (isset($firstReading->consumption) && $firstReading->consumption !== null && $firstReading->consumption !== '') {
@@ -1785,21 +1788,31 @@ class BillMonthDetailsService
                         }
                     }
                 }
-        
-                // Arrears â€” Previous Year is computed inside Method A/B per date-meaning rules.
-                
+
+                [$overlaySchedule, $overlayDownloaded] = $this->resolveScheduleAndDownloaded($s, $firstReading);
+                if ($overlayDownloaded) {
+                    $downloadedId = $overlayDownloaded->id;
+                    if ($selectedConsumption === null && $overlayDownloaded->consumption !== null && $overlayDownloaded->consumption !== '') {
+                        $selectedConsumption = (float) $overlayDownloaded->consumption;
+                    }
+                }
+
+                $overlay = $this->formatScheduleDownloadedBreakdown($overlaySchedule, $overlayDownloaded);
+
                 return response()->json([
                     'success' => true,
                     'data' => array_merge([
                         'bill_month_from' => $s->billMonthFromKey,
                         'bill_month_to' => $s->billMonthToKey,
-                        'current_billing' => round($s->currentBill, 2),
-                        'penalty' => round($s->penaltyAmount, 2),
-                        'maintenance' => round($s->maintenance, 2),
+                        'current_billing' => $overlay['current_billing'],
+                        'current_meter_rental' => $overlay['current_meter_rental'],
+                        'penalty' => $overlay['penalty'],
+                        'maintenance' => $overlay['current_meter_rental'],
                         'others' => round($s->others, 2),
-                        'arrears' => round(max(0, $s->arrears), 2),
-                        'current_arrears' => round($s->arrearsCy, 2),
-                        'prio_years' => round($s->arrearsPy, 2),
+                        'arrears' => $overlay['current_arrears'],
+                        'current_arrears' => $overlay['current_arrears'],
+                        'prio_years' => $overlay['prio_years'],
+                        'meter_rental_arrears' => $overlay['meter_rental_arrears'],
                         'senior_citizen_discount' => round($s->seniorCitizenDiscount, 2),
                         'current_consumption' => $selectedConsumption,
                         'payment_status' => $s->paymentStatus,
@@ -1809,6 +1822,107 @@ class BillMonthDetailsService
                         'to_date' => $s->toMonthDate->format('Y-m-d'),
                     ] : []),
                 ]);
+    }
+
+    /**
+     * Payment Breakdown: downloaded_readings (current bill / current MR)
+     * and meter_reading_schedules (PY, arrears, penalty, MR arrears).
+     *
+     * @return array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float}
+     */
+    private function formatScheduleDownloadedBreakdown(?MeterReadingSchedule $schedule, ?DownloadedReading $downloaded): array
+    {
+        $currentBilling = $downloaded && $downloaded->current_billing !== null
+            ? (float) $downloaded->current_billing
+            : (float) ($schedule?->current_billing ?? 0);
+
+        $currentMeterRental = 0.0;
+        if ($downloaded && Schema::hasColumn('downloaded_readings', 'current_meter_rental')) {
+            $currentMeterRental = (float) ($downloaded->current_meter_rental ?? 0);
+        }
+
+        return [
+            'current_billing' => round($currentBilling, 2),
+            'current_meter_rental' => round($currentMeterRental, 2),
+            'prio_years' => round((float) ($schedule?->prior_years ?? 0), 2),
+            'current_arrears' => round((float) ($schedule?->arrears ?? 0), 2),
+            'penalty' => round((float) ($schedule?->penalty ?? 0), 2),
+            'meter_rental_arrears' => round((float) ($schedule?->meter_rental_arrears ?? 0), 2),
+        ];
+    }
+
+    /**
+     * @return array{0: ?MeterReadingSchedule, 1: ?DownloadedReading}
+     */
+    private function resolveScheduleAndDownloaded(BillMonthDetailsState $s, ?DownloadedReading $downloaded): array
+    {
+        $monthStart = $s->fromMonthDate->copy()->startOfMonth();
+        $monthEnd = $s->fromMonthDate->copy()->endOfMonth();
+
+        $schedule = null;
+        if ($s->schedulesInRange->isNotEmpty()) {
+            $schedule = MeterReadingSchedule::query()
+                ->whereIn('id', $s->schedulesInRange->all())
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if (!$schedule) {
+            $schedule = MeterReadingSchedule::query()
+                ->where('consumer_zone_id', $s->consumer->id)
+                ->whereYear('bill_month', $monthStart->year)
+                ->whereMonth('bill_month', $monthStart->month)
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if ($downloaded && $schedule && (int) $downloaded->schedule_id !== (int) $schedule->id) {
+            $downloaded = null;
+        }
+
+        if (!$downloaded && $schedule) {
+            $downloaded = DownloadedReading::query()
+                ->where('schedule_id', $schedule->id)
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if (!$downloaded) {
+            $downloadedQuery = DownloadedReading::query()
+                ->where('consumer_zone_id', $s->consumer->id)
+                ->orderByDesc('id');
+
+            if ($schedule) {
+                $downloadedQuery->where(function ($q) use ($schedule, $monthStart) {
+                    $q->where('schedule_id', $schedule->id)
+                        ->orWhereHas('schedule', function ($sq) use ($monthStart) {
+                            $sq->whereYear('bill_month', $monthStart->year)
+                                ->whereMonth('bill_month', $monthStart->month);
+                        });
+                });
+            }
+
+            $downloaded = $downloadedQuery->first();
+        }
+
+        if (!$downloaded) {
+            $downloaded = DownloadedReading::query()
+                ->where(function ($q) use ($s) {
+                    $q->where('consumer_zone_id', $s->consumer->id)
+                        ->orWhereHas('schedule', function ($sq) use ($s) {
+                            $sq->where('consumer_zone_id', $s->consumer->id);
+                        });
+                })
+                ->whereNotNull('current_billing')
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if ($downloaded && !$schedule && $downloaded->schedule_id) {
+            $schedule = MeterReadingSchedule::find($downloaded->schedule_id);
+        }
+
+        return [$schedule, $downloaded];
     }
 
     private function getLedgerBalanceAsOfDate(int $consumerZoneId, string $asOfDate): float
