@@ -446,11 +446,8 @@ class BillingProcessController extends Controller
                         // Calculate bill amounts
                         // current_bill is 0 at this point (no reading yet), but we can use estimated if provided
                         $currentBill = (float)($scheduleData['current_billing'] ?? 0);
-                        // Carry schedule breakdown onto the BILLING row for display.
-                        // Do not add them to debit — they already sit on the DM balance.
-                        $penalty = round((float) ($schedule->penalty ?? $scheduleData['penalty'] ?? 0), 2);
-                        $others = round((float) ($schedule->meter_rental_arrears ?? $scheduleData['meter_rental_arrears'] ?? 0), 2);
-                        $priorYears = round((float) ($schedule->prior_years ?? $scheduleData['prior_years'] ?? 0), 2);
+                        // Penalty, Others (meter rental), and PY stay on the DM row only.
+                        // Do not copy them onto BILLING — they already sit on the DM balance.
                         $debit = $currentBill;
                         $newBalance = $previousBalance + $debit;
                         
@@ -464,9 +461,6 @@ class BillingProcessController extends Controller
                             'latest_ledger_entry_balance' => $latestLedgerEntry ? (float)($latestLedgerEntry->balance ?? 0) : null,
                             'previous_balance_used' => $previousBalance,
                             'current_billing' => $currentBill,
-                            'penalty' => $penalty,
-                            'others' => $others,
-                            'prior_years' => $priorYears,
                             'debit' => $debit,
                             'new_balance' => $newBalance
                         ]);
@@ -485,8 +479,8 @@ class BillingProcessController extends Controller
                             'reading' => $prevRead, // Same as meter_reading_schedules.previous_reading (edited Prev. Read from UI)
                             'volume' => 0, // Consumption is 0 until reading is taken
                             'billamount' => $currentBill,
-                            'penalty' => $penalty,
-                            'others' => $others,
+                            'penalty' => 0,
+                            'others' => 0,
                             'debit' => $debit,
                             'credit' => 0,
                             'balance' => $newBalance,
@@ -494,7 +488,7 @@ class BillingProcessController extends Controller
                             'txtime' => now(),
                         ];
                         if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
-                            $billingPayload['prio_years'] = $priorYears;
+                            $billingPayload['prio_years'] = 0;
                         }
                         ConsumerLedger::create($billingPayload);
                     }
@@ -1819,21 +1813,130 @@ class BillingProcessController extends Controller
     {
         $request->validate([
             'zone' => 'required|string',
-            'bill_month' => 'required|date'
+            'bill_month' => 'required|date',
+            'bill_date' => 'nullable|date',
+            'due_date' => 'nullable|date',
+            'disconnection_date' => 'nullable|date',
         ]);
 
         try {
             $zone = $request->zone;
-            $billMonth = Carbon::parse($request->bill_month);
+            $billMonth = Carbon::parse($request->bill_month)->format('Y-m-d');
+            $billDate = $request->filled('bill_date')
+                ? Carbon::parse($request->bill_date)->format('Y-m-d')
+                : null;
+            $dueDate = $request->filled('due_date')
+                ? Carbon::parse($request->due_date)->format('Y-m-d')
+                : null;
+            $disconnectionDate = $request->filled('disconnection_date')
+                ? Carbon::parse($request->disconnection_date)->format('Y-m-d')
+                : null;
 
-            $deleted = MeterReadingSchedule::forZoneCode($zone)
-                ->where(mr_col('bill_month'), $billMonth->format('Y-m-d'))
-                ->delete();
+            $query = MeterReadingSchedule::forZoneCode($zone)
+                ->where(mr_col('bill_month'), $billMonth);
+
+            if ($billDate) {
+                $query->where(mr_col('bill_date'), $billDate);
+            }
+            if ($dueDate) {
+                $query->where(mr_col('due_date'), $dueDate);
+            }
+            if ($disconnectionDate) {
+                $query->where(mr_col('disconnection_date'), $disconnectionDate);
+            }
+
+            $schedules = $query->get(['id', 'consumer_zone_id']);
+            $scheduleIds = $schedules->pluck(mr_col('id'))->map(fn ($id) => (int) $id)->all();
+
+            $zoneConsumerQuery = ConsumerZone::query();
+            $this->applyZoneCodeFilter($zoneConsumerQuery, $zone, 'zone_code');
+            $zoneConsumerIds = $zoneConsumerQuery->pluck(mr_col('id'))
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
+            if ($scheduleIds === [] && $zoneConsumerIds === []) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No schedules found for Zone ' . $zone . ' for this bill month.',
+                ], 404);
+            }
+
+            $deleted = 0;
+            $deletedLedgers = 0;
+
+            DB::transaction(function () use (
+                $scheduleIds,
+                $zoneConsumerIds,
+                $billDate,
+                $billMonth,
+                &$deleted,
+                &$deletedLedgers
+            ) {
+                $ledgerQuery = ConsumerLedger::query()
+                    ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
+                    ->where(function ($q) use ($scheduleIds, $zoneConsumerIds, $billDate, $billMonth) {
+                        if ($scheduleIds !== []) {
+                            $q->whereIn(mr_col('schedule_id'), $scheduleIds);
+                        }
+
+                        $q->orWhere(function ($orphan) use ($zoneConsumerIds, $billDate, $billMonth) {
+                            $orphan->whereNull(mr_col('schedule_id'))
+                                ->whereIn(mr_col('consumer_zone_id'), $zoneConsumerIds);
+
+                            if ($billDate) {
+                                $orphan->whereDate(mr_col('date'), $billDate);
+                            } else {
+                                $bm = Carbon::parse($billMonth);
+                                $orphan->whereYear(mr_col('date'), $bm->year)
+                                    ->whereMonth(mr_col('date'), $bm->month);
+                            }
+                        });
+                    });
+
+                $ledgerIds = (clone $ledgerQuery)->pluck(mr_col('id'));
+                $affectedConsumerIds = ConsumerLedger::query()
+                    ->whereIn(mr_col('id'), $ledgerIds)
+                    ->pluck(mr_col('consumer_zone_id'))
+                    ->filter()
+                    ->map(fn ($id) => (int) $id)
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                $deletedLedgers = $ledgerIds->isEmpty()
+                    ? 0
+                    : ConsumerLedger::query()->whereIn(mr_col('id'), $ledgerIds)->delete();
+
+                if ($scheduleIds !== []) {
+                    Penalty::query()->whereIn(mr_col('schedule_id'), $scheduleIds)->delete();
+                    $deleted = MeterReadingSchedule::query()->whereIn(mr_col('id'), $scheduleIds)->delete();
+                }
+
+                foreach ($affectedConsumerIds as $consumerZoneId) {
+                    $this->recalculateConsumerLedgerBalances($consumerZoneId);
+                }
+            });
+
+            if ($deleted === 0 && $deletedLedgers === 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No schedules found for Zone ' . $zone . ' for this bill month.',
+                ], 404);
+            }
+
+            $parts = [];
+            if ($deleted > 0) {
+                $parts[] = $deleted . ' schedule(s)';
+            }
+            if ($deletedLedgers > 0) {
+                $parts[] = $deletedLedgers . ' billing ledger row(s)';
+            }
 
             return response()->json([
                 'success' => true,
-                'message' => $deleted . ' schedule(s) deleted successfully',
-                'deleted_count' => $deleted
+                'message' => 'Deleted ' . implode(' and ', $parts) . '.',
+                'deleted_count' => $deleted,
+                'deleted_ledger_count' => $deletedLedgers,
             ]);
 
         } catch (\Exception $e) {
@@ -1841,6 +1944,32 @@ class BillingProcessController extends Controller
                 'success' => false,
                 'message' => 'Error deleting schedules: ' . $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Recompute running balances for one consumer's remaining ledger rows.
+     */
+    private function recalculateConsumerLedgerBalances(int $consumerZoneId): void
+    {
+        $ledgers = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->orderBy(mr_col('date'), 'asc')
+            ->orderBy(mr_col('id'), 'asc')
+            ->get();
+
+        $running = 0.0;
+
+        foreach ($ledgers as $ledger) {
+            $debit = (float) ($ledger->debit ?? 0);
+            $credit = (float) ($ledger->credit ?? 0);
+            $running = round($running + $debit - $credit, 2);
+
+            $stored = $ledger->balance !== null ? round((float) $ledger->balance, 2) : null;
+            if ($stored !== $running) {
+                $ledger->balance = $running;
+                $ledger->save();
+            }
         }
     }
        /**
