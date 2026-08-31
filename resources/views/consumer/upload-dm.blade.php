@@ -22,10 +22,11 @@
                         </div>
                         <div class="card-body">
                             <p class="text-muted mb-3">
-                                Upload an Excel file with columns <strong>account_no</strong> and <strong>amount</strong>.
-                                All rows use the date you select below. Reference is auto-generated (6 digits) per row.
-                                <strong>Positive</strong> amounts import as <strong>DM</strong> (Debit Memo);
-                                <strong>negative</strong> amounts (e.g. <code>-66.05</code>) import as <strong>CM</strong> (Credit Memo).
+                                Upload the opening-balance Excel with headers
+                                <strong>ZONE</strong>, <strong>ACCOUNT NAME</strong> (or <strong>LAST NAME</strong> and <strong>FIRST NAME</strong>), <strong>PY</strong>,
+                                <strong>ARREARS</strong>, <strong>METER RENTAL</strong>, <strong>PENALTY</strong>, <strong>TOTAL</strong>.
+                                The date you select below is used for every row.
+                                Each component is stored on the consumer ledger (not only a single TOTAL DM).
                             </p>
 
                             <form id="importDmForm">
@@ -71,13 +72,18 @@
                                                 <i class="fas fa-info-circle mr-2"></i>Expected Excel Columns (first row = headers):
                                             </h6>
                                             <p class="mb-2 small">
-                                                <code>account_no</code>, <code>amount</code>
+                                                <code>ZONE</code>, <code>ACCOUNT NAME</code> (or <code>LAST NAME</code> + <code>FIRST NAME</code>), <code>PY</code>,
+                                                <code>ARREARS</code>, <code>METER RENTAL</code>, <code>PENALTY</code>, <code>TOTAL</code>
                                             </p>
                                             <small class="text-muted">
-                                                Also accepted: <code>account_number</code>, <code>acct_no</code> for account;
-                                                <code>debit</code>, <code>amt</code> for amount.
-                                                Each <code>account_no</code> may appear only once in the same file.
-                                                Positive amount → DM (debit). Negative amount → CM (credit = absolute value).
+                                                Blank columns between headers are ignored.
+                                                Match is by <code>ACCOUNT NAME</code>, or by <code>LAST NAME</code> and <code>FIRST NAME</code> together (both must match the consumer master exactly — one name alone is not enough), the <code>#</code> id inside the name (e.g. <code>#1093</code>), optional <code>ZONE</code>, or <code>account_no</code> if present.
+                                                <strong>PY</strong> → DM <code>prio_years</code> (Prior Years only).
+                                                <strong>ARREARS</strong> → DM <code>current_arrears</code> (current arrears — not added to PY).
+                                                <strong>METER RENTAL</strong> → DM <code>others</code>.
+                                                <strong>PENALTY</strong> → DM <code>penalty</code>.
+                                                <strong>TOTAL</strong> is the check sum — it is not stored as a separate row.
+                                                The classic <code>account_no</code> + <code>amount</code> file still works.
                                             </small>
                                         </div>
                                     </div>
@@ -108,16 +114,15 @@
                         </div>
                         <div class="card-body">
                             <ol>
-                                <li class="mb-2">Prepare an Excel file with headers: <code>account_no</code>, <code>amount</code>.</li>
+                                <li class="mb-2">Use the Excel with headers: <code>ZONE</code>, <code>ACCOUNT NAME</code> or <code>LAST NAME</code> + <code>FIRST NAME</code>, <code>PY</code>, <code>ARREARS</code>, <code>METER RENTAL</code>, <code>PENALTY</code>, <code>TOTAL</code>. LAST NAME and FIRST NAME must both match the consumer exactly.</li>
                                 <li class="mb-2">Select the <strong>date</strong> that will apply to every imported row.</li>
                                 <li class="mb-2">
-                                    Upload once —
-                                    <strong>positive</strong> amounts create <strong>DM</strong> (debit increases balance);
-                                    <strong>negative</strong> amounts create <strong>CM</strong> (credit decreases balance).
+                                    Each account is stored as ledger charges:
+                                    PY as <strong>prio_years</strong>, ARREARS as <strong>current_arrears</strong>, METER RENTAL as <strong>others</strong>, and PENALTY as <strong>penalty</strong> on one DM (separate columns — not combined).
                                 </li>
-                                <li class="mb-2">Example: <code>-66.05</code> → CM with credit <code>66.05</code>, balance reduced by 66.05.</li>
-                                <li class="mb-2">Rows with blank or zero amount are skipped (no error). Unknown accounts or duplicates are reported.</li>
-                                <li>After import, open the consumer ledger to verify the new DM/CM entries.</li>
+                                <li class="mb-2">TOTAL is not imported as a fourth amount (it must equal the four parts).</li>
+                                <li class="mb-2">Rows with blank names and zero amounts are skipped. Unknown accounts or duplicates are reported.</li>
+                                <li>After import, open the Account Ledger and confirm <strong>Debit</strong> equals PY + ARREARS + METER RENTAL + PENALTY, with meter rental in <strong>Others</strong> and penalty in <strong>Penalty</strong>.</li>
                             </ol>
                         </div>
                     </div>

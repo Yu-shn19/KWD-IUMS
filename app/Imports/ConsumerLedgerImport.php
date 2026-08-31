@@ -11,6 +11,7 @@ use Maatwebsite\Excel\Concerns\SkipsOnFailure;
 use Maatwebsite\Excel\Concerns\SkipsFailures;
 use Maatwebsite\Excel\Concerns\WithChunkReading;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ConsumerLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, WithChunkReading
 {
@@ -215,6 +216,8 @@ class ConsumerLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, W
                 'billamount'       => $this->getRowValue($row, ['billamount', 'bill_amount', 'amount']) ?? 0,
                 'penalty'          => $this->getRowValue($row, ['penalty']) ?? 0,
                 'others'           => $this->getRowValue($row, ['others']) ?? 0,
+                'prio_years'       => $this->getRowValue($row, ['prio_years', 'prioyears', 'py', 'prior_years', 'prior years', 'prev_yr']) ?? 0,
+                'current_arrears'  => $this->getRowValue($row, ['current_arrears', 'current arrears', 'arrears']) ?? 0,
                 'debit'            => $this->getRowValue($row, ['debit']) ?? 0,
                 'credit'           => $this->getRowValue($row, ['credit']) ?? 0,
                 'balance'          => $this->getRowValue($row, ['balance']) ?? 0,
@@ -223,6 +226,13 @@ class ConsumerLedgerImport implements ToModel, WithHeadingRow, SkipsOnFailure, W
                 'cl_ctrl'          => $clCtrl,
             ];
             
+            if (! Schema::hasColumn('consumer_ledgers', 'prio_years')) {
+                unset($ledgerData['prio_years']);
+            }
+            if (! Schema::hasColumn('consumer_ledgers', 'current_arrears')) {
+                unset($ledgerData['current_arrears']);
+            }
+
             // Create and save the ledger entry
             $ledger = ConsumerLedger::create($ledgerData);
             

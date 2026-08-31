@@ -327,6 +327,8 @@ class ConsumerLedgerController extends Controller
                 'billamount' => $ledger->billamount ?? 0,
                 'penalty' => $ledger->penalty ?? 0,
                 'others' => $ledger->others ?? 0,
+                'prio_years' => $ledger->prioYearsAmount(),
+                'current_arrears' => $ledger->currentArrearsAmount(),
                 'debit' => $ledger->debit ?? 0,
                 'credit' => $ledger->credit ?? 0,
                 'balance' => $newBalance, // Use calculated balance with exact payment matching logic

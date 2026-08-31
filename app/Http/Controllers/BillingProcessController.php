@@ -660,7 +660,7 @@ class BillingProcessController extends Controller
      * Isolate latest unpaid BILLING first: billamount â†’ Current Bill; others on that row only â†’ WMC.
      * Unpaid PENALTY â†’ Penalty (skip if already paid).
      * All other unpaid amounts â†’ Arrears CY/PY by year (older billingsâ€™ billamount+others, DM debits, etc.).
-     * DM: unpaid debit â†’ Arrears CY or PY by row date year.
+     * DM: unpaid prio_years â†’ Prior Years; remaining unpaid debit â†’ Arrears CY/PY by row date year.
      * PENALTY: unpaid PENALTY rows (penalties.paid_at or payment penalty allocation when applicable).
      * viewType is kept for API compatibility; classification uses calendar year vs latest unpaid billing date.
      *
@@ -1011,6 +1011,26 @@ class BillingProcessController extends Controller
             }
             if ($this->isDmRowUnpaid($row, $consumerId)) {
                 $dm = (float) ($row->debit ?? 0);
+                $py = $row->prioYearsAmount();
+                $cy = $row->currentArrearsAmount();
+                $mr = round((float) ($row->others ?? 0), 2);
+                $pen = round((float) ($row->penalty ?? 0), 2);
+                if ($py > 0) {
+                    $arrearsPreviousYear += $py;
+                    $dm = round($dm - $py, 2);
+                }
+                if ($cy > 0) {
+                    $arrearsCurrentYear += $cy;
+                    $dm = round($dm - $cy, 2);
+                }
+                if ($mr > 0) {
+                    $waterMaintenanceCharge += $mr;
+                    $dm = round($dm - $mr, 2);
+                }
+                if ($pen > 0) {
+                    $penalty += $pen;
+                    $dm = round($dm - $pen, 2);
+                }
                 if ($dm <= 0) {
                     continue;
                 }
@@ -3136,6 +3156,10 @@ class BillingProcessController extends Controller
             'consumer_zone_id' => 'required|integer|exists:consumer_zone,id',
             'date' => 'required|date',
             'amount' => 'required|numeric|min:0',
+            'prio_years' => 'nullable|numeric|min:0',
+            'is_prio_years' => 'nullable|boolean',
+            'current_arrears' => 'nullable|numeric|min:0',
+            'is_current_arrears' => 'nullable|boolean',
         ]);
 
         $consumer = ConsumerZone::find($request->consumer_zone_id);
@@ -3145,6 +3169,21 @@ class BillingProcessController extends Controller
 
         $date = Carbon::parse($request->date)->format('Y-m-d');
         $amount = (float) $request->amount;
+        $prioYears = round((float) ($request->prio_years ?? 0), 2);
+        $currentArrears = round((float) ($request->current_arrears ?? 0), 2);
+        if ($request->boolean('is_prio_years') && $prioYears <= 0) {
+            $prioYears = round($amount, 2);
+            $currentArrears = 0.0;
+        } elseif ($request->boolean('is_current_arrears') && $currentArrears <= 0) {
+            $currentArrears = round($amount, 2);
+            $prioYears = 0.0;
+        }
+        if ($prioYears > $amount) {
+            $prioYears = round($amount, 2);
+        }
+        if ($currentArrears > $amount) {
+            $currentArrears = round($amount, 2);
+        }
 
         // Strict: do not allow duplicate DM for same consumer on same date
         $alreadyExists = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
@@ -3160,7 +3199,7 @@ class BillingProcessController extends Controller
 
         try {
             DB::beginTransaction();
-            $reference = $this->createOneDmLedgerEntry($consumer, $date, $amount);
+            $reference = $this->createOneDmLedgerEntry($consumer, $date, $amount, $prioYears, $currentArrears);
             DB::commit();
 
             return response()->json([
@@ -3186,26 +3225,32 @@ class BillingProcessController extends Controller
      * Create one DM ledger entry and update consumer balance. Call within a transaction.
      * Returns the generated 6-digit reference.
      */
-    private function createOneDmLedgerEntry(ConsumerZone $consumer, string $date, float $amount): string
+    private function createOneDmLedgerEntry(ConsumerZone $consumer, string $date, float $amount, float $prioYears = 0, float $currentArrears = 0, float $others = 0, float $penaltyAmount = 0): string
     {
-        return $this->createOneMemoLedgerEntry($consumer, $date, abs($amount), 'DM');
+        return $this->createOneMemoLedgerEntry($consumer, $date, abs($amount), 'DM', $prioYears, $currentArrears, $others, $penaltyAmount);
     }
 
     /**
      * Insert one DM or CM ledger row.
-     * Positive Excel amount → DM (debit). Negative Excel amount → CM (credit = abs value).
+     * $prioYears → PY. $currentArrears → ARREARS. $others → meter rental. $penaltyAmount → Penalty column.
      */
-    private function createOneMemoLedgerEntry(ConsumerZone $consumer, string $date, float $amount, string $trans): string
+    private function createOneMemoLedgerEntry(ConsumerZone $consumer, string $date, float $amount, string $trans, float $prioYears = 0, float $currentArrears = 0, float $others = 0, float $penaltyAmount = 0): string
     {
         $trans = strtoupper($trans) === 'CM' ? 'CM' : 'DM';
         $magnitude = round(abs($amount), 2);
+        $prioYears = $trans === 'DM' ? round(max(0, min($prioYears, $magnitude)), 2) : 0.0;
+        $remainAfterPy = round($magnitude - $prioYears, 2);
+        $currentArrears = $trans === 'DM' ? round(max(0, min($currentArrears, $remainAfterPy)), 2) : 0.0;
+        $remainAfterArrears = round($remainAfterPy - $currentArrears, 2);
+        $others = $trans === 'DM' ? round(max(0, min($others, $remainAfterArrears)), 2) : 0.0;
+        $remainAfterOthers = round($remainAfterArrears - $others, 2);
+        $penaltyAmount = $trans === 'DM' ? round(max(0, min($penaltyAmount, $remainAfterOthers)), 2) : 0.0;
         $reference = $this->generateUniqueMemoReference($trans, $date);
         $username = \App\Support\AuthUsername::formatted();
         $dateTime = Carbon::parse($date)->startOfDay();
         $currentBalance = $consumer->getLedgerBalance();
 
         if ($trans === 'CM') {
-            // Credit Memo: store magnitude on credit (same pattern as BillingAdjustment), balance decreases.
             $debit = 0;
             $credit = $magnitude;
             $newBalance = round($currentBalance - $magnitude, 2);
@@ -3215,7 +3260,7 @@ class BillingProcessController extends Controller
             $newBalance = round($currentBalance + $magnitude, 2);
         }
 
-        ConsumerLedger::create([
+        $payload = [
             'consumer_zone_id' => $consumer->id,
             'consumer_payment_id' => null,
             'schedule_id' => null,
@@ -3229,14 +3274,23 @@ class BillingProcessController extends Controller
             'reading' => 0,
             'volume' => 0,
             'billamount' => 0,
-            'penalty' => 0,
-            'others' => 0,
+            'penalty' => $penaltyAmount,
+            'others' => $others,
             'debit' => $debit,
             'credit' => $credit,
             'balance' => $newBalance,
             'username' => $username,
             'txtime' => $dateTime,
-        ]);
+        ];
+
+        if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
+            $payload['prio_years'] = $prioYears;
+        }
+        if (Schema::hasColumn('consumer_ledgers', 'current_arrears')) {
+            $payload['current_arrears'] = $currentArrears;
+        }
+
+        ConsumerLedger::create($payload);
 
         return $reference;
     }
@@ -3278,10 +3332,15 @@ class BillingProcessController extends Controller
                 ], 422);
             }
 
-            // First row is header (numeric indices). Find column indices for account_no and amount.
+            // First row is header (numeric indices).
             $header = $rows[0];
+            if ($this->isOpeningBalanceDmHeader($header)) {
+                return $this->importOpeningBalanceDmRows($rows, $header, $dmDate);
+            }
+
             $accountNoCol = $this->findColumnIndex($header, ['account_no', 'account_number', 'accountnumber', 'account no', 'acct_no', 'acctno']);
             $amountCol = $this->findColumnIndex($header, ['amount', 'debit', 'amt']);
+            $prioYearsCol = $this->findColumnIndex($header, ['prio_years', 'prioyears', 'py', 'prior_years', 'prior years', 'prev_yr', 'previous_year']);
 
             if ($accountNoCol === null) {
                 return response()->json([
@@ -3292,10 +3351,10 @@ class BillingProcessController extends Controller
                     'errors' => [],
                 ], 422);
             }
-            if ($amountCol === null) {
+            if ($amountCol === null && $prioYearsCol === null) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Excel must have a column for amount (e.g. amount or debit).',
+                    'message' => 'Excel must have a column for amount (e.g. amount or debit) and/or prio_years (PY).',
                     'imported' => 0,
                     'failed' => 0,
                     'errors' => [],
@@ -3304,6 +3363,7 @@ class BillingProcessController extends Controller
 
             $accountNoKeys = ['account_no', 'account_number', 'accountnumber', 'account no', 'acct_no', 'acctno'];
             $amountKeys = ['amount', 'debit', 'amt'];
+            $prioYearsKeys = ['prio_years', 'prioyears', 'py', 'prior_years', 'prior years', 'prev_yr', 'previous_year'];
 
             $processedInThisFile = []; // Track account_no to reject duplicates within the same file
 
@@ -3325,7 +3385,8 @@ class BillingProcessController extends Controller
                     $accountNo = null;
                 }
 
-                if (isset($row[$amountCol])) {
+                $amountVal = null;
+                if ($amountCol !== null && isset($row[$amountCol])) {
                     $amountVal = $row[$amountCol];
                 } else {
                     $amountVal = $this->getRowValueCaseInsensitive(is_array($row) ? $row : [], $amountKeys);
@@ -3336,8 +3397,24 @@ class BillingProcessController extends Controller
                     $amountVal = null;
                 }
 
+                $prioYearsVal = 0.0;
+                if ($prioYearsCol !== null && isset($row[$prioYearsCol])) {
+                    $rawPy = $row[$prioYearsCol];
+                    $prioYearsVal = is_numeric($rawPy) ? (float) $rawPy : 0.0;
+                } else {
+                    $rawPy = $this->getRowValueCaseInsensitive(is_array($row) ? $row : [], $prioYearsKeys);
+                    $prioYearsVal = is_numeric($rawPy) ? (float) $rawPy : 0.0;
+                }
+                $prioYearsVal = round(max(0, $prioYearsVal), 2);
+
+                if ($amountVal === null || abs((float) $amountVal) < 0.00001) {
+                    if ($prioYearsVal > 0) {
+                        $amountVal = $prioYearsVal;
+                    }
+                }
+
                 if (!$accountNo) {
-                    if ($amountVal === null || $amountVal === '' || (is_numeric($amountVal) && abs((float) $amountVal) < 0.00001)) {
+                    if ($amountVal === null || abs((float) $amountVal) < 0.00001) {
                         continue; // Skip empty / zero rows
                     }
                     $errors[] = "Row {$rowNum}: Missing account_no.";
@@ -3346,7 +3423,7 @@ class BillingProcessController extends Controller
                 }
 
                 // Skip zero or blank amount quietly (no error)
-                if ($amountVal === null || $amountVal === '' || abs((float) $amountVal) < 0.00001) {
+                if ($amountVal === null || abs((float) $amountVal) < 0.00001) {
                     continue;
                 }
 
@@ -3357,6 +3434,11 @@ class BillingProcessController extends Controller
 
                 $trans = $amountVal < 0 ? 'CM' : 'DM';
                 $magnitude = abs($amountVal);
+                if ($trans === 'CM') {
+                    $prioYearsVal = 0.0;
+                } elseif ($prioYearsVal > $magnitude) {
+                    $prioYearsVal = $magnitude;
+                }
 
                 $consumer = ConsumerZone::query()->where(mr_col('account_no'), $accountNo)->first();
                 if (!$consumer) {
@@ -3388,7 +3470,7 @@ class BillingProcessController extends Controller
 
                 try {
                     DB::beginTransaction();
-                    $this->createOneMemoLedgerEntry($consumer, $dmDate, $magnitude, $trans);
+                    $this->createOneMemoLedgerEntry($consumer, $dmDate, $magnitude, $trans, $prioYearsVal);
                     DB::commit();
                     $imported++;
                     $processedInThisFile[$accountNo] = $rowNum;
@@ -3424,6 +3506,415 @@ class BillingProcessController extends Controller
                 'errors' => [],
             ], 500);
         }
+    }
+
+    /**
+     * True when the sheet uses the cutover layout: ZONE, ACCOUNT NAME (or LAST NAME + FIRST NAME), PY, ARREARS, METER RENTAL, PENALTY, TOTAL.
+     */
+    private function isOpeningBalanceDmHeader(array $header): bool
+    {
+        $accountNameCol = $this->findColumnIndex($header, ['account_name', 'account name', 'name', 'acct_name']);
+        $lastNameCol = $this->findColumnIndex($header, ['last_name', 'last name', 'lastname', 'lname']);
+        $firstNameCol = $this->findColumnIndex($header, ['first_name', 'first name', 'firstname', 'fname']);
+        $hasIdentity = $accountNameCol !== null || ($lastNameCol !== null && $firstNameCol !== null);
+        $hasComponent = $this->findColumnIndex($header, ['py', 'prio_years', 'prioyears', 'prior_years', 'prior years']) !== null
+            || $this->findColumnIndex($header, ['arrears', 'current_arrears', 'current arrears']) !== null
+            || $this->findColumnIndex($header, ['meter_rental', 'meter rental', 'meterrental', 'mr', 'mr_arrears']) !== null
+            || $this->findColumnIndex($header, ['penalty', 'current_penalty', 'current penalty']) !== null
+            || $this->findColumnIndex($header, ['total', 'total_amount', 'total amount']) !== null;
+
+        return $hasIdentity && $hasComponent;
+    }
+
+    /**
+     * Import ZONE / ACCOUNT NAME (or LAST NAME + FIRST NAME) / PY / ARREARS / METER RENTAL / PENALTY / TOTAL.
+     * One DM row: PY → prio_years, ARREARS → current_arrears, METER RENTAL → others, PENALTY → penalty.
+     * TOTAL is not stored as its own row (it is the sum).
+     */
+    private function importOpeningBalanceDmRows(array $rows, array $header, string $dmDate): JsonResponse
+    {
+        $zoneCol = $this->findColumnIndex($header, ['zone', 'zone_code', 'zonecode']);
+        $accountNameCol = $this->findColumnIndex($header, ['account_name', 'account name', 'name', 'acct_name']);
+        $lastNameCol = $this->findColumnIndex($header, ['last_name', 'last name', 'lastname', 'lname']);
+        $firstNameCol = $this->findColumnIndex($header, ['first_name', 'first name', 'firstname', 'fname']);
+        $accountNoCol = $this->findColumnIndex($header, ['account_no', 'account_number', 'accountnumber', 'account no', 'acct_no', 'acctno']);
+        $pyCol = $this->findColumnIndex($header, ['py', 'prio_years', 'prioyears', 'prior_years', 'prior years', 'prev_yr', 'previous_year']);
+        $arrearsCol = $this->findColumnIndex($header, ['arrears', 'current_arrears', 'current arrears']);
+        $mrCol = $this->findColumnIndex($header, ['meter_rental', 'meter rental', 'meterrental', 'mr', 'mr_arrears', 'wmc']);
+        $penaltyCol = $this->findColumnIndex($header, ['penalty', 'current_penalty', 'current penalty']);
+        $totalCol = $this->findColumnIndex($header, ['total', 'total_amount', 'total amount']);
+
+        $imported = 0;
+        $failed = 0;
+        $errors = [];
+        $processedIds = [];
+
+        foreach ($rows as $index => $row) {
+            if ($index === 0) {
+                continue;
+            }
+
+            $rowNum = $index + 1;
+            $zone = $this->readImportCell($row, $zoneCol);
+            $accountName = $this->readImportCell($row, $accountNameCol);
+            $lastName = $this->readImportCell($row, $lastNameCol);
+            $firstName = $this->readImportCell($row, $firstNameCol);
+            $accountNo = $this->readImportCell($row, $accountNoCol);
+            $py = $this->parseExcelMoney($this->readImportRaw($row, $pyCol));
+            $arrears = $this->parseExcelMoney($this->readImportRaw($row, $arrearsCol));
+            $meterRental = $this->parseExcelMoney($this->readImportRaw($row, $mrCol));
+            $penalty = $this->parseExcelMoney($this->readImportRaw($row, $penaltyCol));
+            $total = $this->parseExcelMoney($this->readImportRaw($row, $totalCol));
+
+            $accountName = $accountName !== null ? trim((string) $accountName) : '';
+            $lastName = $lastName !== null ? trim((string) $lastName) : '';
+            $firstName = $firstName !== null ? trim((string) $firstName) : '';
+            $accountNo = $accountNo !== null ? trim((string) $accountNo) : '';
+            $zone = $zone !== null ? trim((string) $zone) : '';
+
+            $partsSum = round($py + $arrears + $meterRental + $penalty, 2);
+            if ($partsSum <= 0 && $total > 0) {
+                $arrears = $total;
+                $partsSum = $total;
+            }
+
+            $hasNamePair = $lastName !== '' && $firstName !== '';
+            $hasPartialName = ($lastName !== '') !== ($firstName !== '');
+
+            if ($accountName === '' && $accountNo === '' && ! $hasNamePair) {
+                if ($partsSum <= 0) {
+                    continue;
+                }
+                if ($hasPartialName) {
+                    $errors[] = "Row {$rowNum}: LAST NAME and FIRST NAME must both be present and match exactly.";
+                } else {
+                    $errors[] = "Row {$rowNum}: Missing ACCOUNT NAME or LAST NAME and FIRST NAME.";
+                }
+                $failed++;
+                continue;
+            }
+
+            if ($hasPartialName) {
+                $errors[] = "Row {$rowNum}: LAST NAME and FIRST NAME must both be present and match exactly.";
+                $failed++;
+                continue;
+            }
+
+            if ($partsSum <= 0) {
+                continue;
+            }
+
+            $matchError = null;
+            $consumer = $this->findConsumerForOpeningImport(
+                $accountNo !== '' ? $accountNo : null,
+                $accountName !== '' ? $accountName : null,
+                $zone !== '' ? $zone : null,
+                $lastName !== '' ? $lastName : null,
+                $firstName !== '' ? $firstName : null,
+                $matchError,
+                $rowNum
+            );
+            if (! $consumer) {
+                $label = $accountNo !== '' ? $accountNo : ($hasNamePair ? trim($lastName . ', ' . $firstName) : $accountName);
+                $errors[] = $matchError ?: "Row {$rowNum}: Account [{$label}] not found.";
+                $failed++;
+                continue;
+            }
+
+            if (isset($processedIds[$consumer->id])) {
+                $errors[] = "Row {$rowNum}: Duplicate in file – [{$consumer->account_no}] already processed in row {$processedIds[$consumer->id]}.";
+                $failed++;
+                continue;
+            }
+
+            $alreadyDm = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
+                ->where(mr_col('date'), $dmDate)
+                ->where(mr_col('trans'), 'DM')
+                ->exists();
+            $willCreateDm = ($py + $arrears + $meterRental + $penalty) > 0;
+            if ($alreadyDm && $willCreateDm) {
+                $errors[] = "Row {$rowNum}: Duplicate – [{$consumer->account_no}] already has a DM for {$dmDate}.";
+                $failed++;
+                continue;
+            }
+
+            try {
+                DB::beginTransaction();
+
+                $dmAmount = round($py + $arrears + $meterRental + $penalty, 2);
+                if ($dmAmount > 0) {
+                    $this->createOneMemoLedgerEntry($consumer, $dmDate, $dmAmount, 'DM', $py, $arrears, $meterRental, $penalty);
+                }
+
+                DB::commit();
+                $imported++;
+                $processedIds[$consumer->id] = $rowNum;
+
+                if ($total > 0 && abs($total - $partsSum) > 0.02) {
+                    $errors[] = "Row {$rowNum}: TOTAL " . number_format($total, 2) . ' differs from PY+ARREARS+METER RENTAL+PENALTY ' . number_format($partsSum, 2) . ' (components were stored).';
+                }
+            } catch (\Exception $e) {
+                DB::rollBack();
+                $errors[] = "Row {$rowNum}: " . $e->getMessage();
+                $failed++;
+            }
+        }
+
+        $message = "Opening-balance import completed. Accounts imported: {$imported}, Failed: {$failed}.";
+        if ($imported === 0 && $failed === 0 && count($rows) > 1) {
+            $message = 'No data rows were processed. Check ZONE, ACCOUNT NAME or LAST NAME + FIRST NAME, PY, ARREARS, METER RENTAL, PENALTY, TOTAL and that names exist in the consumer master list.';
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'imported' => $imported,
+            'failed' => $failed,
+            'errors' => $errors,
+        ]);
+    }
+
+    private function normalizeImportPersonName(?string $value): string
+    {
+        return strtoupper(trim((string) $value));
+    }
+
+    /**
+     * LAST NAME and FIRST NAME must both match consumer_zone.last_name and first_name exactly.
+     */
+    private function lastAndFirstNameMatchExactly(ConsumerZone $consumer, string $lastName, string $firstName): bool
+    {
+        return $this->normalizeImportPersonName($consumer->last_name) === $this->normalizeImportPersonName($lastName)
+            && $this->normalizeImportPersonName($consumer->first_name) === $this->normalizeImportPersonName($firstName);
+    }
+
+    private function findConsumerByExactLastAndFirstName(string $lastName, string $firstName, string $zone, int $rowNum, ?string &$matchError): ?ConsumerZone
+    {
+        $lastNorm = $this->normalizeImportPersonName($lastName);
+        $firstNorm = $this->normalizeImportPersonName($firstName);
+        $query = ConsumerZone::query()
+            ->whereRaw('UPPER(TRIM(last_name)) = ?', [$lastNorm])
+            ->whereRaw('UPPER(TRIM(first_name)) = ?', [$firstNorm]);
+        if ($zone !== '') {
+            $query->whereRaw('UPPER(TRIM(zone_code)) = ?', [$zone]);
+        }
+        $matches = $query->get();
+        if ($matches->count() === 1) {
+            return $matches->first();
+        }
+        if ($matches->count() > 1) {
+            $matchError = "Row {$rowNum}: LAST NAME [{$lastName}] and FIRST NAME [{$firstName}] match more than one account. Both names must match exactly one consumer.";
+
+            return null;
+        }
+        if ($zone !== '') {
+            $anyZone = ConsumerZone::query()
+                ->whereRaw('UPPER(TRIM(last_name)) = ?', [$lastNorm])
+                ->whereRaw('UPPER(TRIM(first_name)) = ?', [$firstNorm])
+                ->get();
+            if ($anyZone->count() === 1) {
+                return $anyZone->first();
+            }
+        }
+        $matchError = "Row {$rowNum}: No consumer with LAST NAME [{$lastName}] and FIRST NAME [{$firstName}] (both must match exactly).";
+
+        return null;
+    }
+
+    private function findConsumerForOpeningImport(
+        ?string $accountNo,
+        ?string $accountName,
+        ?string $zone,
+        ?string $lastName = null,
+        ?string $firstName = null,
+        ?string &$matchError = null,
+        int $rowNum = 0
+    ): ?ConsumerZone {
+        $zone = strtoupper(trim((string) $zone));
+        $lastName = trim((string) $lastName);
+        $firstName = trim((string) $firstName);
+        $hasNamePair = $lastName !== '' && $firstName !== '';
+        $rowPrefix = $rowNum > 0 ? "Row {$rowNum}: " : '';
+
+        if ($accountNo) {
+            $consumer = ConsumerZone::findByAccountNo($accountNo);
+            if ($consumer) {
+                if ($hasNamePair && ! $this->lastAndFirstNameMatchExactly($consumer, $lastName, $firstName)) {
+                    $matchError = $rowPrefix . "LAST NAME and FIRST NAME do not match account [{$consumer->account_no}] exactly.";
+
+                    return null;
+                }
+
+                return $consumer;
+            }
+        }
+
+        if ($hasNamePair) {
+            return $this->findConsumerByExactLastAndFirstName($lastName, $firstName, $zone, $rowNum, $matchError);
+        }
+
+        $accountName = trim((string) $accountName);
+
+        if ($accountName !== '' && preg_match('/#\s*(\d+)/', $accountName, $match)) {
+            $extracted = $match[1];
+            $consumer = ConsumerZone::findByAccountNo($extracted);
+            if ($consumer) {
+                return $consumer;
+            }
+
+            $likeMatches = ConsumerZone::query()
+                ->where(function ($q) use ($extracted) {
+                    $q->where(mr_col('account_no'), 'like', '%' . $extracted)
+                        ->orWhereRaw("REPLACE(account_no, '-', '') LIKE ?", ['%' . $extracted]);
+                });
+            if ($zone !== '') {
+                $likeMatches->whereRaw('UPPER(TRIM(zone_code)) = ?', [$zone]);
+            }
+            $likeMatches = $likeMatches->get();
+            if ($likeMatches->count() === 1) {
+                return $likeMatches->first();
+            }
+        }
+
+        if ($accountName !== '') {
+            $exact = ConsumerZone::query()
+                ->whereRaw('UPPER(TRIM(account_name)) = ?', [strtoupper($accountName)]);
+            if ($zone !== '') {
+                $withZone = (clone $exact)->whereRaw('UPPER(TRIM(zone_code)) = ?', [$zone])->first();
+                if ($withZone) {
+                    return $withZone;
+                }
+            }
+            $matches = $exact->get();
+            if ($matches->count() === 1) {
+                return $matches->first();
+            }
+            if ($matches->isNotEmpty() && $zone === '') {
+                return $matches->first();
+            }
+        }
+
+        return null;
+    }
+
+    private function createOpeningBillingOthersEntry(ConsumerZone $consumer, string $date, float $meterRental): void
+    {
+        $amount = round($meterRental, 2);
+        $currentBalance = $consumer->getLedgerBalance();
+        $newBalance = round($currentBalance + $amount, 2);
+        $payload = [
+            'consumer_zone_id' => $consumer->id,
+            'consumer_payment_id' => null,
+            'schedule_id' => null,
+            'downloaded_reading_id' => null,
+            'penalty_id' => null,
+            'billing_adjustment_id' => null,
+            'trans' => 'BILLING',
+            'date' => $date,
+            'due_date' => null,
+            'reference' => $this->generateUniqueMemoReference('DM', $date),
+            'reading' => 0,
+            'volume' => 0,
+            'billamount' => 0,
+            'penalty' => 0,
+            'others' => $amount,
+            'debit' => $amount,
+            'credit' => 0,
+            'balance' => $newBalance,
+            'username' => \App\Support\AuthUsername::formatted(),
+            'txtime' => Carbon::parse($date)->startOfDay(),
+        ];
+        if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
+            $payload['prio_years'] = 0;
+        }
+        if (Schema::hasColumn('consumer_ledgers', 'current_arrears')) {
+            $payload['current_arrears'] = 0;
+        }
+        ConsumerLedger::create($payload);
+    }
+
+    private function createOpeningPenaltyEntry(ConsumerZone $consumer, string $date, float $penaltyAmount): void
+    {
+        $amount = round($penaltyAmount, 2);
+        $currentBalance = $consumer->getLedgerBalance();
+        $newBalance = round($currentBalance + $amount, 2);
+        $username = \App\Support\AuthUsername::formatted();
+        $dateTime = Carbon::parse($date)->startOfDay();
+
+        $penaltyRecord = Penalty::create(Penalty::filterTableAttributes([
+            'consumer_zone_id' => $consumer->id,
+            'schedule_id' => null,
+            'date' => $date,
+            'due_date' => null,
+            'reference' => $this->generateUniqueMemoReference('DM', $date),
+            'bill_amount' => 0,
+            'penalty_amount' => $amount,
+            'balance' => $newBalance,
+            'username' => $username,
+            'txtime' => $dateTime->format('Y-m-d'),
+        ]));
+
+        $payload = [
+            'consumer_zone_id' => $consumer->id,
+            'consumer_payment_id' => null,
+            'schedule_id' => null,
+            'downloaded_reading_id' => null,
+            'penalty_id' => $penaltyRecord->id,
+            'billing_adjustment_id' => null,
+            'trans' => 'PENALTY',
+            'date' => $date,
+            'due_date' => null,
+            'reference' => $penaltyRecord->reference,
+            'reading' => 0,
+            'volume' => 0,
+            'billamount' => 0,
+            'penalty' => $amount,
+            'others' => 0,
+            'debit' => $amount,
+            'credit' => 0,
+            'balance' => $newBalance,
+            'username' => $username,
+            'txtime' => $dateTime,
+        ];
+        if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
+            $payload['prio_years'] = 0;
+        }
+        if (Schema::hasColumn('consumer_ledgers', 'current_arrears')) {
+            $payload['current_arrears'] = 0;
+        }
+        ConsumerLedger::create($payload);
+    }
+
+    private function readImportCell(array $row, ?int $col): mixed
+    {
+        if ($col === null) {
+            return null;
+        }
+
+        return $row[$col] ?? null;
+    }
+
+    private function readImportRaw(array $row, ?int $col): mixed
+    {
+        return $this->readImportCell($row, $col);
+    }
+
+    private function parseExcelMoney(mixed $value): float
+    {
+        if ($value === null || $value === '') {
+            return 0.0;
+        }
+        if (is_numeric($value)) {
+            return round((float) $value, 2);
+        }
+
+        $normalized = trim((string) $value);
+        $normalized = str_replace([',', ' ', '₱', 'P'], '', $normalized);
+        if ($normalized === '' || ! is_numeric($normalized)) {
+            return 0.0;
+        }
+
+        return round((float) $normalized, 2);
     }
 
     /**

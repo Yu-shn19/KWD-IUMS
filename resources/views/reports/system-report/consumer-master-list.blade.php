@@ -407,6 +407,16 @@
                             <label for="addDmAmount" class="font-weight-bold">Amount (Debit) <span class="text-danger">*</span></label>
                             <input type="number" name="amount" id="addDmAmount" class="form-control" step="0.01" min="0" placeholder="0.00" required>
                         </div>
+                        <div class="form-group form-check">
+                            <input type="checkbox" class="form-check-input" id="addDmIsPrioYears" name="is_prio_years" value="1">
+                            <label class="form-check-label" for="addDmIsPrioYears">This amount is Prior Years (PY)</label>
+                            <small class="form-text text-muted">Past years only. Not current arrears.</small>
+                        </div>
+                        <div class="form-group form-check">
+                            <input type="checkbox" class="form-check-input" id="addDmIsCurrentArrears" name="is_current_arrears" value="1">
+                            <label class="form-check-label" for="addDmIsCurrentArrears">This amount is Current Arrears</label>
+                            <small class="form-text text-muted">This year’s unpaid balance. Stored in ARREARS, not in PY.</small>
+                        </div>
                         <div class="form-group">
                             <label for="addDmReference" class="font-weight-bold">Reference</label>
                             <input type="text" id="addDmReference" class="form-control bg-light" placeholder="Auto-generated (6 digits) when saved" readonly>
@@ -625,7 +635,20 @@
                     $('#addDmConsumerName').text(btn.data('account-name') || '--');
                     $('#addDmDate').val('{{ now()->format('Y-m-d') }}');
                     $('#addDmAmount').val('');
+                    $('#addDmIsPrioYears').prop('checked', false);
+                    $('#addDmIsCurrentArrears').prop('checked', false);
                     $('#addDmReference').attr('placeholder', 'Auto-generated (6 digits) when saved').val('');
+                }
+            });
+
+            $('#addDmIsPrioYears').on('change', function() {
+                if (this.checked) {
+                    $('#addDmIsCurrentArrears').prop('checked', false);
+                }
+            });
+            $('#addDmIsCurrentArrears').on('change', function() {
+                if (this.checked) {
+                    $('#addDmIsPrioYears').prop('checked', false);
                 }
             });
 
@@ -649,11 +672,23 @@
                     return;
                 }
 
+                var isPrioYears = $('#addDmIsPrioYears').is(':checked');
+                var isCurrentArrears = $('#addDmIsCurrentArrears').is(':checked');
+                if (isPrioYears && isCurrentArrears) {
+                    Swal.fire({ icon: 'warning', title: 'Choose one', text: 'PY and Current Arrears are different. Check only one.', confirmButtonColor: '#f0ad4e' });
+                    return;
+                }
                 var amountLabel = '₱ ' + amountNum.toFixed(2);
+                var confirmHtml = 'Add a DM of <strong>' + amountLabel + '</strong> for this consumer?';
+                if (isPrioYears) {
+                    confirmHtml = 'Add a <strong>Prior Years (PY)</strong> DM of <strong>' + amountLabel + '</strong>? This will not go to ARREARS.';
+                } else if (isCurrentArrears) {
+                    confirmHtml = 'Add a <strong>Current Arrears</strong> DM of <strong>' + amountLabel + '</strong>? This will not go to PY.';
+                }
                 Swal.fire({
                     icon: 'question',
                     title: 'Confirm Add DM',
-                    html: 'Add a DM of <strong>' + amountLabel + '</strong> for this consumer?',
+                    html: confirmHtml,
                     showCancelButton: true,
                     confirmButtonColor: '#f0ad4e',
                     cancelButtonColor: '#6c757d',
@@ -671,7 +706,9 @@
                             _token: $('#addDmForm input[name="_token"]').val(),
                             consumer_zone_id: parseInt(consumerZoneId, 10),
                             date: date,
-                            amount: amountNum
+                            amount: amountNum,
+                            is_prio_years: isPrioYears ? 1 : 0,
+                            is_current_arrears: isCurrentArrears ? 1 : 0
                         },
                         headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
                         success: function(res) {
