@@ -155,6 +155,7 @@ class ConsumerController extends Controller
             })
             ->select('id', 'account_no', 'account_name', 'meter_number', 'cons_ctrl', 'zone_code')
             ->distinct()
+            ->orderByRaw('CASE WHEN REPLACE(UPPER(TRIM(account_no)), \'-\', \'\') = ? THEN 0 ELSE 1 END', [$normalizedQuery])
             ->orderBy($accountNoColumn, 'asc')
             ->limit(20) // Limit to 20 results
             ->get()
@@ -177,7 +178,8 @@ class ConsumerController extends Controller
     }
 
     /**
-     * Search for consumers (improved version)
+     * Search for consumers.
+     * Account numbers match exactly first so "906" does not resolve to "1906".
      */
     public function search(Request $request)
     {
@@ -187,19 +189,19 @@ class ConsumerController extends Controller
 
         $searchTerm = trim($request->input('search'));
         $query = strtoupper($searchTerm);
-        $normalizedQuery = str_replace('-', '', $query);
         $accountNoColumn = mr_col('account_no');
 
-        // Use proper where closure to handle multiple OR conditions correctly
-        $consumer = ConsumerZone::where(function($q) use ($query, $normalizedQuery, $searchTerm) {
-                $q->whereRaw("UPPER(TRIM(account_no)) LIKE ?", ['%' . $query . '%'])
-                  ->orWhereRaw("REPLACE(UPPER(TRIM(account_no)), '-', '') LIKE ?", ['%' . $normalizedQuery . '%'])
-                  ->orWhereRaw("UPPER(TRIM(account_name)) LIKE ?", ['%' . $query . '%'])
-                  ->orWhereRaw("UPPER(TRIM(meter_number)) LIKE ?", ['%' . $query . '%'])
-                  ->orWhereRaw("UPPER(TRIM(cons_ctrl)) LIKE ?", ['%' . $query . '%']);
-            })
-            ->orderBy($accountNoColumn, 'asc')
-            ->first();
+        $consumer = ConsumerZone::findByAccountNo($searchTerm);
+
+        if (! $consumer) {
+            $consumer = ConsumerZone::where(function ($q) use ($query) {
+                    $q->whereRaw('UPPER(TRIM(account_name)) LIKE ?', ['%' . $query . '%'])
+                      ->orWhereRaw('UPPER(TRIM(meter_number)) LIKE ?', ['%' . $query . '%'])
+                      ->orWhereRaw('UPPER(TRIM(cons_ctrl)) LIKE ?', ['%' . $query . '%']);
+                })
+                ->orderBy($accountNoColumn, 'asc')
+                ->first();
+        }
 
         if ($consumer) {
               $consumer->setAttribute(
@@ -215,12 +217,12 @@ class ConsumerController extends Controller
                 'latest_bill' => $latestBill,
                 'meter_reading' => $meterReading,
             ]);
-        } else {
-            return response()->json([
-                'success' => false,
-                'message' => 'No consumer found matching your search'
-            ], 404);
         }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'No consumer found matching your search'
+        ], 404);
     }
 
     /**

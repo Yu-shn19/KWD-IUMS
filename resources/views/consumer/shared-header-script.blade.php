@@ -49,12 +49,17 @@
 
     function fetchConsumerByAccountNo(accountNo, callback) {
         const url = "{{ route('consumer.search') }}?search=" + encodeURIComponent(accountNo);
+        const wanted = String(accountNo).replace(/-/g, '').trim().toUpperCase();
         fetch(url).then(function(r) { return r.json(); }).then(function(data) {
             if (data && data.success && data.consumer) {
-                callback(data.consumer);
-            } else {
-                callback(null);
+                const got = String(data.consumer.account_no || data.consumer.account_number || '')
+                    .replace(/-/g, '').trim().toUpperCase();
+                if (got === wanted) {
+                    callback(data.consumer);
+                    return;
+                }
             }
+            callback(null);
         }).catch(function() { callback(null); });
     }
 
