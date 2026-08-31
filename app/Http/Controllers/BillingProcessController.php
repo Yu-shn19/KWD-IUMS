@@ -4505,19 +4505,40 @@ class BillingProcessController extends Controller
                 'or_number' => 'required|string'
             ]);
 
-            $orNumber = trim($validated['or_number']);
-            
+            $orNumber = preg_replace('/-SC$/i', '', trim($validated['or_number']));
+
             // Find payment by OR number
             $payment = ConsumerPayment::query()->where(mr_col('or_number'), $orNumber)->first();
+            $consumerZoneId = $payment
+                ? (int) ($payment->consumer_zone_id ?? $payment->consumer_id ?? 0)
+                : 0;
 
-            // If no consumer_payment exists, still clean orphan LRO payment rows for this OR.
+            // If no consumer_payment exists, still clean orphan ledger + LRO rows for this OR (including -SC).
             if (!$payment) {
+                $orphanConsumerId = (int) (ConsumerLedger::query()
+                    ->where(mr_col('trans'), 'PAYMENT')
+                    ->where(function ($q) use ($orNumber) {
+                        $q->where(mr_col('reference'), $orNumber)
+                            ->orWhere(mr_col('reference'), $orNumber . '-SC');
+                    })
+                    ->value(mr_col('consumer_zone_id')) ?? 0);
+
+                $deletedLedgerRows = ConsumerPayment::deleteRelatedLedgerPaymentRows(
+                    null,
+                    $orphanConsumerId ?: null,
+                    $orNumber
+                );
                 $deletedOrphanLroRows = SundryLedgerRemarks::deletePaymentCmRowsForOr($orNumber);
 
-                if ($deletedOrphanLroRows > 0) {
+                if ($deletedLedgerRows > 0 && $orphanConsumerId > 0) {
+                    $this->recalculateConsumerLedgerBalances($orphanConsumerId);
+                }
+
+                if ($deletedLedgerRows > 0 || $deletedOrphanLroRows > 0) {
                     return response()->json([
                         'success' => true,
-                        'message' => 'No consumer payment found for OR # ' . $orNumber . ', but orphan LRO row(s) were deleted.',
+                        'message' => 'No consumer payment found for OR # ' . $orNumber . ', but orphan payment row(s) were deleted.',
+                        'deleted_ledger_rows' => $deletedLedgerRows,
                         'deleted_lro_rows' => $deletedOrphanLroRows,
                     ]);
                 }
@@ -4530,15 +4551,21 @@ class BillingProcessController extends Controller
 
             $orForLro = trim((string) ($payment->or_number ?? $orNumber));
 
-            // Delete the payment (cascade delete will handle consumer_ledger payment entries).
+            // Delete the payment (cascade delete will handle main + -SC consumer_ledger payment entries).
             $payment->delete();
 
-            // Safety net: remove any LRO CM rows still linked to this OR.
+            // Safety net: leftover -SC / LRO rows still linked to this OR.
+            $deletedLedgerRows = ConsumerPayment::deleteRelatedLedgerPaymentRows(null, $consumerZoneId ?: null, $orForLro);
             $deletedLroRows = SundryLedgerRemarks::deletePaymentCmRowsForOr($orForLro);
+
+            if ($consumerZoneId > 0) {
+                $this->recalculateConsumerLedgerBalances($consumerZoneId);
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Payment with OR # ' . $orNumber . ' has been deleted successfully.',
+                'deleted_ledger_rows' => $deletedLedgerRows,
                 'deleted_lro_rows' => $deletedLroRows,
             ]);
         } catch (\Exception $e) {

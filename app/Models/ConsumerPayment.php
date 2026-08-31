@@ -301,55 +301,20 @@ class ConsumerPayment extends Model
         static::deleting(function ($payment) {
             SundryLedgerRemarks::deletePaymentCmRowsForOr($payment->or_number);
 
-            $ledgerEntry = ConsumerLedger::query()
-                ->where(mr_col('consumer_payment_id'), $payment->id)
-                ->where(mr_col('trans'), 'PAYMENT')
-                ->first();
-
             $consumerZoneId = $payment->consumer_zone_id ?? $payment->consumer_id;
+            $deleted = static::deleteRelatedLedgerPaymentRows(
+                (int) $payment->id,
+                $consumerZoneId ? (int) $consumerZoneId : null,
+                $payment->or_number
+            );
 
-            if (!$ledgerEntry && $consumerZoneId) {
-                if ($payment->or_number && $payment->payment_amount) {
-                    $ledgerEntry = ConsumerLedger::query()
-                        ->where(mr_col('consumer_zone_id'), $consumerZoneId)
-                        ->where(mr_col('trans'), 'PAYMENT')
-                        ->where(mr_col('reference'), $payment->or_number)
-                        ->where(mr_col('credit'), $payment->payment_amount)
-                        ->orderBy(mr_col('id'), 'desc')
-                        ->first();
-                }
-
-                if (!$ledgerEntry && $payment->or_number) {
-                    $ledgerEntry = ConsumerLedger::query()
-                        ->where(mr_col('consumer_zone_id'), $consumerZoneId)
-                        ->where(mr_col('trans'), 'PAYMENT')
-                        ->where(mr_col('reference'), $payment->or_number)
-                        ->orderBy(mr_col('id'), 'desc')
-                        ->first();
-                }
-
-                if (!$ledgerEntry && $payment->payment_amount && $payment->paid_at) {
-                    $paymentDate = \Carbon\Carbon::parse($payment->paid_at)->format('Y-m-d');
-                    $ledgerEntry = ConsumerLedger::query()
-                        ->where(mr_col('consumer_zone_id'), $consumerZoneId)
-                        ->where(mr_col('trans'), 'PAYMENT')
-                        ->where(mr_col('credit'), $payment->payment_amount)
-                        ->where(mr_col('date'), $paymentDate)
-                        ->orderBy(mr_col('id'), 'desc')
-                        ->first();
-                }
-            }
-
-            if ($ledgerEntry) {
-                Log::info('Cascade deleting PAYMENT entry from consumer_ledgers', [
+            if ($deleted > 0) {
+                Log::info('Cascade deleting PAYMENT ledger row(s) including SC discount', [
                     'consumer_payment_id' => $payment->id,
-                    'consumer_ledger_id' => $ledgerEntry->id,
                     'or_number' => $payment->or_number,
-                    'payment_amount' => $payment->payment_amount,
                     'consumer_zone_id' => $consumerZoneId,
+                    'deleted_rows' => $deleted,
                 ]);
-
-                $ledgerEntry->delete();
             } else {
                 Log::warning('No matching PAYMENT entry found in consumer_ledgers for cascade delete', [
                     'consumer_payment_id' => $payment->id,
@@ -360,5 +325,43 @@ class ConsumerPayment extends Model
                 ]);
             }
         });
+    }
+
+    /**
+     * Delete main PAYMENT and senior-citizen (-SC) ledger rows for an OR.
+     */
+    public static function deleteRelatedLedgerPaymentRows(?int $paymentId, ?int $consumerZoneId, ?string $orNumber): int
+    {
+        $or = preg_replace('/-SC$/i', '', trim((string) $orNumber));
+        $ledgerIds = collect();
+
+        if ($paymentId) {
+            $ledgerIds = $ledgerIds->merge(
+                ConsumerLedger::query()
+                    ->where(mr_col('consumer_payment_id'), $paymentId)
+                    ->where(mr_col('trans'), 'PAYMENT')
+                    ->pluck(mr_col('id'))
+            );
+        }
+
+        if ($or !== '') {
+            $byReference = ConsumerLedger::query()
+                ->where(mr_col('trans'), 'PAYMENT')
+                ->where(function ($q) use ($or) {
+                    $q->where(mr_col('reference'), $or)
+                        ->orWhere(mr_col('reference'), $or . '-SC');
+                });
+            if ($consumerZoneId) {
+                $byReference->where(mr_col('consumer_zone_id'), $consumerZoneId);
+            }
+            $ledgerIds = $ledgerIds->merge($byReference->pluck(mr_col('id')));
+        }
+
+        $ledgerIds = $ledgerIds->unique()->filter()->values();
+        if ($ledgerIds->isEmpty()) {
+            return 0;
+        }
+
+        return (int) ConsumerLedger::query()->whereIn(mr_col('id'), $ledgerIds->all())->delete();
     }
 }
