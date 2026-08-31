@@ -446,11 +446,13 @@ class BillingProcessController extends Controller
                         // Calculate bill amounts
                         // current_bill is 0 at this point (no reading yet), but we can use estimated if provided
                         $currentBill = (float)($scheduleData['current_billing'] ?? 0);
-                        // Water Maintenance Charge should NOT be added during preparation
-                        // It will only be added to the ledger when the reading is actually completed
-                        $others = 0.00; // Water Maintenance Charge - set to 0 during preparation
-                        $debit = $currentBill + $others; // Should be 0.00 + 0.00 = 0.00
-                        $newBalance = $previousBalance + $debit; // Previous balance + 0.00 = previous balance
+                        // Carry schedule breakdown onto the BILLING row for display.
+                        // Do not add them to debit — they already sit on the DM balance.
+                        $penalty = round((float) ($schedule->penalty ?? $scheduleData['penalty'] ?? 0), 2);
+                        $others = round((float) ($schedule->meter_rental_arrears ?? $scheduleData['meter_rental_arrears'] ?? 0), 2);
+                        $priorYears = round((float) ($schedule->prior_years ?? $scheduleData['prior_years'] ?? 0), 2);
+                        $debit = $currentBill;
+                        $newBalance = $previousBalance + $debit;
                         
                         // Log for debugging to help identify issues
                         Log::info('Balance calculation for BILLING entry during schedule save - following consumer_ledgers table', [
@@ -462,7 +464,9 @@ class BillingProcessController extends Controller
                             'latest_ledger_entry_balance' => $latestLedgerEntry ? (float)($latestLedgerEntry->balance ?? 0) : null,
                             'previous_balance_used' => $previousBalance,
                             'current_billing' => $currentBill,
+                            'penalty' => $penalty,
                             'others' => $others,
+                            'prior_years' => $priorYears,
                             'debit' => $debit,
                             'new_balance' => $newBalance
                         ]);
@@ -471,7 +475,7 @@ class BillingProcessController extends Controller
                         $username = $this->extractFirstName($preparedBy);
                         
                         // Create BILLING entry in consumer_ledgers
-                        ConsumerLedger::create([
+                        $billingPayload = [
                             'consumer_zone_id' => $consumer->id,
                             'schedule_id' => $schedule->id,
                             'trans' => 'BILLING', // Use 'BILLING' to match historical format
@@ -481,14 +485,18 @@ class BillingProcessController extends Controller
                             'reading' => $prevRead, // Same as meter_reading_schedules.previous_reading (edited Prev. Read from UI)
                             'volume' => 0, // Consumption is 0 until reading is taken
                             'billamount' => $currentBill,
-                            'penalty' => 0, // Penalty is a separate entry, not included in BILLING
+                            'penalty' => $penalty,
                             'others' => $others,
                             'debit' => $debit,
                             'credit' => 0,
                             'balance' => $newBalance,
                             'username' => $username,
                             'txtime' => now(),
-                        ]);
+                        ];
+                        if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
+                            $billingPayload['prio_years'] = $priorYears;
+                        }
+                        ConsumerLedger::create($billingPayload);
                     }
                 }
 
