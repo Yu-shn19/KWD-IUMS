@@ -175,6 +175,59 @@ class ConsumerPayment extends Model
     }
 
     /**
+     * Sum payment-breakdown columns for remaining-due calculation.
+     * Remaining field = original − paid-to-that-same-column (floor 0).
+     *
+     * @return array{current_billing: float, current_mr: float, prio_years: float, current_arrears: float, current_penalty: float, mr_arrears: float}
+     */
+    public static function summedBreakdownForConsumer(int $consumerZoneId, $paidOnOrAfter = null): array
+    {
+        $empty = [
+            'current_billing' => 0.0,
+            'current_mr' => 0.0,
+            'prio_years' => 0.0,
+            'current_arrears' => 0.0,
+            'current_penalty' => 0.0,
+            'mr_arrears' => 0.0,
+        ];
+
+        if ($consumerZoneId <= 0 || ! Schema::hasTable('consumer_payments')) {
+            return $empty;
+        }
+
+        $query = static::query()->forConsumerZone($consumerZoneId)
+            ->where(function ($q) {
+                $q->whereNull(mr_col('remarks'))
+                    ->orWhere(mr_col('remarks'), 'not like', 'Cancelled OR#%');
+            })
+            ->where(mr_col('payment_amount'), '>', 0);
+
+        if ($paidOnOrAfter) {
+            $cutoff = $paidOnOrAfter instanceof \Carbon\Carbon
+                ? $paidOnOrAfter->copy()
+                : \Carbon\Carbon::parse($paidOnOrAfter);
+            $query->whereRaw('COALESCE(paid_at, created_at) >= ?', [$cutoff->format('Y-m-d H:i:s')]);
+        }
+
+        $selects = [];
+        foreach (array_keys($empty) as $column) {
+            if (Schema::hasColumn('consumer_payments', $column)) {
+                $selects[] = "COALESCE(SUM(`{$column}`), 0) as `{$column}`";
+            }
+        }
+        if ($selects === []) {
+            return $empty;
+        }
+
+        $row = $query->selectRaw(implode(', ', $selects))->first();
+        foreach ($empty as $column => $_) {
+            $empty[$column] = round((float) ($row->{$column} ?? 0), 2);
+        }
+
+        return $empty;
+    }
+
+    /**
      * Keep only attributes that exist on consumer_payments; map legacy consumer_id → consumer_zone_id.
      */
     public static function filterTableAttributes(array $data): array

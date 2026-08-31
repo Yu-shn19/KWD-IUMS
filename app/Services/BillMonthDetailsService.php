@@ -1797,7 +1797,33 @@ class BillMonthDetailsService
                     }
                 }
 
-                $overlay = $this->formatScheduleDownloadedBreakdown($overlaySchedule, $overlayDownloaded);
+                $hasExplicitOrPaidBreakdown = ($s->orNumberInput !== '' && $s->orPayment);
+                $paidAfter = $overlaySchedule?->created_at
+                    ? Carbon::parse($overlaySchedule->created_at)
+                    : $s->fromMonthDate->copy()->startOfMonth();
+
+                if ($hasExplicitOrPaidBreakdown) {
+                    $overlay = [
+                        'current_billing' => round((float) ($s->orPayment->current_billing ?? 0), 2),
+                        'current_meter_rental' => round((float) ($s->orPayment->current_mr ?? 0), 2),
+                        'prio_years' => round((float) ($s->orPayment->prio_years ?? 0), 2),
+                        'current_arrears' => round((float) ($s->orPayment->current_arrears ?? 0), 2),
+                        'penalty' => round((float) ($s->orPayment->current_penalty ?? 0), 2),
+                        'meter_rental_arrears' => round((float) ($s->orPayment->mr_arrears ?? 0), 2),
+                    ];
+                } else {
+                    $overlay = $this->formatScheduleDownloadedBreakdown(
+                        $overlaySchedule,
+                        $overlayDownloaded,
+                        $s->currentBalance,
+                        (int) $s->consumer->id,
+                        $paidAfter
+                    );
+                }
+
+                $responsePaymentStatus = $hasExplicitOrPaidBreakdown
+                    ? 'paid'
+                    : ((round((float) $s->currentBalance, 2) <= 0.009) ? $s->paymentStatus : 'unpaid');
 
                 return response()->json([
                     'success' => true,
@@ -1815,7 +1841,7 @@ class BillMonthDetailsService
                         'meter_rental_arrears' => $overlay['meter_rental_arrears'],
                         'senior_citizen_discount' => round($s->seniorCitizenDiscount, 2),
                         'current_consumption' => $selectedConsumption,
-                        'payment_status' => $s->paymentStatus,
+                        'payment_status' => $responsePaymentStatus,
                         'downloaded_id' => $downloadedId,
                     ], $s->dateRangeMode ? [
                         'from_date' => $s->fromMonthDate->format('Y-m-d'),
@@ -1828,10 +1854,20 @@ class BillMonthDetailsService
      * Payment Breakdown: downloaded_readings (current bill / current MR)
      * and meter_reading_schedules (PY, arrears, penalty, MR arrears).
      *
+     * Negative arrears (CM credit) display as 0.00 and reduce Current Billing
+     * so the breakdown total matches the ledger balance.
+     *
+     * Remaining due subtracts consumer_payments from the same column that was paid.
+     *
      * @return array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float}
      */
-    private function formatScheduleDownloadedBreakdown(?MeterReadingSchedule $schedule, ?DownloadedReading $downloaded): array
-    {
+    private function formatScheduleDownloadedBreakdown(
+        ?MeterReadingSchedule $schedule,
+        ?DownloadedReading $downloaded,
+        ?float $currentBalance = null,
+        ?int $consumerZoneId = null,
+        $paidAfter = null
+    ): array {
         $currentBilling = $downloaded && $downloaded->current_billing !== null
             ? (float) $downloaded->current_billing
             : (float) ($schedule?->current_billing ?? 0);
@@ -1841,13 +1877,61 @@ class BillMonthDetailsService
             $currentMeterRental = (float) ($downloaded->current_meter_rental ?? 0);
         }
 
+        $prioYears = round((float) ($schedule?->prior_years ?? 0), 2);
+        $currentArrears = round((float) ($schedule?->arrears ?? 0), 2);
+        $penalty = round((float) ($schedule?->penalty ?? 0), 2);
+        $meterRentalArrears = round((float) ($schedule?->meter_rental_arrears ?? 0), 2);
+
+        if ($currentArrears < 0) {
+            $currentBilling = round(max(0.0, $currentBilling - abs($currentArrears)), 2);
+            $currentArrears = 0.0;
+        }
+
+        $paid = ($consumerZoneId && $consumerZoneId > 0)
+            ? ConsumerPayment::summedBreakdownForConsumer($consumerZoneId, $paidAfter)
+            : [
+                'current_billing' => 0.0,
+                'current_mr' => 0.0,
+                'prio_years' => 0.0,
+                'current_arrears' => 0.0,
+                'current_penalty' => 0.0,
+                'mr_arrears' => 0.0,
+            ];
+        $hasPaid = round(array_sum($paid), 2) > 0.009;
+
+        $breakdownTotal = round(
+            $currentBilling + $currentMeterRental + $prioYears + $currentArrears + $penalty + $meterRentalArrears,
+            2
+        );
+        $balance = $currentBalance !== null ? round($currentBalance, 2) : null;
+        if ($balance !== null && $balance <= 0.009) {
+            return [
+                'current_billing' => 0.0,
+                'current_meter_rental' => 0.0,
+                'prio_years' => 0.0,
+                'current_arrears' => 0.0,
+                'penalty' => 0.0,
+                'meter_rental_arrears' => 0.0,
+            ];
+        }
+        if (!$hasPaid && $balance !== null && $balance >= 0 && $breakdownTotal > $balance + 0.009) {
+            $currentBilling = round(max(0.0, $currentBilling - ($breakdownTotal - $balance)), 2);
+        }
+
+        $currentBilling = round(max(0.0, $currentBilling - ($paid['current_billing'] ?? 0)), 2);
+        $currentMeterRental = round(max(0.0, $currentMeterRental - ($paid['current_mr'] ?? 0)), 2);
+        $prioYears = round(max(0.0, $prioYears - ($paid['prio_years'] ?? 0)), 2);
+        $currentArrears = round(max(0.0, $currentArrears - ($paid['current_arrears'] ?? 0)), 2);
+        $penalty = round(max(0.0, $penalty - ($paid['current_penalty'] ?? 0)), 2);
+        $meterRentalArrears = round(max(0.0, $meterRentalArrears - ($paid['mr_arrears'] ?? 0)), 2);
+
         return [
-            'current_billing' => round($currentBilling, 2),
-            'current_meter_rental' => round($currentMeterRental, 2),
-            'prio_years' => round((float) ($schedule?->prior_years ?? 0), 2),
-            'current_arrears' => round((float) ($schedule?->arrears ?? 0), 2),
-            'penalty' => round((float) ($schedule?->penalty ?? 0), 2),
-            'meter_rental_arrears' => round((float) ($schedule?->meter_rental_arrears ?? 0), 2),
+            'current_billing' => $currentBilling,
+            'current_meter_rental' => $currentMeterRental,
+            'prio_years' => $prioYears,
+            'current_arrears' => $currentArrears,
+            'penalty' => $penalty,
+            'meter_rental_arrears' => $meterRentalArrears,
         ];
     }
 

@@ -883,6 +883,54 @@ class BillingLookupService
             $currentMeterRental = (float) ($downloaded->current_meter_rental ?? 0);
         }
 
+        $currentArrears = round((float) ($schedule?->arrears ?? 0), 2);
+        $prioYears = round((float) ($schedule?->prior_years ?? 0), 2);
+        $penalty = round((float) ($schedule?->penalty ?? 0), 2);
+        $meterRentalArrears = round((float) ($schedule?->meter_rental_arrears ?? 0), 2);
+
+        if ($currentArrears < 0) {
+            $currentBill = round(max(0.0, $currentBill - abs($currentArrears)), 2);
+            $currentArrears = 0.0;
+        }
+
+        $skipPaidSubtract = ($state->orNumberInput !== '' && $state->orLookupPayment);
+        $paid = (!$skipPaidSubtract && $consumer)
+            ? ConsumerPayment::summedBreakdownForConsumer(
+                (int) $consumer->id,
+                $schedule?->created_at ? Carbon::parse($schedule->created_at) : ($state->billMonthDate?->copy()->startOfMonth())
+            )
+            : [
+                'current_billing' => 0.0,
+                'current_mr' => 0.0,
+                'prio_years' => 0.0,
+                'current_arrears' => 0.0,
+                'current_penalty' => 0.0,
+                'mr_arrears' => 0.0,
+            ];
+        $hasPaid = round(array_sum($paid), 2) > 0.009;
+
+        $ledgerBalance = $consumer ? round((float) $consumer->getLedgerBalance(), 2) : null;
+        if ($ledgerBalance !== null && $ledgerBalance <= 0.009 && !$skipPaidSubtract) {
+            $currentBill = 0.0;
+            $currentMeterRental = 0.0;
+            $prioYears = 0.0;
+            $currentArrears = 0.0;
+            $penalty = 0.0;
+            $meterRentalArrears = 0.0;
+        } else {
+            $breakdownTotal = round($currentBill + $currentMeterRental + $prioYears + $currentArrears + $penalty + $meterRentalArrears, 2);
+            if (!$hasPaid && $ledgerBalance !== null && $ledgerBalance >= 0 && $breakdownTotal > $ledgerBalance + 0.009) {
+                $currentBill = round(max(0.0, $currentBill - ($breakdownTotal - $ledgerBalance)), 2);
+            }
+
+            $currentBill = round(max(0.0, $currentBill - ($paid['current_billing'] ?? 0)), 2);
+            $currentMeterRental = round(max(0.0, $currentMeterRental - ($paid['current_mr'] ?? 0)), 2);
+            $prioYears = round(max(0.0, $prioYears - ($paid['prio_years'] ?? 0)), 2);
+            $currentArrears = round(max(0.0, $currentArrears - ($paid['current_arrears'] ?? 0)), 2);
+            $penalty = round(max(0.0, $penalty - ($paid['current_penalty'] ?? 0)), 2);
+            $meterRentalArrears = round(max(0.0, $meterRentalArrears - ($paid['mr_arrears'] ?? 0)), 2);
+        }
+
         return [
             'bill_month' => $state->billMonthDate?->format('Y-m'),
             'bill_month_input' => $state->billMonthDate?->format('m-Y'),
@@ -898,11 +946,11 @@ class BillingLookupService
             'current_billing' => round($currentBill, 2),
             'current_meter_rental' => round($currentMeterRental, 2),
             'meter_maintenance_charge' => round($currentMeterRental, 2),
-            'penalty' => round((float) ($schedule?->penalty ?? 0), 2),
-            'current_arrears' => round((float) ($schedule?->arrears ?? 0), 2),
-            'prio_years' => round((float) ($schedule?->prior_years ?? 0), 2),
-            'meter_rental_arrears' => round((float) ($schedule?->meter_rental_arrears ?? 0), 2),
-            'arrears' => round((float) ($schedule?->arrears ?? ($state->reading->arrears !== null ? (float) $state->reading->arrears : 0)), 2),
+            'penalty' => $penalty,
+            'current_arrears' => $currentArrears,
+            'prio_years' => $prioYears,
+            'meter_rental_arrears' => $meterRentalArrears,
+            'arrears' => $currentArrears,
             'total_amount' => $state->reading->total_amount !== null ? (float) $state->reading->total_amount : 0.0,
             'sedr_number' => $state->reading->sedr_number ?? null,
         ];

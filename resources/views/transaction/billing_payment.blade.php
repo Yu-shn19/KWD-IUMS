@@ -1284,12 +1284,18 @@
                 if (!data) {
                     return;
                 }
-                setNumberFieldValue(document.getElementById('fieldCurrentBill'), data.current_billing ?? 0);
+                let currentBilling = parseNumeric(data.current_billing);
+                let currentArrears = parseNumeric(data.current_arrears ?? data.arrears);
+                if (currentArrears < 0) {
+                    currentBilling = Math.max(0, currentBilling - Math.abs(currentArrears));
+                    currentArrears = 0;
+                }
+                setNumberFieldValue(document.getElementById('fieldCurrentBill'), currentBilling);
                 setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.current_meter_rental ?? 0);
                 setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.prio_years ?? 0);
                 const arrearsField = document.getElementById('fieldPenalty');
                 if (arrearsField) {
-                    setNumberFieldValue(arrearsField, data.current_arrears ?? data.arrears ?? 0);
+                    setNumberFieldValue(arrearsField, currentArrears);
                     arrearsField.dispatchEvent(new Event('input', { bubbles: true }));
                 }
                 setNumberFieldValue(document.getElementById('fieldMaintenance'), data.penalty ?? 0);
@@ -1318,6 +1324,46 @@
                 }
                 return ['current_billing', 'current_meter_rental', 'prio_years', 'current_arrears', 'penalty', 'meter_rental_arrears']
                     .some((key) => parseNumeric(data[key]) > 0.009);
+            };
+
+            const collectSundryAmountSum = () => {
+                let sundriesSum = 0;
+                for (let i = 1; i <= 4; i++) {
+                    const amountField = document.getElementById('sundryAmount' + i);
+                    if (amountField) {
+                        sundriesSum += Math.max(parseNumeric(amountField.value), 0);
+                    }
+                }
+                return sundriesSum;
+            };
+
+            // Partial cash: apply the bill portion to Prio Years only (collection report).
+            // Full cash: keep the on-screen breakdown as-is.
+            const allocatePaymentBreakdown = (overallTotal, amountTendered, fields) => {
+                const sundriesSum = collectSundryAmountSum();
+                const isPartial = amountTendered + 0.009 < overallTotal;
+                if (!isPartial) {
+                    return {
+                        paymentAmount: overallTotal,
+                        current_billing: fields.current_billing,
+                        current_mr: fields.current_mr,
+                        prio_years: fields.prio_years,
+                        current_arrears: fields.current_arrears,
+                        current_penalty: fields.current_penalty,
+                        mr_arrears: fields.mr_arrears,
+                    };
+                }
+                const paymentAmount = amountTendered;
+                const billPortion = Math.max(0, Math.round((paymentAmount - sundriesSum) * 100) / 100);
+                return {
+                    paymentAmount,
+                    current_billing: 0,
+                    current_mr: 0,
+                    prio_years: billPortion,
+                    current_arrears: 0,
+                    current_penalty: 0,
+                    mr_arrears: 0,
+                };
             };
             
             // ArrowUp / ArrowDown navigation between amount fields (e.g. Penalty -> Maintenance).
@@ -1849,9 +1895,8 @@
                 const isPaid = isExplicitOrLookup ? hasExactOrMatch : hasMonthPaidRecord;
                 const hasPaymentBreakdown = payment && (payment.current_billing !== undefined || payment.current_penalty !== undefined || payment.mr_arrears !== undefined);
                 const hasCurrentBalance = (parseFloat(currentBalanceValue) || 0) > 0.009;
-                // Keep saved paid breakdown for paid-month account lookup (including zero balance).
-                // For remaining-balance + explicit OR flow, `isPaid` is false until OR matches, so API recompute still runs.
-                const keepPaidMonthOrBreakdown = isPaid && hasPaymentBreakdown;
+                // Keep saved OR breakdown only when looking up that OR, or when the account is fully paid.
+                const keepPaidMonthOrBreakdown = isPaid && hasPaymentBreakdown && (isExplicitOrLookup || !hasCurrentBalance);
                 if (keepPaidMonthOrBreakdown) {
                     // Paid in selected month + still has balance: keep the saved OR/payment breakdown.
                     lockPaidOrBreakdown = true;
@@ -1933,28 +1978,22 @@
                     setPaymentStatusForMonth(isPaid ? 'paid' : 'unpaid');
                 }
 
-                if (isPaid) {
-                    // When paid: show breakdown from payment record (consumer_payments) when available
-                    const hasPaymentBreakdown = payment && (payment.current_billing !== undefined || payment.current_penalty !== undefined || payment.mr_arrears !== undefined);
-                    if (hasPaymentBreakdown) {
-                        applySavedPaymentBreakdown(payment);
-                        setNumberFieldValue(document.getElementById('fieldAdvances'), payment.advances ?? 0);
-                        latestServerSeniorDiscount = parseNumeric(payment.senior_citizen_discount ?? 0);
-                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                        const enableSeniorDiscountCheckboxPaid = document.getElementById('enableSeniorDiscount');
-                        if (enableSeniorDiscountCheckboxPaid) {
-                            enableSeniorDiscountCheckboxPaid.checked = (parseFloat(payment.senior_citizen_discount) || 0) > 0;
-                        }
-                        setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
-                        setNumberFieldValue(document.getElementById('fieldFees'), 0);
-                        setNumberFieldValue(document.getElementById('fieldInspection'), 0);
+                if (keepPaidMonthOrBreakdown && hasPaymentBreakdown) {
+                    applySavedPaymentBreakdown(payment);
+                    setNumberFieldValue(document.getElementById('fieldAdvances'), payment.advances ?? 0);
+                    latestServerSeniorDiscount = parseNumeric(payment.senior_citizen_discount ?? 0);
+                    setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
+                    const enableSeniorDiscountCheckboxPaid = document.getElementById('enableSeniorDiscount');
+                    if (enableSeniorDiscountCheckboxPaid) {
+                        enableSeniorDiscountCheckboxPaid.checked = (parseFloat(payment.senior_citizen_discount) || 0) > 0;
                     }
-                    
-                    
-                    // When paid but no breakdown in payload: leave billing-populated values (don't force 0)
+                    setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
+                    setNumberFieldValue(document.getElementById('fieldFees'), 0);
+                    setNumberFieldValue(document.getElementById('fieldInspection'), 0);
                     updateTotals();
+                }
 
-                    // Payment exists: Don't populate payment-specific fields, allow new payment entry
+                if (isPaid) {
                     const existingOrNumber = downloaded_reading.official_receipt_number || payment.reference || 'N/A';
                     
                     // Reset payment method to default
@@ -1963,12 +2002,13 @@
                     // Clear payment remarks (don't populate from existing payment)
                     paymentRemarksField.value = '';
                     
-                    // Don't populate payment amount - show 0.00 for paid bill
-                    if (paymentAmountField) {
-                        paymentAmountField.value = formatCurrency(0);
-                    }
-                    if (paymentTotalField) {
-                        paymentTotalField.value = formatCurrency(0);
+                    if (!hasCurrentBalance) {
+                        if (paymentAmountField) {
+                            paymentAmountField.value = formatCurrency(0);
+                        }
+                        if (paymentTotalField) {
+                            paymentTotalField.value = formatCurrency(0);
+                        }
                     }
                     
                     // OR behavior for paid month:
@@ -2163,8 +2203,8 @@
                     const hasOutstandingBalance = (parseFloat(balanceFromPayload) || 0) > 0.009;
                     const shouldUseOrBreakdownForPaidMonth = currentOrValue !== '' && paidWithBreakdownForMonth && hasOutstandingBalance;
                     useOrForBreakdownLookup = shouldUseOrBreakdownForPaidMonth;
-                    // Keep paid payload lock only when we are NOT intentionally switching to OR-based breakdown.
-                    lockPaidOrBreakdown = !shouldUseOrBreakdownForPaidMonth && paidWithBreakdownForMonth && hasOutstandingBalance;
+                    // Remaining balance after partial pay: load a new breakdown, do not lock the last OR.
+                    lockPaidOrBreakdown = paidWithBreakdownForMonth && !hasOutstandingBalance;
 
                     populateFromLookup(payload.data);
                     if (paymentRemarksField) {
@@ -2938,16 +2978,6 @@
                     return;
                 }
 
-                if (amountTendered < amountDue) {
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Insufficient Amount',
-                        text: 'Amount tendered must be equal to or greater than the amount due.',
-                        confirmButtonColor: '#e74a3b'
-                    });
-                    return;
-                }
-
                 const paymentMethod = paymentTypeField.value || 'cash';
                 const referenceNumber = document.getElementById('referenceNumber')?.value?.trim() || null;
                 const remarks = paymentRemarksField.value?.trim() || null;
@@ -2963,6 +2993,14 @@
                 const materialsValue = parseNumeric(document.getElementById('fieldMaterials')?.value || 0);
                 const feesChargesValue = parseNumeric(document.getElementById('fieldFees')?.value || 0);
                 const inspectionFeeValue = parseNumeric(document.getElementById('fieldInspection')?.value || 0);
+                const allocated = allocatePaymentBreakdown(amountDue, amountTendered, {
+                    current_billing: currentBillValue,
+                    current_mr: currentMrValue,
+                    prio_years: prioYearsValue,
+                    current_arrears: currentArrearsValue,
+                    current_penalty: currentPenaltyValue,
+                    mr_arrears: mrArrearsValue,
+                });
 
                 // Check if Senior Citizen Discount is enabled
                 const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
@@ -3016,21 +3054,21 @@
                         downloaded_id: currentDownloadedId || null,
                         account_number: currentDownloadedId ? undefined : accountNumberForPayment,
                         account_name: bamSearchAccountName || undefined,
-                        amount_due: amountDue,
+                        amount_due: allocated.paymentAmount,
                         amount_tendered: amountTendered,
                         payment_method: paymentMethod,
                         reference_number: referenceNumber,
                         remarks: remarks,
                         official_receipt_number: baseOrNumber,
                         is_update: false,
-                        current_billing: currentBillValue,
+                        current_billing: allocated.current_billing,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
-                        current_penalty: currentPenaltyValue,
-                        mr_arrears: mrArrearsValue,
+                        current_penalty: allocated.current_penalty,
+                        mr_arrears: allocated.mr_arrears,
                         advances: advancesValue,
-                        current_arrears: currentArrearsValue,
-                        prio_years: prioYearsValue,
-                        current_mr: currentMrValue,
+                        current_arrears: allocated.current_arrears,
+                        prio_years: allocated.prio_years,
+                        current_mr: allocated.current_mr,
                         materials: materialsValue,
                         fees_charges: feesChargesValue,
                         inspection_fee: inspectionFeeValue,
@@ -3051,7 +3089,7 @@
                             html: `
                                 <div class="text-left">
                                     <p><strong>OR Number:</strong> ${result.data.official_receipt_number || baseOrNumber}</p>
-                                    <p><strong>Amount:</strong> ${formatCurrency(amountDue)}</p>
+                                    <p><strong>Amount:</strong> ${formatCurrency(allocated.paymentAmount)}</p>
                                     ${discountLine}
                                 </div>
                             `,
@@ -3132,15 +3170,6 @@
                         });
                         return;
                     }
-                    if (amountTendered < amountDue) {
-                        Swal.fire({
-                            icon: 'error',
-                            title: 'Insufficient Amount',
-                            text: 'Amount tendered must be equal to or greater than the amount due.',
-                            confirmButtonColor: '#e74a3b'
-                        });
-                        return;
-                    }
                     const paymentMethod = paymentTypeField.value || 'cash';
                     const referenceNumber = document.getElementById('referenceNumber')?.value?.trim() || null;
                     const remarks = paymentRemarksField.value?.trim() || null;
@@ -3154,6 +3183,14 @@
                     const materialsValue = parseNumeric(document.getElementById('fieldMaterials')?.value || 0);
                     const feesChargesValue = parseNumeric(document.getElementById('fieldFees')?.value || 0);
                     const inspectionFeeValue = parseNumeric(document.getElementById('fieldInspection')?.value || 0);
+                    const allocated = allocatePaymentBreakdown(amountDue, amountTendered, {
+                        current_billing: currentBillValue,
+                        current_mr: currentMrValue,
+                        prio_years: prioYearsValue,
+                        current_arrears: currentArrearsValue,
+                        current_penalty: currentPenaltyValue,
+                        mr_arrears: mrArrearsValue,
+                    });
                     const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
                     const hasSeniorCitizenDiscount = enableSeniorDiscountCheckbox && enableSeniorDiscountCheckbox.checked;
                     const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
@@ -3178,21 +3215,21 @@
                         downloaded_id: currentDownloadedId || null,
                         account_number: currentDownloadedId ? undefined : accountNumberForPayment || undefined,
                         account_name: bamSearchAccountName || undefined,
-                        amount_due: amountDue,
+                        amount_due: allocated.paymentAmount,
                         amount_tendered: amountTendered,
                         payment_method: paymentMethod,
                         reference_number: referenceNumber,
                         remarks: remarks,
                         official_receipt_number: baseOrNumber,
                         is_update: true,
-                        current_billing: currentBillValue,
+                        current_billing: allocated.current_billing,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
-                        current_penalty: currentPenaltyValue,
-                        mr_arrears: mrArrearsValue,
+                        current_penalty: allocated.current_penalty,
+                        mr_arrears: allocated.mr_arrears,
                         advances: advancesValue,
-                        current_arrears: currentArrearsValue,
-                        prio_years: prioYearsValue,
-                        current_mr: currentMrValue,
+                        current_arrears: allocated.current_arrears,
+                        prio_years: allocated.prio_years,
+                        current_mr: allocated.current_mr,
                         materials: materialsValue,
                         fees_charges: feesChargesValue,
                         inspection_fee: inspectionFeeValue,
@@ -3217,11 +3254,11 @@
                                 : '';
                             Swal.fire({
                                 icon: 'success',
-                                title: 'Payment Updated Successfully!',
-                                html: `
-                                    <div class="text-left">
-                                        <p><strong>OR Number:</strong> ${result.data.official_receipt_number || baseOrNumber}</p>
-                                        <p><strong>Amount:</strong> ${formatCurrency(amountDue)}</p>
+                            title: 'Payment Updated Successfully!',
+                            html: `
+                                <div class="text-left">
+                                    <p><strong>OR Number:</strong> ${result.data.official_receipt_number || baseOrNumber}</p>
+                                    <p><strong>Amount:</strong> ${formatCurrency(allocated.paymentAmount)}</p>
                                         ${discountLine}
                                     </div>
                                 `,
