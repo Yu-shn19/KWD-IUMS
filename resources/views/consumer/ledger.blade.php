@@ -117,7 +117,7 @@
   <!-- Account Ledger Table -->
                     <div id="ledgerCard" class="card shadow mb-4">
                         <div class="card-header py-3 d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between ledger-card-header">
-                            <h6 class="m-0 font-weight-bold text-primary mb-2 mb-md-0 pr-md-2">Account Ledger - F10</h6>
+                            <h6 class="m-0 font-weight-bold text-primary mb-2 mb-md-0 pr-md-2">Account Ledger</h6>
                             <div class="d-flex align-items-center flex-wrap justify-content-start justify-content-md-end ledger-header-badges">
                                 <span class="badge badge-secondary mr-2 mb-1 mb-md-0 d-none" id="ledgerConsumerStatus">N/A Consumer</span>
                                 <span class="badge badge-primary text-left text-break ledger-account-badge mr-2 mb-1 mb-md-0" id="ledgerAccountBadge">No Account Selected</span>
@@ -139,6 +139,7 @@
                                             <th class="text-center py-2 px-2" style="min-width: 80px;">Penalty</th>
                                             <th class="text-center py-2 px-2" style="min-width: 70px;">Others</th>
                                             <th class="text-center py-2 px-2" style="min-width: 80px;">PY</th>
+                                            <th class="text-center py-2 px-2" style="min-width: 90px;">Arrears</th>
                                             <th class="text-center py-2 px-2" style="min-width: 80px;">Debit</th>
                                             <th class="text-center py-2 px-2" style="min-width: 80px;">Credit</th>
                                             <th class="text-center py-2 px-2" style="min-width: 90px;">Balance</th>
@@ -148,7 +149,7 @@
                                     </thead>
                                     <tbody id="ledgerTableBody">
                                         <tr>
-                                            <td colspan="15" class="text-center text-muted py-5">
+                                            <td colspan="16" class="text-center text-muted py-5">
                                                 <i class="fas fa-search fa-2x mb-3 d-block"></i>
                                                 <p>Please search for a consumer to view ledger entries</p>
                                             </td>
@@ -221,6 +222,7 @@
                         <th class="c-num">VOL</th>
                         <th class="c-num">OTHERS</th>
                         <th class="c-num">PY</th>
+                        <th class="c-num">ARREARS</th>
                         <th class="c-num">BILL AMT</th>
                         <th class="c-num">DEBIT</th>
                         <th class="c-num">CREDIT</th>
@@ -567,7 +569,7 @@
                     lastLedgerPayload = null;
                     $('#ledgerTableBody').html(`
                         <tr>
-                            <td colspan="15" class="text-center text-muted py-5">
+                            <td colspan="16" class="text-center text-muted py-5">
                                 <i class="fas fa-search fa-2x mb-3 d-block"></i>
                                 <p>Please search for a consumer to view ledger entries</p>
                             </td>
@@ -579,7 +581,7 @@
                 // Show loading
                 $('#ledgerTableBody').html(`
                     <tr>
-                        <td colspan="15" class="text-center py-5">
+                        <td colspan="16" class="text-center py-5">
                             <i class="fas fa-spinner fa-spin fa-2x text-primary mb-3 d-block"></i>
                             <p>Loading ledger data...</p>
                         </td>
@@ -606,7 +608,7 @@
                             lastLedgerPayload = null;
                             $('#ledgerTableBody').html(`
                                 <tr>
-                                    <td colspan="15" class="text-center text-muted py-5">
+                                    <td colspan="16" class="text-center text-muted py-5">
                                         <i class="fas fa-inbox fa-2x mb-3 d-block"></i>
                                         <p>No ledger entries found for this account</p>
                                     </td>
@@ -621,7 +623,7 @@
                         console.error('Response:', xhr.responseJSON);
                         $('#ledgerTableBody').html(`
                             <tr>
-                                <td colspan="15" class="text-center text-danger py-5">
+                                <td colspan="16" class="text-center text-danger py-5">
                                     <i class="fas fa-exclamation-triangle fa-2x mb-3 d-block"></i>
                                     <p>Error loading ledger data. Please try again.</p>
                                 </td>
@@ -691,6 +693,7 @@
                         ? String(ledger.volume) : '';
                     const othersComb = (parseFloat(ledger.others) || 0) + (parseFloat(ledger.penalty) || 0);
                     const prioYears = parseFloat(ledger.prio_years) || 0;
+                    const currentArrears = parseFloat(ledger.current_arrears) || 0;
                     const billAmt = parseFloat(ledger.billamount) || 0;
                     const debit = parseFloat(ledger.debit) || 0;
                     const credit = parseFloat(ledger.credit) || 0;
@@ -705,6 +708,7 @@
                         '<td class="c-num">' + $('<div>').text(vol).html() + '</td>' +
                         '<td class="c-num">' + formatPrintNum(othersComb, false) + '</td>' +
                         '<td class="c-num">' + formatPrintNum(prioYears, false) + '</td>' +
+                        '<td class="c-num">' + formatPrintNum(currentArrears, false) + '</td>' +
                         '<td class="c-num">' + formatPrintNum(billAmt, false) + '</td>' +
                         '<td class="c-num">' + formatPrintNum(debit, false) + '</td>' +
                         '<td class="c-num">' + formatPrintNum(credit, false) + '</td>' +
@@ -829,7 +833,7 @@
                 if (ledgers.length === 0) {
                     html = `
                         <tr>
-                            <td colspan="15" class="text-center text-muted py-5">
+                            <td colspan="16" class="text-center text-muted py-5">
                                 <i class="fas fa-inbox fa-2x mb-3 d-block"></i>
                                 <p>No ledger entries found for this year</p>
                             </td>
@@ -847,6 +851,7 @@
                         const penalty = parseFloat(ledger.penalty) || 0;
                         const others = parseFloat(ledger.others) || 0;
                         const prioYears = parseFloat(ledger.prio_years) || 0;
+                        const currentArrears = parseFloat(ledger.current_arrears) || 0;
                         const debit = parseFloat(ledger.debit) || 0;
                         const credit = parseFloat(ledger.credit) || 0;
                         // Handle negative balances correctly - check for null/undefined, not falsy
@@ -875,6 +880,7 @@
                                 <td class="text-right py-1 px-2">${formatCurrency(penalty)}</td>
                                 <td class="text-right py-1 px-2">${others > 0 ? formatCurrency(others) : ''}</td>
                                 <td class="text-right py-1 px-2">${prioYears > 0 ? formatCurrency(prioYears) : ''}</td>
+                                <td class="text-right py-1 px-2">${currentArrears > 0 ? formatCurrency(currentArrears) : ''}</td>
                                 <td class="text-right py-1 px-2 ${debit > 0 ? 'font-weight-bold' : ''}">${debit > 0 ? formatCurrency(debit) : ''}</td>
                                 <td class="text-right py-1 px-2 ${credit > 0 ? 'font-weight-bold text-success' : ''}">${credit > 0 ? formatCurrency(credit) : ''}</td>
                                 <td class="text-right py-1 px-2 font-weight-bold ${balanceClass}">${formatCurrency(balance)}</td>

@@ -202,7 +202,8 @@ class BillingProcessController extends Controller
             ];
             // Arrears = current_arrears from DM; negative ledger footer = advance (shown in Arrears column).
             $ledgerBalance = (float) ($footerBalances[(int) $consumer->id] ?? 0);
-            $arrears = $this->resolveDisplayArrearsWithAdvance((float) $components['current_arrears'], $ledgerBalance);
+            $currentArrears = (float) $components['current_arrears'];
+            $arrears = $this->resolveDisplayArrearsWithAdvance($currentArrears, $ledgerBalance);
             $penalty = (float) $components['penalty'];
             $meterRentalArrears = (float) $components['others'];
             $priorYears = (float) $components['prio_years'];
@@ -240,6 +241,7 @@ class BillingProcessController extends Controller
                 'penalty' => $penalty,
                 'meter_rental_arrears' => $meterRentalArrears,
                 'prior_years' => $priorYears,
+                'current_arrears' => $currentArrears,
                 'total' => $total,
                 'status' => $consumer->status_label ?? 'Active',
                 'consumer_zone_id' => $consumer->id,
