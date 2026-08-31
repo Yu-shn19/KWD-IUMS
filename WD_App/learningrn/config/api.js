@@ -25,7 +25,7 @@ export const API_CONFIG = {
 };
 
 // Active API — production uses HTTPS
-export const CURRENT_ENV = 'artisan';
+export const CURRENT_ENV = 'production';
 
 export const getApiConfig = () => {
   return API_CONFIG[CURRENT_ENV];
