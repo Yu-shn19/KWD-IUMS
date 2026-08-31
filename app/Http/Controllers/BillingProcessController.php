@@ -186,6 +186,9 @@ class BillingProcessController extends Controller
         $dmComponentsByConsumer = $this->getLedgerDmComponentsByConsumer(
             $consumers->pluck(mr_col('id'))->filter()->map(fn ($id) => (int) $id)->unique()->values()->all()
         );
+        $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk(
+            $consumers->pluck(mr_col('id'))->filter()->map(fn ($id) => (int) $id)->unique()->values()->all()
+        );
         foreach ($consumers as $consumer) {
             $accountNoVal = $consumer->account_no ?? '';
             $previousReading = $this->getPreviousReading($accountNoVal);
@@ -197,12 +200,24 @@ class BillingProcessController extends Controller
                 'others' => 0.0,
                 'prio_years' => 0.0,
             ];
-            // Arrears = current_arrears only (not the ledger footer total).
-            $arrears = (float) $components['current_arrears'];
+            // Arrears = current_arrears from DM; negative ledger footer = advance (shown in Arrears column).
+            $ledgerBalance = (float) ($footerBalances[(int) $consumer->id] ?? 0);
+            $arrears = $this->resolveDisplayArrearsWithAdvance((float) $components['current_arrears'], $ledgerBalance);
             $penalty = (float) $components['penalty'];
             $meterRentalArrears = (float) $components['others'];
             $priorYears = (float) $components['prio_years'];
-            $total = round($currentBill + $wmc + $arrears + $penalty + $meterRentalArrears + $priorYears, 2);
+            $total = $this->computeScheduleTotalWithAdvance(
+                $currentBill,
+                $wmc,
+                $arrears,
+                $penalty,
+                $meterRentalArrears,
+                $priorYears
+            );
+            // No current bill yet: show advance credit in Total Amount (negative arrears).
+            if ($currentBill <= 0.009 && $arrears < -0.009) {
+                $total = round($total + $arrears, 2);
+            }
             $data[] = [
                 'sedr' => (string) $sedr++,
                 'account_number' => $accountNoVal,
@@ -301,6 +316,40 @@ class BillingProcessController extends Controller
         }
 
         return $result;
+    }
+
+    /**
+     * Arrears column: negative ledger footer = advance/credit; otherwise DM current_arrears.
+     */
+    private function resolveDisplayArrearsWithAdvance(float $dmArrears, float $ledgerFooterBalance): float
+    {
+        if ($ledgerFooterBalance < -0.009) {
+            return round($ledgerFooterBalance, 2);
+        }
+
+        return round($dmArrears, 2);
+    }
+
+    /**
+     * Total Amount with advance — matches mobile/web PRE-DUE: advance in negative arrears reduces current bill first.
+     */
+    private function computeScheduleTotalWithAdvance(
+        float $currentBill,
+        float $waterMaintenanceCharge,
+        float $rawArrears,
+        float $penalty = 0.0,
+        float $meterRentalArrears = 0.0,
+        float $priorYears = 0.0
+    ): float {
+        $advance = $rawArrears < 0 ? abs($rawArrears) : 0.0;
+        $positiveArrears = $rawArrears > 0 ? $rawArrears : 0.0;
+        $currentBillAfterAdvance = max(0.0, $currentBill - $advance);
+        $totalCurrent = round($currentBillAfterAdvance + max(0.0, $waterMaintenanceCharge), 2);
+
+        return round(
+            $totalCurrent + $positiveArrears + max(0.0, $priorYears) + max(0.0, $penalty) + max(0.0, $meterRentalArrears),
+            2
+        );
     }
 
     /**

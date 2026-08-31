@@ -1914,12 +1914,12 @@
                             </td>
                             <td class="text-right py-3 px-3">₱ ${formatNumber(record.current_billing)}</td>
                             <td class="text-right py-3 px-3 ${(record.water_maintenance_charge || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.water_maintenance_charge || 0)}</td>
-                            <td class="text-right py-3 px-3 ${(record.arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.arrears || 0)}</td>
+                            <td class="text-right py-3 px-3 ${arrearsAmountClass(record.arrears)}">₱ ${formatNumber(record.arrears || 0)}</td>
                             <td class="text-right py-3 px-3 ${(record.penalty || 0) > 0 ? 'text-danger' : 'text-muted'}">₱ ${formatNumber(record.penalty || 0)}</td>
                             <td class="text-right py-3 px-3 ${(record.meter_rental_arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.meter_rental_arrears || 0)}</td>
                             <td class="text-right py-3 px-3 ${(record.prior_years || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.prior_years || 0)}</td>
                             <td class="text-right py-3 px-3">
-                                <span class="font-weight-bold ${record.total > 0 ? 'text-success' : 'text-muted'}">₱ ${formatNumber(record.total)}</span>
+                                <span class="font-weight-bold ${totalAmountClass(record.total)}">₱ ${formatNumber(record.total)}</span>
                             </td>
                             <td class="text-center py-3 px-3">
                                 <span class="badge badge-${getStatusBadgeClass(record.status)} px-3 py-1">${record.status}</span>
@@ -2201,6 +2201,20 @@
 
             function formatNumber(number) {
                 return parseFloat(number || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+            }
+
+            function arrearsAmountClass(value) {
+                const amount = parseFloat(value) || 0;
+                if (amount < -0.009) return 'text-success';
+                if (amount > 0.009) return 'text-warning';
+                return 'text-muted';
+            }
+
+            function totalAmountClass(value) {
+                const amount = parseFloat(value) || 0;
+                if (amount < -0.009) return 'text-success';
+                if (amount > 0.009) return 'text-success';
+                return 'text-muted';
             }
 
             function showAlert(type, message) {
