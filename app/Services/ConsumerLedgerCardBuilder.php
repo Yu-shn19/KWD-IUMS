@@ -150,13 +150,16 @@ class ConsumerLedgerCardBuilder
 
         if ($trans === 'DM') {
             $debit = round((float) ($ledger->debit ?? 0), 2);
+            $billMr = round((float) ($ledger->others ?? 0), 2);
+            $billPenalty = round((float) ($ledger->penalty ?? 0), 2);
+            $billSales = round(max(0, $debit - $billMr - $billPenalty), 2);
 
             return [
                 'reading' => '',
                 'consumption' => '',
-                'bill_sales' => $debit,
-                'bill_penalty' => 0.0,
-                'bill_mr' => 0.0,
+                'bill_sales' => $billSales,
+                'bill_penalty' => $billPenalty,
+                'bill_mr' => $billMr,
                 'pay_sales' => 0.0,
                 'pay_penalty' => 0.0,
                 'pay_mr' => 0.0,

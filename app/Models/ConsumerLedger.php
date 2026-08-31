@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Schema;
 use App\Models\ConsumerPayment;
 
 if (!function_exists(__NAMESPACE__ . '\mr_col')) {
@@ -33,6 +34,8 @@ class ConsumerLedger extends Model
         'billamount',
         'penalty',
         'others',
+        'prio_years',
+        'current_arrears',
         'debit',
         'credit',
         'balance',
@@ -46,7 +49,42 @@ class ConsumerLedger extends Model
         'due_date' => 'date',
         'txtime' => 'datetime',
         'paid_at' => 'datetime',
+        'prio_years' => 'decimal:2',
+        'current_arrears' => 'decimal:2',
     ];
+
+    /**
+     * Prior-years charge stored on this row (0 when the column is absent).
+     */
+    public function prioYearsAmount(): float
+    {
+        static $hasColumn = null;
+        if ($hasColumn === null) {
+            $hasColumn = Schema::hasColumn($this->getTable(), 'prio_years');
+        }
+        if (! $hasColumn) {
+            return 0.0;
+        }
+
+        return round((float) ($this->prio_years ?? 0), 2);
+    }
+
+    /**
+     * Current-year arrears stored on this row (0 when the column is absent).
+     * This is not Prior Years — PY lives in prio_years.
+     */
+    public function currentArrearsAmount(): float
+    {
+        static $hasColumn = null;
+        if ($hasColumn === null) {
+            $hasColumn = Schema::hasColumn($this->getTable(), 'current_arrears');
+        }
+        if (! $hasColumn) {
+            return 0.0;
+        }
+
+        return round((float) ($this->current_arrears ?? 0), 2);
+    }
 
     /**
      * Get the consumer zone that owns this ledger entry.
