@@ -333,6 +333,9 @@ class MeterReadingApiController extends Controller
                     'bill_date' => $schedule->bill_date->format('Y-m-d'),
                     'due_date' => $schedule->due_date->format('Y-m-d'),
                     'arrears' => (float) ($schedule->arrears ?? 0),
+                    'prior_years' => (float) ($schedule->prior_years ?? 0),
+                    'penalty' => (float) ($schedule->penalty ?? 0),
+                    'meter_rental_arrears' => (float) ($schedule->meter_rental_arrears ?? 0),
                     'reader_notes' => $downloaded->reader_notes ?? null,
                 ];
             })
@@ -360,6 +363,7 @@ class MeterReadingApiController extends Controller
             'current_reading' => 'required|integer|min:0',
             'reading_date' => 'nullable|date',
             'reader_notes' => 'nullable|string',
+            'current_meter_rental' => 'nullable|numeric|min:0',
             'reader_id' => 'required|exists:users,id'
         ]);
 
@@ -416,6 +420,10 @@ class MeterReadingApiController extends Controller
                     2
                 );
 
+                $currentMeterRental = $request->filled('current_meter_rental')
+                    ? round((float) $request->input('current_meter_rental'), 2)
+                    : ($currentBill > 0 ? WaterBillingService::METER_RENTAL : 0.0);
+
                 // STEP 1: meter_reading_schedules
                 $schedule->update(MeterReadingSchedule::filterTableAttributes([
                     'current_reading' => $currentReading,
@@ -440,6 +448,9 @@ class MeterReadingApiController extends Controller
                     'reader_notes' => $request->reader_notes,
                     'prepared_by' => $reader ? $this->formatName($reader) : 'READER',
                 ];
+                if (Schema::hasColumn('downloaded_readings', 'current_meter_rental')) {
+                    $downloadedPayload['current_meter_rental'] = $currentMeterRental;
+                }
                 if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
                     $downloadedPayload['completed_at'] = now();
                 }
@@ -568,6 +579,7 @@ class MeterReadingApiController extends Controller
                         'current_reading' => $downloaded->current_reading,
                         'consumption' => $downloaded->consumption,
                         'current_billing' => $downloaded->current_billing,
+                        'current_meter_rental' => $downloaded->current_meter_rental,
                         'status' => $downloaded->status,
                     ]
                 ]);

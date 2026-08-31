@@ -645,6 +645,9 @@ class BillingLookupService
                             'current_reading' => $scheduleRow->current_reading ?? null,
                             'consumption' => $scheduleRow->consumption ?? 0,
                             'current_billing' => $scheduleRow->current_billing ?? 0,
+                            'current_meter_rental' => ($scheduleRow->current_billing ?? 0) > 0
+                                ? \App\Services\WaterBillingService::METER_RENTAL
+                                : 0,
                             'reading_date' => $scheduleRow->bill_date ?? $state->billMonthDate->format('Y-m-d'),
                             'status' => 'Prepared',
                         ]);

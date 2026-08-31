@@ -275,6 +275,9 @@ try {
                 'bill_date' => $schedule->bill_date?->format('Y-m-d'),
                 'due_date' => $schedule->due_date?->format('Y-m-d'),
                 'arrears' => (float) ($schedule->arrears ?? 0),
+                'prior_years' => (float) ($schedule->prior_years ?? 0),
+                'penalty' => (float) ($schedule->penalty ?? 0),
+                'meter_rental_arrears' => (float) ($schedule->meter_rental_arrears ?? 0),
                 'reader_notes' => $downloaded->reader_notes ?? null,
             ];
         })->values(),

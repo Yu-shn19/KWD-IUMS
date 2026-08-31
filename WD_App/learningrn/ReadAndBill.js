@@ -85,6 +85,40 @@ const normalizeCustomerStatus = (status, currentReading = null, extras = {}) => 
   return status || 'Assigned';
 };
 
+/** Lower = higher on list. Pending first, completed last (after refresh). */
+const listDisplaySortRank = (customer) => {
+  const status = normalizeCustomerStatus(
+    customer?.status,
+    customer?.currentReading ?? customer?.current_reading,
+    {
+      has_downloaded_reading: customer?.has_downloaded_reading ?? customer?.hasDownloadedReading,
+      downloaded_reading_id: customer?.downloaded_reading_id,
+    }
+  );
+  if (isCompletedCustomerStatus(status)) return 2;
+  if (isSavedOfflineCustomerStatus(status)) return 1;
+  return 0;
+};
+
+const compareCustomersByName = (a, b) => {
+  const nameA = (a.name || a.account_name || '').toLowerCase();
+  const nameB = (b.name || b.account_name || '').toLowerCase();
+  const byName = nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+  if (byName !== 0) return byName;
+
+  const accountA = (a.accountNumber || a.account_number || '').toLowerCase();
+  const accountB = (b.accountNumber || b.account_number || '').toLowerCase();
+  return accountA.localeCompare(accountB, undefined, { numeric: true, sensitivity: 'base' });
+};
+
+/** Applied only when user taps Refresh — not on every status change. */
+const sortCustomersPendingFirst = (list) =>
+  [...list].sort((a, b) => {
+    const rankDiff = listDisplaySortRank(a) - listDisplaySortRank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return compareCustomersByName(a, b);
+  });
+
 /** Higher = more final. Used so Completed / Saved offline never downgrade to Pending. */
 const statusProgressRank = (status) => {
   const s = (status ?? '').toString().trim().toLowerCase();
@@ -425,7 +459,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const readerId = userData?.id ?? null;
             const cachedCustomers = await loadCustomersFromCache(readerId);
             if (cachedCustomers.length > 0) {
-              setCustomers(cachedCustomers);
+              setCustomers(showAlerts ? sortCustomersPendingFirst(cachedCustomers) : cachedCustomers);
             }
           } catch (_) {}
         })();
@@ -532,6 +566,9 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         previousReadingDate: c.previous_reading_date ?? c.previousReadingDate ?? null,
         scheduleReadingDate: c.reading_date ?? c.readingDate ?? c.scheduleReadingDate ?? c.bill_date ?? c.billDate ?? null,
         arrears: parseFloat(c.arrears ?? 0),
+        priorYears: parseFloat(c.prior_years ?? c.priorYears ?? 0),
+        currentPenalty: parseFloat(c.penalty ?? c.current_penalty ?? c.currentPenalty ?? 0),
+        mrArrears: parseFloat(c.meter_rental_arrears ?? c.meterRentalArrears ?? c.mrArrears ?? 0),
         readerId: readerId || c.reader_id || c.readerId,
       }));
 
@@ -945,11 +982,14 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               previousReadingDate: c.previous_reading_date ?? c.previousReadingDate ?? null,
               scheduleReadingDate: c.reading_date ?? c.readingDate ?? c.scheduleReadingDate ?? c.bill_date ?? c.billDate ?? null,
               arrears: parseFloat(c.arrears ?? 0),
+              priorYears: parseFloat(c.prior_years ?? c.priorYears ?? 0),
+              currentPenalty: parseFloat(c.penalty ?? c.current_penalty ?? c.currentPenalty ?? 0),
+              mrArrears: parseFloat(c.meter_rental_arrears ?? c.meterRentalArrears ?? c.mrArrears ?? 0),
               readerId: readerId,
             };
             });
 
-            setCustomers(mapped);
+            setCustomers(showAlerts ? sortCustomersPendingFirst(mapped) : mapped);
             if (showAlerts) {
               Alert.alert('✅ Routes Loaded', `${mapped.length} route(s) downloaded from the server.`);
             }
@@ -959,7 +999,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             console.log('⚠️ API returned empty list, trying cache...');
             const cachedCustomers = await loadCustomersFromCache(readerId);
             if (cachedCustomers.length > 0) {
-              setCustomers(cachedCustomers);
+              setCustomers(showAlerts ? sortCustomersPendingFirst(cachedCustomers) : cachedCustomers);
               console.log('✅ Using cached data:', cachedCustomers.length, 'customers');
               if (showAlerts) {
                 Alert.alert('Using Cached Data', `Loaded ${cachedCustomers.length} route(s) from cache.`);
@@ -992,7 +1032,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       const cachedCustomers = await loadCustomersFromCache(readerId);
       
       if (cachedCustomers.length > 0) {
-        setCustomers(cachedCustomers);
+        setCustomers(showAlerts ? sortCustomersPendingFirst(cachedCustomers) : cachedCustomers);
         console.log('✅ Loaded', cachedCustomers.length, 'customers from cache (offline mode)');
         if (showAlerts) {
           Alert.alert('Offline Mode', `Loaded ${cachedCustomers.length} route(s) from cache. Connect to internet to refresh.`);
@@ -1019,7 +1059,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         const userData = await userStorage.getUserData();
         const readerId = userData?.id;
         const cachedCustomers = await loadCustomersFromCache(readerId);
-        setCustomers(cachedCustomers);
+        setCustomers(showAlerts ? sortCustomersPendingFirst(cachedCustomers) : cachedCustomers);
         if (showAlerts && cachedCustomers.length === 0) {
           Alert.alert('Connection Error', e.message || 'Cannot download routes from server.');
         }
@@ -1564,7 +1604,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       customer.arrears,
       currentBillOnly,
       meterMaintenanceCharge,
-      others
+      others,
+      customer
     );
     const surcharge = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
     const totalWithSurcharge = receiptBilling.totalBill + surcharge;
@@ -1599,7 +1640,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         currentBill: receiptBilling.currentBillAfterAdvance.toFixed(2),
         meterMaintenanceCharge: receiptBilling.maintenanceAfterCredit.toFixed(2),
         totalCurrent: receiptBilling.totalCurrent.toFixed(2),
+        priorYears: receiptBilling.priorYears.toFixed(2),
         arrears: receiptBilling.displayArrears.toFixed(2),
+        currentPenalty: receiptBilling.currentPenalty.toFixed(2),
+        mrArrears: receiptBilling.mrArrears.toFixed(2),
         others: others.toFixed(2),
         totalBill: receiptBilling.totalBill.toFixed(2),
         surcharge: surcharge.toFixed(2),
@@ -1698,7 +1742,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       <div class="row">TOTAL CURRENT : ${receiptData.billing.totalCurrent}</div>
 
 
+      <div class="row">Prior Years : ${receiptData.billing.priorYears}</div>
       <div class="row">Arrears : ${receiptData.billing.arrears}</div>
+      <div class="row">Current Penalty : ${receiptData.billing.currentPenalty}</div>
+      <div class="row">MR Arrears : ${receiptData.billing.mrArrears}</div>
       <div class="row">Others : ${receiptData.billing.others}</div>
 
       <div class="sep"></div>
@@ -1921,7 +1968,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
           current_reading: readingData.current_reading,
           reading_date: readingData.reading_date,
           reader_notes: readingData.reader_notes || '',
-          reader_id: readingData.reader_id
+          reader_id: readingData.reader_id,
+          current_meter_rental: readingData.current_meter_rental ?? undefined,
         })
       });
       clearTimeout(timeoutId);
@@ -2068,6 +2116,14 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         reader_notes: '',
         reader_id: userData?.id,
         consumption: consumption,
+        current_meter_rental: (() => {
+          const { bill } = calculateBill(
+            consumption,
+            selectedCustomer.category,
+            selectedCustomer.rateCode ?? selectedCustomer.rate_code ?? null
+          );
+          return bill > 0 ? METER_RENTAL : 0;
+        })(),
         customer: selectedCustomer
       };
     
@@ -2227,17 +2283,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       return !normalizedSearch || name.includes(normalizedSearch) || account.includes(normalizedSearch) || meterNumber.includes(normalizedSearch);
     });
 
-    // Always A–Z by account name (then account number)
-    return [...filteredCustomers].sort((a, b) => {
-      const nameA = (a.name || a.account_name || '').toLowerCase();
-      const nameB = (b.name || b.account_name || '').toLowerCase();
-      const byName = nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
-      if (byName !== 0) return byName;
-
-      const accountA = (a.accountNumber || a.account_number || '').toLowerCase();
-      const accountB = (b.accountNumber || b.account_number || '').toLowerCase();
-      return accountA.localeCompare(accountB, undefined, { numeric: true, sensitivity: 'base' });
-    });
+    // Preserve list order until user taps Refresh (sort happens in loadCustomersFromRoutes).
+    return filteredCustomers;
   }, [customers, normalizedSearch]);
 
   const renderCustomerItem = useCallback(({ item: customer }) => {

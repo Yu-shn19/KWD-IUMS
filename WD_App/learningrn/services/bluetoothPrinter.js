@@ -648,7 +648,10 @@ function buildEscPosReceipt(receipt, options = {}) {
 	push(formatAmountLine('Water Maintenance Charge:', receipt.billing.meterMaintenanceCharge));
 	push(formatAmountLine('TOTAL CURRENT:', receipt.billing.totalCurrent));
 	push('');
+	push(formatAmountLine('Prior Years:', receipt.billing.priorYears));
 	push(formatAmountLine('Arrears:', receipt.billing.arrears));
+	push(formatAmountLine('Current Penalty:', receipt.billing.currentPenalty));
+	push(formatAmountLine('MR Arrears:', receipt.billing.mrArrears));
 	push(formatAmountLine('Others:', receipt.billing.others));
 	sep();
 	push(LARGE_FONT_ON + BOLD_ON + formatAmountLine('TOTAL BILL:', receipt.billing.totalBill) + BOLD_OFF + LARGE_FONT_OFF);
