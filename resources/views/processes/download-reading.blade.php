@@ -240,13 +240,16 @@
                     </div>
                 </div>
                 <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" id="editAllScheduleDatesBtn">
+                        <i class="fas fa-calendar-alt mr-1"></i>Edit All Dates
+                    </button>
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- PIN required before editing Prev. Read -->
+    <!-- PIN required before editing Prev. Read / schedule -->
     <div class="modal fade" id="prevReadPinModal" tabindex="-1" role="dialog" aria-labelledby="prevReadPinModalLabel" aria-hidden="true" data-backdrop="static">
         <div class="modal-dialog modal-dialog-centered" role="document">
             <div class="modal-content">
@@ -267,6 +270,157 @@
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
                     <button type="button" class="btn btn-primary" id="prevReadPinVerifyBtn">
                         <i class="fas fa-check mr-1"></i>Verify
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="editScheduleModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fas fa-edit mr-2"></i>Edit Reading Schedule</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                        <span>&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="editSchedId">
+                    <div class="alert alert-light border py-2 mb-3">
+                        <strong id="editSchedAccount">--</strong>
+                        <span class="text-muted" id="editSchedName">--</span>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-md-4">
+                            <label class="font-weight-bold small">Assigned Reader</label>
+                            <select id="editSchedReader" class="form-control form-control-sm"></select>
+                        </div>
+                        <div class="form-group col-md-4">
+                            <label class="font-weight-bold small">Status</label>
+                            <select id="editSchedStatus" class="form-control form-control-sm">
+                                <option value="Prepared">Prepared</option>
+                                <option value="Assigned">Assigned</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                            </select>
+                        </div>
+                        <div class="form-group col-md-4">
+                            <label class="font-weight-bold small">SEDR No.</label>
+                            <input type="number" id="editSchedSedr" class="form-control form-control-sm" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Bill Month</label>
+                            <input type="date" id="editSchedBillMonth" class="form-control form-control-sm">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Bill Date</label>
+                            <input type="date" id="editSchedBillDate" class="form-control form-control-sm">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Due Date</label>
+                            <input type="date" id="editSchedDueDate" class="form-control form-control-sm">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Disconnection Date</label>
+                            <input type="date" id="editSchedDiscoDate" class="form-control form-control-sm">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Prev. Read Date</label>
+                            <input type="date" id="editSchedPrevDate" class="form-control form-control-sm">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Prev. Read</label>
+                            <input type="number" id="editSchedPrev" class="form-control form-control-sm" min="0">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Curr. Read</label>
+                            <input type="number" id="editSchedCurrent" class="form-control form-control-sm" min="0">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Consumption</label>
+                            <input type="number" id="editSchedConsumption" class="form-control form-control-sm">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Reading Date</label>
+                            <input type="date" id="editSchedReadingDate" class="form-control form-control-sm">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Current Billing</label>
+                            <input type="number" id="editSchedBilling" class="form-control form-control-sm" step="0.01" min="0">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Arrears</label>
+                            <input type="number" id="editSchedArrears" class="form-control form-control-sm" step="0.01" min="0">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label class="font-weight-bold small">Penalty</label>
+                            <input type="number" id="editSchedPenalty" class="form-control form-control-sm" step="0.01" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row mb-0">
+                        <div class="form-group col-md-4 mb-0">
+                            <label class="font-weight-bold small">Meter Rental Arrears</label>
+                            <input type="number" id="editSchedMrArrears" class="form-control form-control-sm" step="0.01" min="0">
+                        </div>
+                        <div class="form-group col-md-4 mb-0">
+                            <label class="font-weight-bold small">Prior Years</label>
+                            <input type="number" id="editSchedPriorYears" class="form-control form-control-sm" step="0.01" min="0">
+                        </div>
+                        <div class="form-group col-md-4 mb-0">
+                            <label class="font-weight-bold small">Total Amount</label>
+                            <input type="number" id="editSchedTotal" class="form-control form-control-sm" step="0.01" min="0">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="editSchedSaveBtn">
+                        <i class="fas fa-save mr-1"></i>Save Schedule
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="editBatchDatesModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fas fa-calendar-alt mr-2"></i>Edit All Schedule Dates</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                        <span>&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small">These dates will be applied to every schedule currently shown in the list (<span id="editBatchCount">0</span> record<span id="editBatchCountPlural">s</span>).</p>
+                    <div class="form-group">
+                        <label class="font-weight-bold">Bill Month</label>
+                        <input type="date" id="batchBillMonth" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label class="font-weight-bold">Bill Date</label>
+                        <input type="date" id="batchBillDate" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label class="font-weight-bold">Due Date</label>
+                        <input type="date" id="batchDueDate" class="form-control">
+                    </div>
+                    <div class="form-group mb-0">
+                        <label class="font-weight-bold">Disconnection Date</label>
+                        <input type="date" id="batchDiscoDate" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="editBatchDatesSaveBtn">
+                        <i class="fas fa-save mr-1"></i>Update All
                     </button>
                 </div>
             </div>
@@ -325,6 +479,7 @@
 
     <script>
         const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const meterReaders = @json($meterReaders);
 
         // --- Realtime status: poll summary every 30 seconds and update badges
         function updateStatusBadges() {
@@ -581,7 +736,7 @@
                                 <th class="text-center" style="min-width: 70px;">Curr. Read</th>
                                 <th class="text-center" style="min-width: 70px;">Consumption</th>
                                 <th class="text-center" style="min-width: 85px;">Status</th>
-                                <th class="text-center" style="min-width: 50px;">Actions</th>
+                                <th class="text-center" style="min-width: 80px;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -625,6 +780,11 @@
                             <span class="badge badge-${statusClass}">${route.status}</span>
                         </td>
                         <td class="text-center" style="font-size: 11px;">
+                            <button type="button" class="btn btn-sm btn-outline-primary edit-schedule-btn mr-1"
+                                data-schedule-id="${route.id || ''}"
+                                title="Edit schedule">
+                                <i class="fas fa-edit"></i>
+                            </button>
                             <button type="button" class="btn btn-sm btn-outline-danger delete-schedule-btn"
                                 data-schedule-id="${route.id || ''}"
                                 data-account-no="${escapeAttr(route.account_number || '')}"
@@ -648,6 +808,12 @@
             document.querySelectorAll('#routesContent .delete-schedule-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     requestPinThenDelete(this);
+                });
+            });
+
+            document.querySelectorAll('#routesContent .edit-schedule-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    requestPinThenEditSchedule(this);
                 });
             });
 
@@ -684,7 +850,119 @@
 
         var pendingPrevReadScheduleId = null;
         var pendingDeleteSchedule = null;
+        var pendingEditSchedule = null;
         var pinModalMode = 'prev-read';
+
+        function isoDate(value) {
+            if (!value) return '';
+            var match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+            return match ? match[1] : '';
+        }
+
+        function currentlyDisplayedRoutes() {
+            var accountNumber = document.getElementById('routeSearchAccount').value;
+            var name = document.getElementById('routeSearchName').value;
+            var status = document.getElementById('statusFilter').value;
+            var zoneEl = document.getElementById('routeZoneFilter');
+            var zone = zoneEl ? zoneEl.value : '';
+            return filterRoutes(currentModalRoutes, accountNumber, name, status, zone);
+        }
+
+        function fillReaderSelect(selectedId) {
+            var sel = document.getElementById('editSchedReader');
+            if (!sel) return;
+            sel.innerHTML = '<option value="">(Unassigned)</option>';
+            (meterReaders || []).forEach(function(reader) {
+                var opt = document.createElement('option');
+                opt.value = reader.id;
+                opt.textContent = reader.name;
+                if (String(reader.id) === String(selectedId || '')) {
+                    opt.selected = true;
+                }
+                sel.appendChild(opt);
+            });
+        }
+
+        function recalcEditConsumption() {
+            var prev = parseInt(document.getElementById('editSchedPrev').value, 10);
+            var currRaw = document.getElementById('editSchedCurrent').value;
+            if (currRaw === '' || isNaN(prev)) {
+                return;
+            }
+            var curr = parseInt(currRaw, 10);
+            if (!isNaN(curr)) {
+                document.getElementById('editSchedConsumption').value = curr - prev;
+            }
+        }
+
+        function openEditScheduleModal(route) {
+            if (!route || !route.id) return;
+            fillReaderSelect(route.assigned_reader_id);
+            document.getElementById('editSchedId').value = route.id;
+            document.getElementById('editSchedAccount').textContent = route.account_number || '--';
+            document.getElementById('editSchedName').textContent = route.account_name || '--';
+            document.getElementById('editSchedStatus').value = route.status || 'Assigned';
+            document.getElementById('editSchedSedr').value = route.sedr_number != null ? route.sedr_number : '';
+            document.getElementById('editSchedBillMonth').value = isoDate(route.bill_month);
+            document.getElementById('editSchedBillDate').value = isoDate(route.bill_date);
+            document.getElementById('editSchedDueDate').value = isoDate(route.due_date);
+            document.getElementById('editSchedDiscoDate').value = isoDate(route.disconnection_date);
+            document.getElementById('editSchedPrevDate').value = isoDate(route.previous_reading_date);
+            document.getElementById('editSchedPrev').value = route.previous_reading != null ? route.previous_reading : 0;
+            document.getElementById('editSchedCurrent').value = route.current_reading != null ? route.current_reading : '';
+            document.getElementById('editSchedConsumption').value = route.consumption != null ? route.consumption : '';
+            document.getElementById('editSchedReadingDate').value = isoDate(route.reading_date);
+            document.getElementById('editSchedBilling').value = route.current_billing != null ? route.current_billing : 0;
+            document.getElementById('editSchedArrears').value = route.arrears != null ? route.arrears : 0;
+            document.getElementById('editSchedPenalty').value = route.penalty != null ? route.penalty : 0;
+            document.getElementById('editSchedMrArrears').value = route.meter_rental_arrears != null ? route.meter_rental_arrears : 0;
+            document.getElementById('editSchedPriorYears').value = route.prior_years != null ? route.prior_years : 0;
+            document.getElementById('editSchedTotal').value = route.total_amount != null ? route.total_amount : 0;
+            $('#editScheduleModal').modal('show');
+        }
+
+        function openBatchDatesModal() {
+            var routes = currentlyDisplayedRoutes();
+            var first = routes[0] || {};
+            document.getElementById('editBatchCount').textContent = String(routes.length);
+            document.getElementById('editBatchCountPlural').textContent = routes.length === 1 ? '' : 's';
+            document.getElementById('batchBillMonth').value = isoDate(first.bill_month);
+            document.getElementById('batchBillDate').value = isoDate(first.bill_date);
+            document.getElementById('batchDueDate').value = isoDate(first.due_date);
+            document.getElementById('batchDiscoDate').value = isoDate(first.disconnection_date);
+            $('#editBatchDatesModal').modal('show');
+        }
+
+        function requestPinThenEditSchedule(btn) {
+            var scheduleId = parseInt(btn.getAttribute('data-schedule-id'), 10);
+            var route = (currentModalRoutes || []).find(function(r) {
+                return parseInt(r.id, 10) === scheduleId;
+            });
+            if (!route) {
+                Swal.fire({ icon: 'error', title: 'Error', text: 'Schedule not found in the current list.', confirmButtonColor: '#d33' });
+                return;
+            }
+            pinModalMode = 'edit-schedule';
+            pendingPrevReadScheduleId = null;
+            pendingDeleteSchedule = null;
+            pendingEditSchedule = route;
+            setPinModalCopy('edit-schedule');
+            showPinModal();
+        }
+
+        function requestPinThenEditBatch() {
+            var routes = currentlyDisplayedRoutes();
+            if (!routes.length) {
+                Swal.fire({ icon: 'warning', title: 'No schedules', text: 'There are no schedules in the current list to update.', confirmButtonColor: '#f0ad4e' });
+                return;
+            }
+            pinModalMode = 'edit-batch';
+            pendingPrevReadScheduleId = null;
+            pendingDeleteSchedule = null;
+            pendingEditSchedule = null;
+            setPinModalCopy('edit-batch');
+            showPinModal();
+        }
 
         function escapeAttr(value) {
             return String(value == null ? '' : value)
@@ -714,6 +992,12 @@
             if (mode === 'delete') {
                 if (titleEl) titleEl.innerHTML = '<i class="fas fa-lock mr-2"></i>Enter PIN to Delete';
                 if (helpEl) helpEl.textContent = 'Enter the 4-digit PIN to delete this schedule.';
+            } else if (mode === 'edit-schedule') {
+                if (titleEl) titleEl.innerHTML = '<i class="fas fa-lock mr-2"></i>Enter PIN to Edit Schedule';
+                if (helpEl) helpEl.textContent = 'Enter the edit PIN to update this reading schedule.';
+            } else if (mode === 'edit-batch') {
+                if (titleEl) titleEl.innerHTML = '<i class="fas fa-lock mr-2"></i>Enter PIN to Edit All Dates';
+                if (helpEl) helpEl.textContent = 'Enter the edit PIN to update dates on all schedules in the current list.';
             } else {
                 if (titleEl) titleEl.innerHTML = '<i class="fas fa-lock mr-2"></i>Enter PIN';
                 if (helpEl) helpEl.textContent = 'Enter the edit PIN (4 characters) to update Prev. Read.';
@@ -732,6 +1016,7 @@
         function requestPinThenEdit(input) {
             pinModalMode = 'prev-read';
             pendingDeleteSchedule = null;
+            pendingEditSchedule = null;
             pendingPrevReadScheduleId = input.dataset.scheduleId || null;
             setPinModalCopy('prev-read');
             showPinModal();
@@ -740,6 +1025,7 @@
         function requestPinThenDelete(btn) {
             pinModalMode = 'delete';
             pendingPrevReadScheduleId = null;
+            pendingEditSchedule = null;
             pendingDeleteSchedule = {
                 schedule_id: parseInt(btn.getAttribute('data-schedule-id'), 10),
                 account_no: btn.getAttribute('data-account-no') || '',
@@ -868,6 +1154,16 @@
                         pinModalMode = 'prev-read';
                         $('#prevReadPinModal').modal('hide');
                         confirmAndDeleteSchedule(pending);
+                    } else if (pinModalMode === 'edit-schedule' && pendingEditSchedule) {
+                        var routeToEdit = pendingEditSchedule;
+                        pendingEditSchedule = null;
+                        pinModalMode = 'prev-read';
+                        $('#prevReadPinModal').modal('hide');
+                        openEditScheduleModal(routeToEdit);
+                    } else if (pinModalMode === 'edit-batch') {
+                        pinModalMode = 'prev-read';
+                        $('#prevReadPinModal').modal('hide');
+                        openBatchDatesModal();
                     } else {
                         var scheduleId = pendingPrevReadScheduleId;
                         pendingPrevReadScheduleId = null;
@@ -898,6 +1194,7 @@
         $('#prevReadPinModal').on('hidden.bs.modal', function() {
             pendingPrevReadScheduleId = null;
             pendingDeleteSchedule = null;
+            pendingEditSchedule = null;
             pinModalMode = 'prev-read';
             setPinModalCopy('prev-read');
         });
@@ -998,6 +1295,147 @@
             document.getElementById('statusFilter').value = '';
             if (routeZoneFilterEl) routeZoneFilterEl.value = '';
             applyRouteSearch();
+        });
+
+        function scheduleJsonHeaders() {
+            return {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': csrfToken,
+                'X-HTTP-Method-Override': 'PUT'
+            };
+        }
+
+        document.getElementById('editSchedPrev').addEventListener('input', recalcEditConsumption);
+        document.getElementById('editSchedCurrent').addEventListener('input', recalcEditConsumption);
+
+        document.getElementById('editAllScheduleDatesBtn').addEventListener('click', function() {
+            requestPinThenEditBatch();
+        });
+
+        $('#editScheduleModal, #editBatchDatesModal').on('shown.bs.modal', function() {
+            $(this).css('z-index', 1058);
+            $('.modal-backdrop').last().css('z-index', 1056);
+        });
+
+        document.getElementById('editSchedSaveBtn').addEventListener('click', function() {
+            var btn = this;
+            var scheduleId = parseInt(document.getElementById('editSchedId').value, 10);
+            var billMonth = document.getElementById('editSchedBillMonth').value;
+            var billDate = document.getElementById('editSchedBillDate').value;
+            var dueDate = document.getElementById('editSchedDueDate').value;
+            var discoDate = document.getElementById('editSchedDiscoDate').value;
+            var prev = document.getElementById('editSchedPrev').value;
+            var status = document.getElementById('editSchedStatus').value;
+            if (!scheduleId || !billMonth || !billDate || !dueDate || !discoDate || prev === '' || !status) {
+                Swal.fire({ icon: 'warning', title: 'Required', text: 'Bill month, bill date, due date, disconnection date, previous reading, and status are required.', confirmButtonColor: '#f0ad4e' });
+                return;
+            }
+            var currentRaw = document.getElementById('editSchedCurrent').value;
+            var consumptionRaw = document.getElementById('editSchedConsumption').value;
+            var readerRaw = document.getElementById('editSchedReader').value;
+            var payload = {
+                _method: 'PUT',
+                schedule_id: scheduleId,
+                assigned_reader_id: readerRaw ? parseInt(readerRaw, 10) : null,
+                bill_month: billMonth,
+                bill_date: billDate,
+                due_date: dueDate,
+                disconnection_date: discoDate,
+                previous_reading_date: document.getElementById('editSchedPrevDate').value || null,
+                previous_reading: parseInt(prev, 10),
+                current_reading: currentRaw === '' ? null : parseInt(currentRaw, 10),
+                reading_date: document.getElementById('editSchedReadingDate').value || null,
+                consumption: consumptionRaw === '' ? null : parseInt(consumptionRaw, 10),
+                current_billing: parseFloat(document.getElementById('editSchedBilling').value) || 0,
+                arrears: parseFloat(document.getElementById('editSchedArrears').value) || 0,
+                penalty: parseFloat(document.getElementById('editSchedPenalty').value) || 0,
+                meter_rental_arrears: parseFloat(document.getElementById('editSchedMrArrears').value) || 0,
+                prior_years: parseFloat(document.getElementById('editSchedPriorYears').value) || 0,
+                total_amount: parseFloat(document.getElementById('editSchedTotal').value) || 0,
+                status: status,
+                sedr_number: document.getElementById('editSchedSedr').value === '' ? null : parseInt(document.getElementById('editSchedSedr').value, 10)
+            };
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Saving...';
+            fetch('{{ route("download-reading.update-schedule") }}', {
+                method: 'POST',
+                headers: scheduleJsonHeaders(),
+                body: JSON.stringify(payload)
+            })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+            .then(function(result) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-save mr-1"></i>Save Schedule';
+                if (result.data && result.data.success) {
+                    $('#editScheduleModal').modal('hide');
+                    Swal.fire({ icon: 'success', title: 'Updated', text: result.data.message || 'Schedule updated.', confirmButtonColor: '#3085d6' });
+                    if (currentModalReaderId && currentBillMonth) {
+                        loadRoutesForBillMonth(currentModalReaderId, currentBillMonth);
+                    }
+                    updateStatusBadges();
+                } else {
+                    Swal.fire({ icon: 'error', title: 'Error', text: (result.data && result.data.message) || 'Failed to update schedule.', confirmButtonColor: '#d33' });
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-save mr-1"></i>Save Schedule';
+                Swal.fire({ icon: 'error', title: 'Error', text: 'Failed to update schedule.', confirmButtonColor: '#d33' });
+            });
+        });
+
+        document.getElementById('editBatchDatesSaveBtn').addEventListener('click', function() {
+            var btn = this;
+            var routes = currentlyDisplayedRoutes();
+            var ids = routes.map(function(r) { return parseInt(r.id, 10); }).filter(Boolean);
+            var billMonth = document.getElementById('batchBillMonth').value;
+            var billDate = document.getElementById('batchBillDate').value;
+            var dueDate = document.getElementById('batchDueDate').value;
+            var discoDate = document.getElementById('batchDiscoDate').value;
+            if (!ids.length) {
+                Swal.fire({ icon: 'warning', title: 'No schedules', text: 'There are no schedules in the current list.', confirmButtonColor: '#f0ad4e' });
+                return;
+            }
+            if (!billMonth || !billDate || !dueDate || !discoDate) {
+                Swal.fire({ icon: 'warning', title: 'Required', text: 'All four dates are required.', confirmButtonColor: '#f0ad4e' });
+                return;
+            }
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Updating...';
+            fetch('{{ route("download-reading.update-schedules-batch") }}', {
+                method: 'POST',
+                headers: scheduleJsonHeaders(),
+                body: JSON.stringify({
+                    _method: 'PUT',
+                    schedule_ids: ids,
+                    bill_month: billMonth,
+                    bill_date: billDate,
+                    due_date: dueDate,
+                    disconnection_date: discoDate
+                })
+            })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+            .then(function(result) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-save mr-1"></i>Update All';
+                if (result.data && result.data.success) {
+                    $('#editBatchDatesModal').modal('hide');
+                    Swal.fire({ icon: 'success', title: 'Updated', text: result.data.message || 'Schedules updated.', confirmButtonColor: '#3085d6' });
+                    if (currentModalReaderId) {
+                        loadBillMonths(currentModalReaderId);
+                    }
+                    updateStatusBadges();
+                } else {
+                    Swal.fire({ icon: 'error', title: 'Error', text: (result.data && result.data.message) || 'Failed to update schedules.', confirmButtonColor: '#d33' });
+                }
+            })
+            .catch(function() {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-save mr-1"></i>Update All';
+                Swal.fire({ icon: 'error', title: 'Error', text: 'Failed to update schedules.', confirmButtonColor: '#d33' });
+            });
         });
 
         function copyApiUrl() {

@@ -26,6 +26,9 @@ Route::get('/cron/consumer-activate-pending', [ConsumerActivationCronController:
     ->name('cron.consumer-activate-pending');
 
 // Public routes (no authentication required)
+Route::get('/branding/{filename}', [SettingController::class, 'serveBrandingFile'])
+    ->where('filename', '[A-Za-z0-9._-]+')
+    ->name('branding.file');
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
@@ -348,6 +351,8 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     Route::get('/download-reading', [MeterReadingController::class, 'downloadReadingPage'])->name('download-reading');
     Route::get('/download-reading/summary', [MeterReadingController::class, 'getAssignmentsSummary'])->name('download-reading.summary');
     Route::post('/download-reading/delete-schedule', [MeterReadingController::class, 'deleteSchedule'])->name('download-reading.delete-schedule');
+    Route::put('/download-reading/update-schedule', [MeterReadingController::class, 'updateSchedule'])->name('download-reading.update-schedule');
+    Route::put('/download-reading/update-schedules-batch', [MeterReadingController::class, 'updateSchedulesBatch'])->name('download-reading.update-schedules-batch');
 
     // Visual Summary page route
     Route::get('/visual-summary', [ReportController::class, 'visualSummary'])->name('visual-summary');

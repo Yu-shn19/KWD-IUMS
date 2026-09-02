@@ -64,24 +64,46 @@ class Setting extends Model
             'logo' => $logo,
             'favicon' => $favicon,
             'hero_image' => $hero,
-            'logo_url' => asset($logo),
-            'favicon_url' => asset($favicon),
-            'hero_url' => asset($hero),
+            'logo_url' => static::brandingAssetUrl($logo),
+            'favicon_url' => static::brandingAssetUrl($favicon),
+            'hero_url' => static::brandingAssetUrl($hero),
         ];
     }
 
     /**
-     * Ensure a stored path exists under public/; otherwise fall back.
+     * Ensure a stored path exists under storage or public/; otherwise fall back.
      */
     protected static function resolvePublicPath(string $path, string $fallback): string
     {
         $path = ltrim(str_replace('\\', '/', $path), '/');
-        if ($path !== '' && is_file(public_path($path))) {
+        if ($path !== '' && static::brandingFileExists($path)) {
             return $path;
         }
 
         $fallback = ltrim(str_replace('\\', '/', $fallback), '/');
         return $fallback;
+    }
+
+    /**
+     * Absolute URL for a branding file (storage uploads or public defaults).
+     */
+    public static function brandingAssetUrl(string $path): string
+    {
+        $path = ltrim(str_replace('\\', '/', $path), '/');
+        if (str_starts_with($path, 'branding/')) {
+            return url('branding/' . basename($path));
+        }
+
+        return asset($path);
+    }
+
+    protected static function brandingFileExists(string $path): bool
+    {
+        if (str_starts_with($path, 'branding/')) {
+            return is_file(storage_path('app/public/' . $path));
+        }
+
+        return is_file(public_path($path));
     }
 
     /**

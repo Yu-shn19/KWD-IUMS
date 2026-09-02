@@ -1038,7 +1038,19 @@ class MeterReadingController extends Controller
             ->get()
             ->keyBy(mr_col('assigned_reader_id'));
 
-        return view('processes.download-reading', compact('readers', 'assignmentsSummary'));
+        $meterReaders = $readers->map(function ($reader) {
+            $name = strtoupper((string) $reader->last_name) . ', ' . strtoupper((string) $reader->first_name);
+            if (! empty($reader->middle_name)) {
+                $name .= ' ' . strtoupper(substr((string) $reader->middle_name, 0, 1)) . '.';
+            }
+
+            return [
+                'id' => $reader->id,
+                'name' => $name,
+            ];
+        })->values();
+
+        return view('processes.download-reading', compact('readers', 'assignmentsSummary', 'meterReaders'));
     }
  /**
      * JSON summary of reader assignments for the download-reading page (badge updates).
@@ -1172,6 +1184,182 @@ class MeterReadingController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete schedule.',
+            ], 500);
+        }
+    }
+
+    /**
+     * Update one meter reading schedule from Download Reading (View Routes).
+     * Syncs due_date to related ledger rows and readings to downloaded_readings when present.
+     */
+    public function updateSchedule(Request $request)
+    {
+        $validated = $request->validate([
+            'schedule_id' => 'required|integer|exists:meter_reading_schedules,id',
+            'assigned_reader_id' => 'nullable|integer|exists:users,id',
+            'bill_month' => 'required|date',
+            'bill_date' => 'required|date',
+            'due_date' => 'required|date',
+            'disconnection_date' => 'required|date',
+            'previous_reading_date' => 'nullable|date',
+            'previous_reading' => 'required|integer|min:0',
+            'current_reading' => 'nullable|integer|min:0',
+            'reading_date' => 'nullable|date',
+            'consumption' => 'nullable|integer',
+            'current_billing' => 'nullable|numeric|min:0',
+            'arrears' => 'nullable|numeric|min:0',
+            'penalty' => 'nullable|numeric|min:0',
+            'meter_rental_arrears' => 'nullable|numeric|min:0',
+            'prior_years' => 'nullable|numeric|min:0',
+            'total_amount' => 'nullable|numeric|min:0',
+            'status' => 'required|string|in:Prepared,Assigned,In Progress,Completed',
+            'sedr_number' => 'nullable|integer',
+        ]);
+
+        $scheduleId = (int) $validated['schedule_id'];
+        $previousReading = (int) $validated['previous_reading'];
+        $currentReading = $request->filled('current_reading') ? (int) $validated['current_reading'] : null;
+        $consumption = $request->filled('consumption') ? (int) $validated['consumption'] : null;
+        if ($currentReading !== null && $consumption === null) {
+            $consumption = $currentReading - $previousReading;
+        }
+
+        $dueDate = Carbon::parse($validated['due_date'])->format('Y-m-d');
+
+        try {
+            $schedule = MeterReadingSchedule::with(['consumerZone', 'downloadedReading'])->find($scheduleId);
+            if (! $schedule) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Meter reading schedule not found.',
+                ], 404);
+            }
+
+            $payload = MeterReadingSchedule::filterTableAttributes([
+                'assigned_reader_id' => $validated['assigned_reader_id'] ?: null,
+                'bill_month' => Carbon::parse($validated['bill_month'])->format('Y-m-d'),
+                'bill_date' => Carbon::parse($validated['bill_date'])->format('Y-m-d'),
+                'due_date' => $dueDate,
+                'disconnection_date' => Carbon::parse($validated['disconnection_date'])->format('Y-m-d'),
+                'previous_reading_date' => ! empty($validated['previous_reading_date'])
+                    ? Carbon::parse($validated['previous_reading_date'])->format('Y-m-d')
+                    : null,
+                'previous_reading' => $previousReading,
+                'current_reading' => $currentReading,
+                'reading_date' => ! empty($validated['reading_date'])
+                    ? Carbon::parse($validated['reading_date'])->format('Y-m-d')
+                    : null,
+                'consumption' => $consumption ?? 0,
+                'current_billing' => round((float) ($validated['current_billing'] ?? 0), 2),
+                'arrears' => round((float) ($validated['arrears'] ?? 0), 2),
+                'penalty' => round((float) ($validated['penalty'] ?? 0), 2),
+                'meter_rental_arrears' => round((float) ($validated['meter_rental_arrears'] ?? 0), 2),
+                'prior_years' => round((float) ($validated['prior_years'] ?? 0), 2),
+                'total_amount' => round((float) ($validated['total_amount'] ?? 0), 2),
+                'status' => $validated['status'],
+                'sedr_number' => $validated['sedr_number'] ?? $schedule->sedr_number,
+            ]);
+
+            DB::transaction(function () use ($schedule, $payload, $dueDate, $previousReading, $currentReading, $consumption, $validated) {
+                $schedule->update($payload);
+
+                ConsumerLedger::query()
+                    ->where(mr_col('schedule_id'), $schedule->id)
+                    ->update(['due_date' => $dueDate]);
+
+                $downloaded = $schedule->downloadedReading;
+                if ($downloaded) {
+                    $downloadPayload = [
+                        'previous_reading' => $previousReading,
+                        'current_reading' => $currentReading,
+                        'consumption' => $consumption ?? $downloaded->consumption,
+                    ];
+                    if (! empty($validated['reading_date'])) {
+                        $downloadPayload['reading_date'] = Carbon::parse($validated['reading_date'])->format('Y-m-d');
+                    }
+                    if (array_key_exists('current_billing', $payload)) {
+                        $downloadPayload['current_billing'] = $payload['current_billing'];
+                    }
+                    $downloaded->fill($downloadPayload);
+                    $downloaded->save();
+                }
+            });
+
+            $schedule->refresh()->load(['consumerZone', 'assignedReader']);
+
+            Log::info('Meter reading schedule updated', [
+                'schedule_id' => $scheduleId,
+                'account_no' => $schedule->account_number,
+                'user' => optional(Auth::user())->name,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Schedule updated for ' . ($schedule->account_number ?? '') . '.',
+                'data' => $schedule,
+            ]);
+        } catch (Throwable $e) {
+            Log::error('updateSchedule failed: ' . $e->getMessage(), [
+                'schedule_id' => $scheduleId,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update schedule: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Update bill/due/disconnection dates for many schedules shown on Download Reading.
+     */
+    public function updateSchedulesBatch(Request $request)
+    {
+        $validated = $request->validate([
+            'schedule_ids' => 'required|array|min:1',
+            'schedule_ids.*' => 'integer|exists:meter_reading_schedules,id',
+            'bill_month' => 'required|date',
+            'bill_date' => 'required|date',
+            'due_date' => 'required|date',
+            'disconnection_date' => 'required|date',
+        ]);
+
+        $scheduleIds = array_values(array_unique(array_map('intval', $validated['schedule_ids'])));
+        $billMonth = Carbon::parse($validated['bill_month'])->format('Y-m-d');
+        $billDate = Carbon::parse($validated['bill_date'])->format('Y-m-d');
+        $dueDate = Carbon::parse($validated['due_date'])->format('Y-m-d');
+        $disconnectionDate = Carbon::parse($validated['disconnection_date'])->format('Y-m-d');
+
+        try {
+            DB::transaction(function () use ($scheduleIds, $billMonth, $billDate, $dueDate, $disconnectionDate) {
+                MeterReadingSchedule::query()->whereIn(mr_col('id'), $scheduleIds)->update(
+                    MeterReadingSchedule::filterTableAttributes([
+                        'bill_month' => $billMonth,
+                        'bill_date' => $billDate,
+                        'due_date' => $dueDate,
+                        'disconnection_date' => $disconnectionDate,
+                    ])
+                );
+
+                ConsumerLedger::query()
+                    ->whereIn(mr_col('schedule_id'), $scheduleIds)
+                    ->update(['due_date' => $dueDate]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => count($scheduleIds) . ' schedule(s) updated.',
+                'updated_count' => count($scheduleIds),
+            ]);
+        } catch (Throwable $e) {
+            Log::error('updateSchedulesBatch failed: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update schedules: ' . $e->getMessage(),
             ], 500);
         }
     }

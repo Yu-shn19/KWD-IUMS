@@ -39,31 +39,79 @@ class SettingController extends Controller
         Setting::set('org_address', trim($request->org_address));
         Setting::set('org_tagline', trim($request->org_tagline));
 
-        $directory = public_path('WDMS/img/logo');
-        if (!File::exists($directory)) {
-            File::makeDirectory($directory, 0755, true);
-        }
+        $uploadErrors = [];
 
         foreach (['logo', 'favicon', 'hero_image'] as $field) {
             if (!$request->hasFile($field)) {
                 continue;
             }
 
-            $file = $request->file($field);
-            $filename = $field . '_' . time() . '.' . $file->getClientOriginalExtension();
-            $file->move($directory, $filename);
+            try {
+                $relativePath = $this->storeBrandingImage($request->file($field), $field);
+                Setting::set($field === 'hero_image' ? 'hero_image' : $field, $relativePath);
 
-            $relativePath = 'WDMS/img/logo/' . $filename;
-            Setting::set($field === 'hero_image' ? 'hero_image' : $field, $relativePath);
-
-            // Keep favicon in sync with logo when favicon was not uploaded separately
-            if ($field === 'logo' && !$request->hasFile('favicon')) {
-                Setting::set('favicon', $relativePath);
+                // Keep favicon in sync with logo when favicon was not uploaded separately
+                if ($field === 'logo' && !$request->hasFile('favicon')) {
+                    Setting::set('favicon', $relativePath);
+                }
+            } catch (\Throwable $e) {
+                report($e);
+                $uploadErrors[$field] = 'Unable to save this image. Ask the server administrator to make storage/app/public writable by the web server.';
             }
+        }
+
+        if ($uploadErrors) {
+            return redirect()->route('settings.system')
+                ->with('success', 'District content was saved, but one or more images could not be uploaded.')
+                ->withErrors($uploadErrors);
         }
 
         return redirect()->route('settings.system')
             ->with('success', 'System branding settings updated successfully.');
+    }
+
+    /**
+     * Serve an uploaded branding image from storage (no public/ write required).
+     */
+    public function serveBrandingFile(string $filename)
+    {
+        $filename = basename($filename);
+        if (!preg_match('/^(logo|favicon|hero_image)_\d+\.(jpe?g|png|gif|webp|ico)$/i', $filename)) {
+            abort(404);
+        }
+
+        $path = storage_path('app/public/branding/' . $filename);
+        abort_unless(is_file($path), 404);
+
+        return response()->file($path);
+    }
+
+    /**
+     * Store a branding upload in storage/app/public (writable on typical deploys).
+     * Falls back to public/WDMS/img/logo only when that directory is writable.
+     */
+    protected function storeBrandingImage(\Illuminate\Http\UploadedFile $file, string $field): string
+    {
+        $extension = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'png');
+        $filename = $field . '_' . time() . '.' . $extension;
+
+        $stored = $file->storeAs('branding', $filename, 'public');
+        if ($stored) {
+            return 'branding/' . $filename;
+        }
+
+        $publicDir = public_path('WDMS/img/logo');
+        if (!File::isDirectory($publicDir)) {
+            File::makeDirectory($publicDir, 0775, true);
+        }
+
+        if (!is_writable($publicDir)) {
+            throw new \RuntimeException('Branding directories are not writable.');
+        }
+
+        $file->move($publicDir, $filename);
+
+        return 'WDMS/img/logo/' . $filename;
     }
 
     /**
