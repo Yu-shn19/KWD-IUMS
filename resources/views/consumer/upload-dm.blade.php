@@ -27,6 +27,7 @@
                                 <strong>ARREARS</strong>, <strong>METER RENTAL</strong>, <strong>PENALTY</strong>, <strong>TOTAL</strong>.
                                 The date you select below is used for every row.
                                 Each component is stored on the consumer ledger (not only a single TOTAL DM).
+                                If a DM already exists for that account and date, this upload <strong>updates</strong> it instead of creating a duplicate.
                             </p>
 
                             <form id="importDmForm">
@@ -84,6 +85,7 @@
                                                 <strong>PENALTY</strong> → DM <code>penalty</code>.
                                                 <strong>TOTAL</strong> is the check sum — it is not stored as a separate row.
                                                 The classic <code>account_no</code> + <code>amount</code> file still works.
+                                                Re-upload with the same DM date to <strong>update</strong> existing records.
                                             </small>
                                         </div>
                                     </div>
@@ -121,7 +123,8 @@
                                     PY as <strong>prio_years</strong>, ARREARS as <strong>current_arrears</strong>, METER RENTAL as <strong>others</strong>, and PENALTY as <strong>penalty</strong> on one DM (separate columns — not combined).
                                 </li>
                                 <li class="mb-2">TOTAL is not imported as a fourth amount (it must equal the four parts).</li>
-                                <li class="mb-2">Rows with blank names and zero amounts are skipped. Unknown accounts or duplicates are reported.</li>
+                                <li class="mb-2">Rows with blank names and zero amounts are skipped. Unknown accounts or duplicates <em>in the same file</em> are reported.</li>
+                                <li class="mb-2">Re-uploading the same Excel (same account and DM date) <strong>updates</strong> PY, ARREARS, METER RENTAL, PENALTY, and Debit on the existing DM. New accounts are still inserted.</li>
                                 <li>After import, open the Account Ledger and confirm <strong>Debit</strong> equals PY + ARREARS + METER RENTAL + PENALTY, with meter rental in <strong>Others</strong> and penalty in <strong>Penalty</strong>.</li>
                             </ol>
                         </div>
@@ -204,8 +207,9 @@
                             }
                         }
 
+                        var didSave = (res.imported || 0) > 0 || (res.updated || 0) > 0;
                         Swal.fire({
-                            icon: res.imported > 0 ? 'success' : 'warning',
+                            icon: didSave ? 'success' : 'warning',
                             title: 'DM Import',
                             text: msg,
                             confirmButtonColor: '#3085d6'

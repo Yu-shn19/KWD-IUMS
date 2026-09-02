@@ -3650,10 +3650,11 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Insert one DM or CM ledger row.
-     * $prioYears → PY. $currentArrears → ARREARS. $others → meter rental. $penaltyAmount → Penalty column.
+     * Split a memo amount into PY, arrears, others, penalty, debit/credit.
+     *
+     * @return array{trans: string, magnitude: float, prio_years: float, current_arrears: float, others: float, penalty: float, debit: float, credit: float}
      */
-    private function createOneMemoLedgerEntry(ConsumerZone $consumer, string $date, float $amount, string $trans, float $prioYears = 0, float $currentArrears = 0, float $others = 0, float $penaltyAmount = 0): string
+    private function memoLedgerAmounts(float $amount, string $trans, float $prioYears = 0, float $currentArrears = 0, float $others = 0, float $penaltyAmount = 0): array
     {
         $trans = strtoupper($trans) === 'CM' ? 'CM' : 'DM';
         $magnitude = round(abs($amount), 2);
@@ -3664,20 +3665,129 @@ class BillingProcessController extends Controller
         $others = $trans === 'DM' ? round(max(0, min($others, $remainAfterArrears)), 2) : 0.0;
         $remainAfterOthers = round($remainAfterArrears - $others, 2);
         $penaltyAmount = $trans === 'DM' ? round(max(0, min($penaltyAmount, $remainAfterOthers)), 2) : 0.0;
+
+        return [
+            'trans' => $trans,
+            'magnitude' => $magnitude,
+            'prio_years' => $prioYears,
+            'current_arrears' => $currentArrears,
+            'others' => $others,
+            'penalty' => $penaltyAmount,
+            'debit' => $trans === 'CM' ? 0.0 : $magnitude,
+            'credit' => $trans === 'CM' ? $magnitude : 0.0,
+        ];
+    }
+
+    /**
+     * Existing DM/CM for this consumer and date (same match as the old duplicate check).
+     */
+    private function findExistingMemoLedger(int $consumerZoneId, string $date, string $trans): ?ConsumerLedger
+    {
+        $trans = strtoupper($trans) === 'CM' ? 'CM' : 'DM';
+
+        return ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->whereDate(mr_col('date'), $date)
+            ->whereRaw('UPPER(TRIM(trans)) = ?', [$trans])
+            ->orderBy(mr_col('id'))
+            ->lockForUpdate()
+            ->first();
+    }
+
+    /**
+     * Replace amounts on an existing DM/CM, keep the same reference, then rebuild running balances.
+     */
+    private function updateOneMemoLedgerEntry(
+        ConsumerLedger $ledger,
+        ConsumerZone $consumer,
+        float $amount,
+        string $trans,
+        float $prioYears = 0,
+        float $currentArrears = 0,
+        float $others = 0,
+        float $penaltyAmount = 0
+    ): string {
+        $parts = $this->memoLedgerAmounts($amount, $trans, $prioYears, $currentArrears, $others, $penaltyAmount);
+
+        $ledger->penalty = $parts['penalty'];
+        $ledger->others = $parts['others'];
+        $ledger->debit = $parts['debit'];
+        $ledger->credit = $parts['credit'];
+        $ledger->username = \App\Support\AuthUsername::formatted();
+
+        if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
+            $ledger->prio_years = $parts['prio_years'];
+        }
+        if (Schema::hasColumn('consumer_ledgers', 'current_arrears')) {
+            $ledger->current_arrears = $parts['current_arrears'];
+        }
+
+        $ledger->save();
+        $this->recalculateConsumerLedgerBalances((int) $consumer->id);
+
+        return (string) $ledger->reference;
+    }
+
+    /**
+     * Insert a new memo or update the existing one for this consumer and date.
+     *
+     * @return array{action: string, reference: string}
+     */
+    private function upsertOneMemoLedgerEntry(
+        ConsumerZone $consumer,
+        string $date,
+        float $amount,
+        string $trans,
+        float $prioYears = 0,
+        float $currentArrears = 0,
+        float $others = 0,
+        float $penaltyAmount = 0
+    ): array {
+        $existing = $this->findExistingMemoLedger((int) $consumer->id, $date, $trans);
+        if ($existing) {
+            $reference = $this->updateOneMemoLedgerEntry(
+                $existing,
+                $consumer,
+                $amount,
+                $trans,
+                $prioYears,
+                $currentArrears,
+                $others,
+                $penaltyAmount
+            );
+
+            return ['action' => 'updated', 'reference' => $reference];
+        }
+
+        $reference = $this->createOneMemoLedgerEntry(
+            $consumer,
+            $date,
+            $amount,
+            $trans,
+            $prioYears,
+            $currentArrears,
+            $others,
+            $penaltyAmount
+        );
+
+        return ['action' => 'created', 'reference' => $reference];
+    }
+
+    /**
+     * Insert one DM or CM ledger row.
+     * $prioYears → PY. $currentArrears → ARREARS. $others → meter rental. $penaltyAmount → Penalty column.
+     */
+    private function createOneMemoLedgerEntry(ConsumerZone $consumer, string $date, float $amount, string $trans, float $prioYears = 0, float $currentArrears = 0, float $others = 0, float $penaltyAmount = 0): string
+    {
+        $parts = $this->memoLedgerAmounts($amount, $trans, $prioYears, $currentArrears, $others, $penaltyAmount);
+        $trans = $parts['trans'];
         $reference = $this->generateUniqueMemoReference($trans, $date);
         $username = \App\Support\AuthUsername::formatted();
         $dateTime = Carbon::parse($date)->startOfDay();
         $currentBalance = $consumer->getLedgerBalance();
-
-        if ($trans === 'CM') {
-            $debit = 0;
-            $credit = $magnitude;
-            $newBalance = round($currentBalance - $magnitude, 2);
-        } else {
-            $debit = $magnitude;
-            $credit = 0;
-            $newBalance = round($currentBalance + $magnitude, 2);
-        }
+        $newBalance = $trans === 'CM'
+            ? round($currentBalance - $parts['magnitude'], 2)
+            : round($currentBalance + $parts['magnitude'], 2);
 
         $payload = [
             'consumer_zone_id' => $consumer->id,
@@ -3693,20 +3803,20 @@ class BillingProcessController extends Controller
             'reading' => 0,
             'volume' => 0,
             'billamount' => 0,
-            'penalty' => $penaltyAmount,
-            'others' => $others,
-            'debit' => $debit,
-            'credit' => $credit,
+            'penalty' => $parts['penalty'],
+            'others' => $parts['others'],
+            'debit' => $parts['debit'],
+            'credit' => $parts['credit'],
             'balance' => $newBalance,
             'username' => $username,
             'txtime' => $dateTime,
         ];
 
         if (Schema::hasColumn('consumer_ledgers', 'prio_years')) {
-            $payload['prio_years'] = $prioYears;
+            $payload['prio_years'] = $parts['prio_years'];
         }
         if (Schema::hasColumn('consumer_ledgers', 'current_arrears')) {
-            $payload['current_arrears'] = $currentArrears;
+            $payload['current_arrears'] = $parts['current_arrears'];
         }
 
         ConsumerLedger::create($payload);
@@ -3734,6 +3844,7 @@ class BillingProcessController extends Controller
 
         $dmDate = Carbon::parse($request->date)->format('Y-m-d');
         $imported = 0;
+        $updated = 0;
         $failed = 0;
         $errors = [];
 
@@ -3876,22 +3987,15 @@ class BillingProcessController extends Controller
                     continue;
                 }
 
-                // Strict: duplicate in DB – consumer already has same memo type for this date
-                $alreadyExists = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
-                    ->where(mr_col('date'), $dmDate)
-                    ->where(mr_col('trans'), $trans)
-                    ->exists();
-                if ($alreadyExists) {
-                    $errors[] = "Row {$rowNum}: Duplicate – [{$accountNo}] already has a {$trans} for {$dmDate}.";
-                    $failed++;
-                    continue;
-                }
-
                 try {
                     DB::beginTransaction();
-                    $this->createOneMemoLedgerEntry($consumer, $dmDate, $magnitude, $trans, $prioYearsVal);
+                    $result = $this->upsertOneMemoLedgerEntry($consumer, $dmDate, $magnitude, $trans, $prioYearsVal);
                     DB::commit();
-                    $imported++;
+                    if ($result['action'] === 'updated') {
+                        $updated++;
+                    } else {
+                        $imported++;
+                    }
                     $processedInThisFile[$accountNo] = $rowNum;
                 } catch (\Exception $e) {
                     DB::rollBack();
@@ -3900,8 +4004,8 @@ class BillingProcessController extends Controller
                 }
             }
 
-            $message = "DM/CM import completed. Imported: {$imported}, Failed: {$failed}.";
-            if ($imported === 0 && $failed === 0 && count($rows) > 1) {
+            $message = "DM/CM import completed. Imported: {$imported}, Updated: {$updated}, Failed: {$failed}.";
+            if ($imported === 0 && $updated === 0 && $failed === 0 && count($rows) > 1) {
                 $message = 'No data rows were processed. Check that the file has a header row (account_no, amount) and at least one data row with valid account numbers and amounts. Use positive amounts for DM and negative amounts for CM.';
             }
 
@@ -3909,6 +4013,7 @@ class BillingProcessController extends Controller
                 'success' => true,
                 'message' => $message,
                 'imported' => $imported,
+                'updated' => $updated,
                 'failed' => $failed,
                 'errors' => $errors,
             ]);
@@ -3964,6 +4069,7 @@ class BillingProcessController extends Controller
         $totalCol = $this->findColumnIndex($header, ['total', 'total_amount', 'total amount']);
 
         $imported = 0;
+        $updated = 0;
         $failed = 0;
         $errors = [];
         $processedIds = [];
@@ -4046,27 +4152,18 @@ class BillingProcessController extends Controller
                 continue;
             }
 
-            $alreadyDm = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
-                ->where(mr_col('date'), $dmDate)
-                ->where(mr_col('trans'), 'DM')
-                ->exists();
-            $willCreateDm = ($py + $arrears + $meterRental + $penalty) > 0;
-            if ($alreadyDm && $willCreateDm) {
-                $errors[] = "Row {$rowNum}: Duplicate – [{$consumer->account_no}] already has a DM for {$dmDate}.";
-                $failed++;
-                continue;
-            }
-
             try {
                 DB::beginTransaction();
 
                 $dmAmount = round($py + $arrears + $meterRental + $penalty, 2);
-                if ($dmAmount > 0) {
-                    $this->createOneMemoLedgerEntry($consumer, $dmDate, $dmAmount, 'DM', $py, $arrears, $meterRental, $penalty);
-                }
+                $result = $this->upsertOneMemoLedgerEntry($consumer, $dmDate, $dmAmount, 'DM', $py, $arrears, $meterRental, $penalty);
 
                 DB::commit();
-                $imported++;
+                if ($result['action'] === 'updated') {
+                    $updated++;
+                } else {
+                    $imported++;
+                }
                 $processedIds[$consumer->id] = $rowNum;
 
                 if ($total > 0 && abs($total - $partsSum) > 0.02) {
@@ -4079,8 +4176,8 @@ class BillingProcessController extends Controller
             }
         }
 
-        $message = "Opening-balance import completed. Accounts imported: {$imported}, Failed: {$failed}.";
-        if ($imported === 0 && $failed === 0 && count($rows) > 1) {
+        $message = "Opening-balance import completed. Accounts imported: {$imported}, Updated: {$updated}, Failed: {$failed}.";
+        if ($imported === 0 && $updated === 0 && $failed === 0 && count($rows) > 1) {
             $message = 'No data rows were processed. Check ZONE, ACCOUNT NAME or LAST NAME + FIRST NAME, PY, ARREARS, METER RENTAL, PENALTY, TOTAL and that names exist in the consumer master list.';
         }
 
@@ -4088,6 +4185,7 @@ class BillingProcessController extends Controller
             'success' => true,
             'message' => $message,
             'imported' => $imported,
+            'updated' => $updated,
             'failed' => $failed,
             'errors' => $errors,
         ]);
