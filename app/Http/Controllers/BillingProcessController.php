@@ -3695,6 +3695,46 @@ class BillingProcessController extends Controller
     }
 
     /**
+     * Blank Excel amounts mean the account is already paid: remove the opening DM/CM
+     * (and leftover schedule-less BILLING/PENALTY on the same date), then rebuild balances.
+     */
+    private function clearPaidMemoLedgerEntries(ConsumerZone $consumer, string $date): int
+    {
+        $ledgers = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumer->id)
+            ->whereDate(mr_col('date'), $date)
+            ->where(function ($query) {
+                $query->whereRaw('UPPER(TRIM(trans)) IN (?, ?)', ['DM', 'CM'])
+                    ->orWhere(function ($openingExtras) {
+                        $openingExtras->whereRaw('UPPER(TRIM(trans)) IN (?, ?)', ['BILLING', 'PENALTY'])
+                            ->whereNull(mr_col('schedule_id'))
+                            ->whereNull(mr_col('downloaded_reading_id'))
+                            ->whereNull(mr_col('consumer_payment_id'));
+                    });
+            })
+            ->lockForUpdate()
+            ->get();
+
+        if ($ledgers->isEmpty()) {
+            return 0;
+        }
+
+        $penaltyIds = $ledgers->pluck('penalty_id')->filter()->unique()->values();
+
+        foreach ($ledgers as $ledger) {
+            $ledger->delete();
+        }
+
+        if ($penaltyIds->isNotEmpty()) {
+            Penalty::query()->whereIn(mr_col('id'), $penaltyIds)->delete();
+        }
+
+        $this->recalculateConsumerLedgerBalances((int) $consumer->id);
+
+        return $ledgers->count();
+    }
+
+    /**
      * Replace amounts on an existing DM/CM, keep the same reference, then rebuild running balances.
      */
     private function updateOneMemoLedgerEntry(
@@ -3896,6 +3936,7 @@ class BillingProcessController extends Controller
             $prioYearsKeys = ['prio_years', 'prioyears', 'py', 'prior_years', 'prior years', 'prev_yr', 'previous_year'];
 
             $processedInThisFile = []; // Track account_no to reject duplicates within the same file
+            $cleared = 0;
 
             foreach ($rows as $index => $row) {
                 if ($index === 0) {
@@ -3943,31 +3984,15 @@ class BillingProcessController extends Controller
                     }
                 }
 
+                $isBlankPaid = $amountVal === null || abs((float) $amountVal) < 0.00001;
+
                 if (!$accountNo) {
-                    if ($amountVal === null || abs((float) $amountVal) < 0.00001) {
+                    if ($isBlankPaid) {
                         continue; // Skip empty / zero rows
                     }
                     $errors[] = "Row {$rowNum}: Missing account_no.";
                     $failed++;
                     continue;
-                }
-
-                // Skip zero or blank amount quietly (no error)
-                if ($amountVal === null || abs((float) $amountVal) < 0.00001) {
-                    continue;
-                }
-
-                // Skip non-numeric amount quietly
-                if (!is_numeric($amountVal)) {
-                    continue;
-                }
-
-                $trans = $amountVal < 0 ? 'CM' : 'DM';
-                $magnitude = abs($amountVal);
-                if ($trans === 'CM') {
-                    $prioYearsVal = 0.0;
-                } elseif ($prioYearsVal > $magnitude) {
-                    $prioYearsVal = $magnitude;
                 }
 
                 $consumer = ConsumerZone::query()->where(mr_col('account_no'), $accountNo)->first();
@@ -3987,6 +4012,29 @@ class BillingProcessController extends Controller
                     continue;
                 }
 
+                if ($isBlankPaid) {
+                    try {
+                        DB::beginTransaction();
+                        $this->clearPaidMemoLedgerEntries($consumer, $dmDate);
+                        DB::commit();
+                        $cleared++;
+                        $processedInThisFile[$accountNo] = $rowNum;
+                    } catch (\Exception $e) {
+                        DB::rollBack();
+                        $errors[] = "Row {$rowNum}: " . $e->getMessage();
+                        $failed++;
+                    }
+                    continue;
+                }
+
+                $trans = $amountVal < 0 ? 'CM' : 'DM';
+                $magnitude = abs($amountVal);
+                if ($trans === 'CM') {
+                    $prioYearsVal = 0.0;
+                } elseif ($prioYearsVal > $magnitude) {
+                    $prioYearsVal = $magnitude;
+                }
+
                 try {
                     DB::beginTransaction();
                     $result = $this->upsertOneMemoLedgerEntry($consumer, $dmDate, $magnitude, $trans, $prioYearsVal);
@@ -4004,8 +4052,8 @@ class BillingProcessController extends Controller
                 }
             }
 
-            $message = "DM/CM import completed. Imported: {$imported}, Updated: {$updated}, Failed: {$failed}.";
-            if ($imported === 0 && $updated === 0 && $failed === 0 && count($rows) > 1) {
+            $message = "DM/CM import completed. Imported: {$imported}, Updated: {$updated}, Cleared (already paid): {$cleared}, Failed: {$failed}.";
+            if ($imported === 0 && $updated === 0 && $cleared === 0 && $failed === 0 && count($rows) > 1) {
                 $message = 'No data rows were processed. Check that the file has a header row (account_no, amount) and at least one data row with valid account numbers and amounts. Use positive amounts for DM and negative amounts for CM.';
             }
 
@@ -4014,6 +4062,7 @@ class BillingProcessController extends Controller
                 'message' => $message,
                 'imported' => $imported,
                 'updated' => $updated,
+                'cleared' => $cleared,
                 'failed' => $failed,
                 'errors' => $errors,
             ]);
@@ -4070,6 +4119,7 @@ class BillingProcessController extends Controller
 
         $imported = 0;
         $updated = 0;
+        $cleared = 0;
         $failed = 0;
         $errors = [];
         $processedIds = [];
@@ -4125,10 +4175,6 @@ class BillingProcessController extends Controller
                 continue;
             }
 
-            if ($partsSum <= 0) {
-                continue;
-            }
-
             $matchError = null;
             $consumer = $this->findConsumerForOpeningImport(
                 $accountNo !== '' ? $accountNo : null,
@@ -4155,6 +4201,14 @@ class BillingProcessController extends Controller
             try {
                 DB::beginTransaction();
 
+                if ($partsSum <= 0) {
+                    $this->clearPaidMemoLedgerEntries($consumer, $dmDate);
+                    DB::commit();
+                    $cleared++;
+                    $processedIds[$consumer->id] = $rowNum;
+                    continue;
+                }
+
                 $dmAmount = round($py + $arrears + $meterRental + $penalty, 2);
                 $result = $this->upsertOneMemoLedgerEntry($consumer, $dmDate, $dmAmount, 'DM', $py, $arrears, $meterRental, $penalty);
 
@@ -4176,8 +4230,8 @@ class BillingProcessController extends Controller
             }
         }
 
-        $message = "Opening-balance import completed. Accounts imported: {$imported}, Updated: {$updated}, Failed: {$failed}.";
-        if ($imported === 0 && $updated === 0 && $failed === 0 && count($rows) > 1) {
+        $message = "Opening-balance import completed. Accounts imported: {$imported}, Updated: {$updated}, Cleared (already paid): {$cleared}, Failed: {$failed}.";
+        if ($imported === 0 && $updated === 0 && $cleared === 0 && $failed === 0 && count($rows) > 1) {
             $message = 'No data rows were processed. Check ZONE, ACCOUNT NAME or LAST NAME + FIRST NAME, PY, ARREARS, METER RENTAL, PENALTY, TOTAL and that names exist in the consumer master list.';
         }
 
@@ -4186,6 +4240,7 @@ class BillingProcessController extends Controller
             'message' => $message,
             'imported' => $imported,
             'updated' => $updated,
+            'cleared' => $cleared,
             'failed' => $failed,
             'errors' => $errors,
         ]);
