@@ -47,6 +47,9 @@
         <a class="collapse-item" href="{{ route('consumer.upload-dm') }}">
           <i class="fas fa-circle small-icon"></i> Upload DM (Excel)
         </a>
+        <a class="collapse-item" href="{{ route('consumer.edit-dm') }}">
+          <i class="fas fa-circle small-icon"></i> Edit DM
+        </a>
         <a class="collapse-item" href="#">
           <i class="fas fa-circle small-icon"></i> Category/Routes
         </a>

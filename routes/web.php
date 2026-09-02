@@ -80,6 +80,7 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     Route::get('/consumer/upload-base-reading', [ConsumerController::class, 'uploadBaseReadingIndex'])->name('consumer.upload-base-reading');
     Route::post('/consumer/upload-base-reading', [ConsumerController::class, 'uploadBaseReadingStore'])->name('consumer.upload-base-reading.store');
     Route::get('/consumer/upload-dm', [BillingProcessController::class, 'uploadDmIndex'])->name('consumer.upload-dm');
+    Route::get('/consumer/edit-dm', [BillingProcessController::class, 'editDmIndex'])->name('consumer.edit-dm');
 
     // Ledger page route
    // Route::get('/ledger', [ConsumerController::class, 'ledger'])->name('ledger');
@@ -268,6 +269,9 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
      Route::post('/consumer-master-list/bulk-dm', [BillingProcessController::class, 'storeBulkDmLedger'])->name('consumer-master-list.bulk-dm');
     Route::post('/consumer-master-list/store-dm', [BillingProcessController::class, 'storeDmLedger'])->name('consumer-master-list.store-dm');
     Route::post('/consumer-master-list/import-dm', [BillingProcessController::class, 'storeDmLedgerImport'])->name('consumer-master-list.import-dm');
+    Route::get('/consumer-master-list/dms', [BillingProcessController::class, 'listDmLedgers'])->name('consumer-master-list.list-dm');
+    Route::put('/consumer-master-list/update-dm', [BillingProcessController::class, 'updateDmLedger'])->name('consumer-master-list.update-dm');
+    Route::delete('/consumer-master-list/destroy-dm', [BillingProcessController::class, 'destroyDmLedger'])->name('consumer-master-list.destroy-dm');
 
 
     // monthly-billing-report page route

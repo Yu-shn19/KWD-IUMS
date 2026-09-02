@@ -187,6 +187,57 @@
         <i class="fas fa-angle-up"></i>
     </a>
 
+    <div class="modal fade ledger-no-print" id="ledgerEditDmModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fas fa-edit mr-2"></i>Edit Debit Memo</h5>
+                    <button type="button" class="close text-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="ledgerEditDmId" value="">
+                    <div class="form-group">
+                        <label class="font-weight-bold">Date</label>
+                        <input type="date" id="ledgerEditDmDate" class="form-control">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label class="font-weight-bold">PY</label>
+                            <input type="number" id="ledgerEditDmPy" class="form-control ledger-edit-dm-amt" step="0.01" min="0">
+                        </div>
+                        <div class="form-group col-6">
+                            <label class="font-weight-bold">Arrears</label>
+                            <input type="number" id="ledgerEditDmArrears" class="form-control ledger-edit-dm-amt" step="0.01" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label class="font-weight-bold">Meter Rental</label>
+                            <input type="number" id="ledgerEditDmOthers" class="form-control ledger-edit-dm-amt" step="0.01" min="0">
+                        </div>
+                        <div class="form-group col-6">
+                            <label class="font-weight-bold">Penalty</label>
+                            <input type="number" id="ledgerEditDmPenalty" class="form-control ledger-edit-dm-amt" step="0.01" min="0">
+                        </div>
+                    </div>
+                    <div class="form-group mb-0">
+                        <label class="font-weight-bold">Total (Debit)</label>
+                        <input type="text" id="ledgerEditDmTotal" class="form-control bg-light font-weight-bold" readonly>
+                    </div>
+                </div>
+                <div class="modal-footer justify-content-between">
+                    <button type="button" class="btn btn-outline-danger btn-sm" id="ledgerEditDmDeleteBtn">Delete</button>
+                    <div>
+                        <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary btn-sm" id="ledgerEditDmSaveBtn">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     {{-- Official print layout (HWD consumer ledger) — filled by JS then window.print() --}}
     <div id="ledgerPrintRoot" class="ledger-print-root" aria-hidden="true">
         <div class="ledger-print-inner">
@@ -858,6 +909,7 @@
                         const balance = ledger.balance !== null && ledger.balance !== undefined ? parseFloat(ledger.balance) : 0;
                         const username = ledger.username || '';
                         const txtime = formatDateTime(ledger.txtime);
+                        const isoDate = String(ledger.date || '').slice(0, 10);
 
                         // Determine row class based on transaction type
                         let rowClass = 'hover-row';
@@ -868,9 +920,22 @@
                         // Determine balance color
                         const balanceClass = balance > 0 ? 'text-danger' : 'text-success';
 
+                        let transCell = trans;
+                        if (trans.toUpperCase() === 'DM' && ledger.id) {
+                            transCell = trans +
+                                ' <button type="button" class="btn btn-link btn-sm p-0 ml-1 ledger-edit-dm-btn ledger-no-print"' +
+                                ' title="Edit DM"' +
+                                ' data-id="' + ledger.id + '"' +
+                                ' data-date="' + isoDate + '"' +
+                                ' data-py="' + prioYears.toFixed(2) + '"' +
+                                ' data-arrears="' + currentArrears.toFixed(2) + '"' +
+                                ' data-others="' + others.toFixed(2) + '"' +
+                                ' data-penalty="' + penalty.toFixed(2) + '">' +
+                                '<i class="fas fa-edit"></i></button>';
+                        }
                         html += `
                             <tr class="${rowClass}">
-                                <td class="text-center py-1 px-2">${trans}</td>
+                                <td class="text-center py-1 px-2">${transCell}</td>
                                 <td class="text-center py-1 px-2">${date}</td>
                                 <td class="text-center py-1 px-2">${dueDate}</td>
                                 <td class="text-center py-1 px-2 text-break">${reference}</td>
@@ -958,6 +1023,95 @@
 
             // Check on page load
             checkAndLoadLedger();
+
+            function ledgerEditDmTotal() {
+                var total = (parseFloat($('#ledgerEditDmPy').val()) || 0)
+                    + (parseFloat($('#ledgerEditDmArrears').val()) || 0)
+                    + (parseFloat($('#ledgerEditDmOthers').val()) || 0)
+                    + (parseFloat($('#ledgerEditDmPenalty').val()) || 0);
+                $('#ledgerEditDmTotal').val(total.toFixed(2));
+            }
+            $(document).on('input', '.ledger-edit-dm-amt', ledgerEditDmTotal);
+
+            $(document).on('click', '.ledger-edit-dm-btn', function() {
+                var btn = $(this);
+                $('#ledgerEditDmId').val(btn.data('id'));
+                $('#ledgerEditDmDate').val(btn.data('date'));
+                $('#ledgerEditDmPy').val(btn.data('py'));
+                $('#ledgerEditDmArrears').val(btn.data('arrears'));
+                $('#ledgerEditDmOthers').val(btn.data('others'));
+                $('#ledgerEditDmPenalty').val(btn.data('penalty'));
+                ledgerEditDmTotal();
+                $('#ledgerEditDmModal').modal('show');
+            });
+
+            $('#ledgerEditDmSaveBtn').on('click', function() {
+                var btn = $(this);
+                btn.prop('disabled', true).text('Saving...');
+                $.ajax({
+                    url: '{{ route("consumer-master-list.update-dm") }}',
+                    method: 'POST',
+                    data: {
+                        _token: $('meta[name="csrf-token"]').attr('content'),
+                        _method: 'PUT',
+                        ledger_id: $('#ledgerEditDmId').val(),
+                        date: $('#ledgerEditDmDate').val(),
+                        prio_years: parseFloat($('#ledgerEditDmPy').val()) || 0,
+                        current_arrears: parseFloat($('#ledgerEditDmArrears').val()) || 0,
+                        others: parseFloat($('#ledgerEditDmOthers').val()) || 0,
+                        penalty: parseFloat($('#ledgerEditDmPenalty').val()) || 0
+                    },
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json',
+                        'X-HTTP-Method-Override': 'PUT'
+                    },
+                    success: function(res) {
+                        btn.prop('disabled', false).text('Save');
+                        $('#ledgerEditDmModal').modal('hide');
+                        if (currentAccountNo) {
+                            loadLedgerData(currentAccountNo, $('#ledgerYear').val());
+                        }
+                        alert(res.message || 'DM updated.');
+                    },
+                    error: function(xhr) {
+                        btn.prop('disabled', false).text('Save');
+                        var msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Save failed.';
+                        alert(msg);
+                    }
+                });
+            });
+
+            $('#ledgerEditDmDeleteBtn').on('click', function() {
+                if (!confirm('Delete this DM? The ledger balance will be rebuilt.')) {
+                    return;
+                }
+                $.ajax({
+                    url: '{{ route("consumer-master-list.destroy-dm") }}',
+                    method: 'POST',
+                    data: {
+                        _token: $('meta[name="csrf-token"]').attr('content'),
+                        ledger_id: $('#ledgerEditDmId').val(),
+                        _method: 'DELETE'
+                    },
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json',
+                        'X-HTTP-Method-Override': 'DELETE'
+                    },
+                    success: function(res) {
+                        $('#ledgerEditDmModal').modal('hide');
+                        if (currentAccountNo) {
+                            loadLedgerData(currentAccountNo, $('#ledgerYear').val());
+                        }
+                        alert(res.message || 'DM deleted.');
+                    },
+                    error: function(xhr) {
+                        var msg = (xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Delete failed.';
+                        alert(msg);
+                    }
+                });
+            });
 
             // Also check periodically in case consumer was selected on same page
             let checkInterval = setInterval(function() {

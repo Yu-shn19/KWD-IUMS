@@ -3875,6 +3875,228 @@ class BillingProcessController extends Controller
         return view('consumer.upload-dm');
     }
 
+    /**
+     * Dedicated Files page to search a consumer and edit their DM rows.
+     */
+    public function editDmIndex(): View
+    {
+        return view('consumer.edit-dm');
+    }
+
+    /**
+     * List DM ledger rows for one consumer (by account_no or consumer_zone_id).
+     */
+    public function listDmLedgers(Request $request)
+    {
+        $request->validate([
+            'account_no' => 'nullable|string',
+            'consumer_zone_id' => 'nullable|integer',
+            'search' => 'nullable|string',
+        ]);
+
+        $consumer = null;
+        if ($request->filled('consumer_zone_id')) {
+            $consumer = ConsumerZone::find((int) $request->consumer_zone_id);
+        }
+        if (! $consumer) {
+            $lookup = trim((string) ($request->account_no ?: $request->search ?: ''));
+            if ($lookup !== '') {
+                $consumer = ConsumerZone::findByAccountNo($lookup);
+                if (! $consumer) {
+                    $upper = strtoupper($lookup);
+                    $consumer = ConsumerZone::query()
+                        ->where(function ($q) use ($upper) {
+                            $q->whereRaw('UPPER(TRIM(account_name)) LIKE ?', ['%' . $upper . '%'])
+                                ->orWhereRaw('UPPER(TRIM(last_name)) LIKE ?', ['%' . $upper . '%'])
+                                ->orWhereRaw('UPPER(TRIM(first_name)) LIKE ?', ['%' . $upper . '%']);
+                        })
+                        ->orderBy(mr_col('account_no'))
+                        ->first();
+                }
+            }
+        }
+
+        if (! $consumer) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Consumer not found. Search by account number or name.',
+            ], 404);
+        }
+
+        $dms = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumer->id)
+            ->whereRaw('UPPER(TRIM(trans)) = ?', ['DM'])
+            ->orderBy(mr_col('date'), 'desc')
+            ->orderBy(mr_col('id'), 'desc')
+            ->get()
+            ->map(function (ConsumerLedger $ledger) {
+                return $this->formatDmLedgerRow($ledger);
+            })
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'consumer' => [
+                'id' => $consumer->id,
+                'account_no' => $consumer->account_no,
+                'account_name' => $consumer->account_name,
+                'zone_code' => $consumer->zone_code,
+                'address' => $consumer->address,
+            ],
+            'dms' => $dms,
+        ]);
+    }
+
+    /**
+     * Update one DM: date, PY, ARREARS, meter rental (others), penalty.
+     * Zero amounts delete the DM (already paid).
+     */
+    public function updateDmLedger(Request $request)
+    {
+        $request->validate([
+            'ledger_id' => 'required|integer',
+            'date' => 'required|date',
+            'prio_years' => 'nullable|numeric|min:0',
+            'current_arrears' => 'nullable|numeric|min:0',
+            'others' => 'nullable|numeric|min:0',
+            'penalty' => 'nullable|numeric|min:0',
+        ]);
+
+        $py = round((float) ($request->prio_years ?? 0), 2);
+        $arrears = round((float) ($request->current_arrears ?? 0), 2);
+        $others = round((float) ($request->others ?? 0), 2);
+        $penalty = round((float) ($request->penalty ?? 0), 2);
+        $amount = round($py + $arrears + $others + $penalty, 2);
+        $date = Carbon::parse($request->date)->format('Y-m-d');
+
+        try {
+            DB::beginTransaction();
+
+            $ledger = ConsumerLedger::query()->where(mr_col('id'), (int) $request->ledger_id)->lockForUpdate()->first();
+            if (! $ledger) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'DM record not found.'], 404);
+            }
+            if (strtoupper(trim((string) $ledger->trans)) !== 'DM') {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Only DM records can be edited here.'], 422);
+            }
+
+            $consumer = ConsumerZone::find($ledger->consumer_zone_id);
+            if (! $consumer) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Consumer not found.'], 404);
+            }
+
+            if ($amount <= 0) {
+                $ledger->delete();
+                $this->recalculateConsumerLedgerBalances((int) $consumer->id);
+                DB::commit();
+
+                return response()->json([
+                    'success' => true,
+                    'deleted' => true,
+                    'message' => 'DM cleared (zero/blank amounts — treated as already paid) for ' . ($consumer->account_no ?? '') . '.',
+                ]);
+            }
+
+            $ledger->date = $date;
+            $reference = $this->updateOneMemoLedgerEntry($ledger, $consumer, $amount, 'DM', $py, $arrears, $others, $penalty);
+            DB::commit();
+
+            $ledger->refresh();
+
+            return response()->json([
+                'success' => true,
+                'deleted' => false,
+                'message' => 'DM updated for ' . ($consumer->account_no ?? '') . ' - ' . ($consumer->account_name ?? ''),
+                'reference' => $reference,
+                'dm' => $this->formatDmLedgerRow($ledger),
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Update DM failed', [
+                'ledger_id' => $request->input('ledger_id'),
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update DM: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete one DM and rebuild running balances.
+     */
+    public function destroyDmLedger(Request $request)
+    {
+        $request->validate([
+            'ledger_id' => 'required|integer',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            $ledger = ConsumerLedger::query()->where(mr_col('id'), (int) $request->ledger_id)->lockForUpdate()->first();
+            if (! $ledger) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'DM record not found.'], 404);
+            }
+            if (strtoupper(trim((string) $ledger->trans)) !== 'DM') {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Only DM records can be deleted here.'], 422);
+            }
+
+            $consumer = ConsumerZone::find($ledger->consumer_zone_id);
+            $accountNo = $consumer->account_no ?? '';
+            $ledger->delete();
+            if ($consumer) {
+                $this->recalculateConsumerLedgerBalances((int) $consumer->id);
+            }
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'DM deleted for account ' . $accountNo . '. Ledger balances were rebuilt.',
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Delete DM failed', [
+                'ledger_id' => $request->input('ledger_id'),
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete DM: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formatDmLedgerRow(ConsumerLedger $ledger): array
+    {
+        $date = $ledger->date;
+        $dateStr = $date instanceof Carbon ? $date->format('Y-m-d') : Carbon::parse((string) $date)->format('Y-m-d');
+
+        return [
+            'id' => $ledger->id,
+            'date' => $dateStr,
+            'reference' => $ledger->reference,
+            'prio_years' => $ledger->prioYearsAmount(),
+            'current_arrears' => $ledger->currentArrearsAmount(),
+            'others' => round((float) ($ledger->others ?? 0), 2),
+            'penalty' => round((float) ($ledger->penalty ?? 0), 2),
+            'debit' => round((float) ($ledger->debit ?? 0), 2),
+            'balance' => round((float) ($ledger->balance ?? 0), 2),
+            'username' => $ledger->username,
+        ];
+    }
+
     public function storeDmLedgerImport(Request $request)
     {
         $request->validate([
