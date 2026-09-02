@@ -14,6 +14,9 @@
         default => null,
     };
     $autoNavigationTour = in_array($currentRoute, ['home', 'dashboard'], true);
+    $skipAutoTour = str_contains($currentRoute, 'print')
+        || str_contains($currentRoute, 'export')
+        || in_array($currentRoute, ['storage.check'], true);
 @endphp
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.css">
@@ -125,8 +128,9 @@
         userId: {{ auth()->id() ?? 'null' }},
         pageTourId: @json($pageTourId),
         autoNavigationTour: @json($autoNavigationTour),
+        skipAutoTour: @json($skipAutoTour),
         currentRoute: @json($currentRoute),
     };
 </script>
 <script src="https://cdn.jsdelivr.net/npm/driver.js@1.3.1/dist/driver.js.iife.js"></script>
-<script src="{{ url('WDMS/js/onboarding-tours.js') }}?v=9"></script>
+<script src="{{ url('WDMS/js/onboarding-tours.js') }}?v=10"></script>

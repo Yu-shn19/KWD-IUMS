@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Support\Facades\Storage;
 
 class User extends Authenticatable
 {
@@ -47,13 +46,18 @@ class User extends Authenticatable
             return null;
         }
 
-        // Profile pictures are stored in public/WDMS/profile-pictures
-        $filePath = public_path('WDMS/profile-pictures/' . $this->profile_picture);
-        if (file_exists($filePath)) {
-            return asset('WDMS/profile-pictures/' . $this->profile_picture);
+        $filename = basename($this->profile_picture);
+
+        $storagePath = storage_path('app/public/profile-pictures/' . $filename);
+        if (is_file($storagePath)) {
+            return url('profile-pictures/' . $filename);
         }
 
-        // Fallback to default image if file doesn't exist
+        $publicPath = public_path('WDMS/profile-pictures/' . $filename);
+        if (is_file($publicPath)) {
+            return asset('WDMS/profile-pictures/' . $filename);
+        }
+
         return null;
     }
 

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class UserController extends Controller
 {
@@ -296,34 +297,16 @@ class UserController extends Controller
                         throw new \Exception('Invalid file uploaded: ' . $file->getErrorMessage());
                     }
                     
-                    // Ensure directory exists in public/WDMS/profile-pictures
-                    $directory = public_path('WDMS/profile-pictures');
-                    if (!File::exists($directory)) {
-                        File::makeDirectory($directory, 0755, true);
-                        Log::info('Created profile-pictures directory', ['path' => $directory]);
-                    }
-                    
-                    // Delete old profile picture if exists
-                    $oldPicturePath = public_path('WDMS/profile-pictures/' . $user->profile_picture);
-                    if ($user->profile_picture && File::exists($oldPicturePath)) {
-                        File::delete($oldPicturePath);
-                        Log::info('Deleted old profile picture', ['filename' => $user->profile_picture]);
-                    }
+                    $this->deleteProfilePictureFile($user->profile_picture);
 
-                    // Store new profile picture in public/WDMS/profile-pictures
-                    $filename = 'user_' . $user->id . '_' . time() . '.' . $file->getClientOriginalExtension();
-                    $file->move($directory, $filename);
-                    
+                    $filename = $this->storeProfilePicture($file, $user->id);
+
                     Log::info('Profile picture stored', [
                         'filename' => $filename,
-                        'path' => $directory . '/' . $filename,
-                        'full_path' => public_path('WDMS/profile-pictures/' . $filename),
-                        'exists' => File::exists(public_path('WDMS/profile-pictures/' . $filename)),
-                        'file_size_stored' => File::exists(public_path('WDMS/profile-pictures/' . $filename)) 
-                            ? File::size(public_path('WDMS/profile-pictures/' . $filename)) 
-                            : 0
+                        'storage_path' => storage_path('app/public/profile-pictures/' . $filename),
+                        'public_path' => public_path('WDMS/profile-pictures/' . $filename),
                     ]);
-                    
+
                     $data['profile_picture'] = $filename;
                 } catch (\Exception $e) {
                     Log::error('Error uploading profile picture', [
@@ -393,6 +376,93 @@ class UserController extends Controller
                 'success' => false,
                 'message' => 'Failed to update profile: ' . $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Serve an uploaded profile picture from storage (no public/ write required).
+     */
+    public function serveProfilePicture(string $filename)
+    {
+        $filename = basename($filename);
+        if (!preg_match('/^user_\d+_\d+\.(jpe?g|png|gif|webp)$/i', $filename)) {
+            abort(404);
+        }
+
+        $storagePath = storage_path('app/public/profile-pictures/' . $filename);
+        if (is_file($storagePath)) {
+            return response()->file($storagePath);
+        }
+
+        $publicPath = public_path('WDMS/profile-pictures/' . $filename);
+        if (is_file($publicPath)) {
+            return response()->file($publicPath);
+        }
+
+        abort(404);
+    }
+
+    /**
+     * Store a profile picture in storage/app/public (writable on typical deploys).
+     * Falls back to public/WDMS/profile-pictures only when that directory is writable.
+     */
+    protected function storeProfilePicture(\Illuminate\Http\UploadedFile $file, int $userId): string
+    {
+        $extension = strtolower($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'jpg');
+        $filename = 'user_' . $userId . '_' . time() . '.' . $extension;
+
+        try {
+            $storageDir = storage_path('app/public/profile-pictures');
+            if (!is_dir($storageDir)) {
+                File::makeDirectory($storageDir, 0775, true);
+            }
+
+            $stored = $file->storeAs('profile-pictures', $filename, 'public');
+            if ($stored) {
+                return $filename;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Could not store profile picture in storage/app/public', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $publicDir = public_path('WDMS/profile-pictures');
+            if (!File::isDirectory($publicDir)) {
+                File::makeDirectory($publicDir, 0775, true);
+            }
+
+            if (!is_writable($publicDir)) {
+                throw new \RuntimeException('Profile picture directory is not writable.');
+            }
+
+            $file->move($publicDir, $filename);
+
+            return $filename;
+        } catch (\Throwable $e) {
+            Log::error('Could not store profile picture in public/WDMS either', [
+                'error' => $e->getMessage(),
+            ]);
+
+            throw new \RuntimeException(
+                'Unable to save the profile picture. Ask the server administrator to make storage/app/public writable by the web server.'
+            );
+        }
+    }
+
+    protected function deleteProfilePictureFile(?string $filename): void
+    {
+        if (!$filename) {
+            return;
+        }
+
+        $filename = basename($filename);
+        Storage::disk('public')->delete('profile-pictures/' . $filename);
+
+        $publicPath = public_path('WDMS/profile-pictures/' . $filename);
+        if (File::exists($publicPath)) {
+            File::delete($publicPath);
         }
     }
 }

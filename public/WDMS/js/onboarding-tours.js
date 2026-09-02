@@ -22,7 +22,11 @@
         var completed = getCompletedTours();
         if (completed.indexOf(tourId) === -1) {
             completed.push(tourId);
-            localStorage.setItem(storageKey, JSON.stringify(completed));
+            try {
+                localStorage.setItem(storageKey, JSON.stringify(completed));
+            } catch (e) {
+                // Ignore quota / private-mode failures; auto-start may still run this session.
+            }
         }
     }
 
@@ -185,8 +189,87 @@
     function filterSteps(steps) {
         return steps.filter(function (step) {
             if (!step.element) return true;
+            if (typeof step.element !== 'string') {
+                return !!(step.element && step.element.nodeType === 1);
+            }
             return !!document.querySelector(step.element);
         });
+    }
+
+    function resolvePageTourId() {
+        var config = window.EKWD_TOUR_CONFIG || {};
+        if (config.pageTourId) return config.pageTourId;
+        if (config.currentRoute) return 'page:' + config.currentRoute;
+        return null;
+    }
+
+    function pageHeadingText() {
+        var heading = document.querySelector('#container-wrapper h1, #content h1, .page-hero h1, .reports-hero h1');
+        if (heading && heading.textContent) {
+            return heading.textContent.replace(/\s+/g, ' ').trim();
+        }
+        return 'this page';
+    }
+
+    function buildGenericPageTour(tourId) {
+        var heading = document.querySelector('#container-wrapper h1, #content h1, .page-hero, .reports-hero');
+        var workspace = document.querySelector('#container-wrapper .card, #content .card, #container-wrapper table, #content form');
+        var title = pageHeadingText();
+        var steps = [
+            {
+                popover: {
+                    title: 'System Guide',
+                    description: 'This short tour highlights the main parts of ' + title + '. Close it anytime — it will not show again on this page unless you use Help → Reset all tours.',
+                    side: 'over',
+                    align: 'center',
+                },
+            },
+        ];
+
+        if (heading) {
+            steps.push({
+                element: heading,
+                popover: {
+                    title: title,
+                    description: 'You are on this module. Use the sidebar to switch pages, or the ? icon for System Guides.',
+                    side: 'bottom',
+                    align: 'start',
+                },
+            });
+        }
+
+        if (workspace && workspace !== heading) {
+            steps.push({
+                element: workspace,
+                popover: {
+                    title: 'Main workspace',
+                    description: 'Filters, forms, and records for this page are here.',
+                    side: 'top',
+                    align: 'start',
+                },
+            });
+        }
+
+        steps.push({
+            element: '#tourHelpBtn',
+            popover: {
+                title: 'Help & System Guides',
+                description: 'Replay this page tour, start the navigation overview, or reset all tours from here.',
+                side: 'bottom',
+                align: 'end',
+            },
+        });
+
+        return { id: tourId, steps: steps };
+    }
+
+    function getTour(tourId) {
+        if (!tourId) return null;
+        if (TOURS[tourId]) return TOURS[tourId];
+        if (tourId.indexOf('page:') === 0) {
+            return buildGenericPageTour(tourId);
+        }
+        return null;
     }
 
     function createDriver(steps, tourId, force) {
@@ -198,6 +281,7 @@
         if (!resolved.length) return null;
 
         var lastStep = resolved[resolved.length - 1];
+        var lastActiveStep = null;
 
         function isLastTourStep(step) {
             if (!step || !lastStep) return false;
@@ -218,22 +302,32 @@
             stageRadius: 10,
             allowClose: true,
             steps: resolved,
-            onDestroyed: function (element, step, options) {
+            onHighlighted: function (element, step) {
+                lastActiveStep = step;
+            },
+            onDestroyed: function (element, step) {
                 clearTourNavHighlights();
                 if (tourId === 'navigation') {
                     collapseAllSidebarMenus();
                 }
 
-                // Driver.js clears activeIndex before onDestroyed; use the active step instead.
-                var reachedEnd = isLastTourStep(step);
-                if (!reachedEnd || !tourId) {
+                if (!tourId) {
                     return;
                 }
 
+                // Closing, overlay click, or Done — do not auto-start this tour again.
                 markTourComplete(tourId);
 
+                var reachedEnd = isLastTourStep(lastActiveStep || step);
                 var config = window.EKWD_TOUR_CONFIG || {};
-                if (!force && tourId === 'navigation' && config.autoNavigationTour && config.pageTourId === 'dashboard' && !isTourComplete('dashboard')) {
+
+                // Dismissed the sidebar tour early on Dashboard: skip the dashboard tour too.
+                if (tourId === 'navigation' && !reachedEnd && config.pageTourId === 'dashboard') {
+                    markTourComplete('dashboard');
+                    return;
+                }
+
+                if (!force && reachedEnd && tourId === 'navigation' && config.autoNavigationTour && config.pageTourId === 'dashboard' && !isTourComplete('dashboard')) {
                     setTimeout(function () {
                         startTour('dashboard', false);
                     }, 600);
@@ -989,7 +1083,7 @@
     };
 
     function startTour(tourId, force) {
-        var tour = TOURS[tourId];
+        var tour = getTour(tourId);
         if (!tour) return false;
 
         if (tourId === 'navigation') {
@@ -1013,7 +1107,9 @@
 
     function maybeAutoStart() {
         var config = window.EKWD_TOUR_CONFIG || {};
-        var pageTourId = config.pageTourId;
+        if (config.skipAutoTour) return;
+
+        var pageTourId = resolvePageTourId();
         if (!pageTourId) return;
 
         if (config.autoNavigationTour && !isTourComplete('navigation')) {
@@ -1036,11 +1132,10 @@
         if (pageBtn) {
             pageBtn.addEventListener('click', function (e) {
                 e.preventDefault();
-                var tourId = (window.EKWD_TOUR_CONFIG && window.EKWD_TOUR_CONFIG.pageTourId) || null;
+                var tourId = resolvePageTourId();
                 if (tourId) startTour(tourId, true);
             });
-            var pageTourId = window.EKWD_TOUR_CONFIG && window.EKWD_TOUR_CONFIG.pageTourId;
-            if (!pageTourId) {
+            if (!resolvePageTourId()) {
                 pageBtn.classList.add('disabled', 'text-muted');
                 pageBtn.setAttribute('aria-disabled', 'true');
             }

@@ -29,6 +29,9 @@ Route::get('/cron/consumer-activate-pending', [ConsumerActivationCronController:
 Route::get('/branding/{filename}', [SettingController::class, 'serveBrandingFile'])
     ->where('filename', '[A-Za-z0-9._-]+')
     ->name('branding.file');
+Route::get('/profile-pictures/{filename}', [UserController::class, 'serveProfilePicture'])
+    ->where('filename', '[A-Za-z0-9._-]+')
+    ->name('profile-pictures.file');
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
