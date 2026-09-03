@@ -1599,6 +1599,11 @@
                             option.textContent = month.display;
                             unpaidBillMonth.appendChild(option);
                         });
+                        // Latest unpaid month stays current until next-month billing exists.
+                        unpaidBillMonth.value = result.data[0].key;
+                        if (billMonthField) {
+                            billMonthField.value = result.data[0].key;
+                        }
                         if (billMonthSelectorGroup) {
                             billMonthSelectorGroup.style.display = 'block';
                         }
@@ -2239,10 +2244,11 @@
                             const dateVal = transactionDateField?.value?.trim();
                             if (!dateVal) return;
                             
-                            // Prefer dropdown's selected month if set; otherwise derive from date (same as date picker)
+                            // Prefer latest unpaid / lookup bill month. Do not roll to today's
+                            // calendar month until next-month billing exists.
                             const unpaidBillMonth = document.getElementById('unpaidBillMonth');
                             const selectedMonth = unpaidBillMonth?.value?.trim();
-                            let billMonthKey = selectedMonth;
+                            let billMonthKey = selectedMonth || resolvedBillMonth || (billMonthField?.value || '').trim();
                             if (!billMonthKey) {
                                 const [y, m] = dateVal.split('-');
                                 if (m && y) {
@@ -2255,7 +2261,6 @@
                                 billMonthField.value = billMonthKey;
                             }
                             
-                            // Use bill month (from dropdown if set, else from date) so breakdown reflects whether this date is before or after due_date
                             if (billMonthKey) {
                                 loadBillMonthDetails(resolvedAccount, billMonthKey, dateVal, dateVal);
                             }
@@ -2344,7 +2349,7 @@
                                 if (!dateVal) return;
                                 const unpaidBillMonth = document.getElementById('unpaidBillMonth');
                                 const selectedMonth = unpaidBillMonth?.value?.trim();
-                                let billMonthKey = selectedMonth;
+                                let billMonthKey = selectedMonth || resolvedBillMonth || (billMonthField?.value || '').trim();
                                 if (!billMonthKey) {
                                     const [y, m] = dateVal.split('-');
                                     if (m && y) billMonthKey = `${m}-${y}`;
@@ -2807,7 +2812,7 @@
                     // Prefer dropdown's selected month if set; otherwise derive from date
                     const unpaidBillMonth = document.getElementById('unpaidBillMonth');
                     const selectedMonth = unpaidBillMonth?.value?.trim();
-                    let billMonthKey = selectedMonth;
+                    let billMonthKey = selectedMonth || (billMonthField?.value || '').trim();
                     if (!billMonthKey) {
                         const [y, m] = dateVal.split('-');
                         if (m && y) {
@@ -2817,7 +2822,6 @@
                     if (billMonthKey && billMonthField) {
                         billMonthField.value = billMonthKey;
                     }
-                    // Use bill month (from dropdown if set, else from date) so breakdown reflects whether this date is before or after due_date
                     if (billMonthKey) {
                         loadBillMonthDetails(accountNumber, billMonthKey, dateVal, dateVal);
                     }
