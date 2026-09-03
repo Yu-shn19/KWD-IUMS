@@ -478,7 +478,7 @@
                                                                     <input type="checkbox" id="enableSeniorDiscount">
                                                                 </div>
                                                                 <label for="enableSeniorDiscount" class="senior-discount-label mb-0">
-                                                                    Sr. Citizen Discount <small class="text-muted">(5% of Current Billing)</small>
+                                                                    Sr. Citizen Discount <small class="text-muted">(5% of Volume, first 30 cu.m)</small>
                                                                 </label>
                                                             </div>
                                                         </td>
@@ -771,11 +771,13 @@
             let currentBalanceValue = 0;
             let latestBillMonth = null; // Store the latest/current bill month
             let currentBillConsumption = null; // Consumption of the loaded bill month (resets when a different month is loaded)
-            let currentAccountCategory = null; // Consumer category code from consumer_zone (12=residential, 32=commercial)
+            let currentAccountCategory = null; // Consumer category (RES, COM-A/B/C, GOVT, INDUSTRIAL, …)
             let latestServerSeniorDiscount = 0; // Ledger-based senior discount returned by backend
             let isLoadingFromMonthSelector = false; // Flag to prevent populateFromLookup from overwriting penalty
             let arrearsPreviousManuallyEdited = false; // Flag to track if user manually edited Arrears — Previous Month
             const SENIOR_DISCOUNT_LIMIT_CONSUMPTION = 30;
+            const SENIOR_DISCOUNT_PERCENT = 0.05;
+            const WATER_MINIMUM_CHARGE = 253.00;
             
             const disableWheelStepChange = (input) => {
                 if (!input || input.type !== 'number') return;
@@ -895,24 +897,97 @@
                 return null;
             };
 
+            const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+            const computeResidentialWaterBill = (cu) => {
+                const n = Math.max(0, Math.round(Number(cu) || 0));
+                if (n <= 10) return WATER_MINIMUM_CHARGE;
+                if (n <= 20) return WATER_MINIMUM_CHARGE + ((n - 10) * 27.00);
+                if (n <= 30) return WATER_MINIMUM_CHARGE + (10 * 27.00) + ((n - 20) * 28.75);
+                if (n <= 40) return WATER_MINIMUM_CHARGE + (10 * 27.00) + (10 * 28.75) + ((n - 30) * 30.55);
+                return WATER_MINIMUM_CHARGE + (10 * 27.00) + (10 * 28.75) + (10 * 30.55) + ((n - 40) * 32.40);
+            };
+
+            const resolveWaterClassification = (categoryCodeRaw) => {
+                const raw = String(categoryCodeRaw ?? '').trim().toUpperCase();
+                if (!raw) {
+                    return 'RESIDENTIAL';
+                }
+                const mapped = {
+                    'COM-A': 'COMMERCIAL A',
+                    'COM-B': 'COMMERCIAL B',
+                    'COM-C': 'COMMERCIAL C',
+                    INDUSTRIAL: 'INDUSTRIAL',
+                    'GOVT-LGU': 'GOVERNMENT',
+                    GOVT: 'GOVERNMENT',
+                    GOVERNMENT: 'GOVERNMENT',
+                    RES: 'RESIDENTIAL',
+                    RESIDENTIAL: 'RESIDENTIAL',
+                };
+                if (mapped[raw]) {
+                    return mapped[raw];
+                }
+                if (!Number.isNaN(Number(raw)) && String(parseInt(raw, 10)) === String(Number(raw))) {
+                    switch (parseInt(raw, 10)) {
+                        case 32: return 'INDUSTRIAL';
+                        case 33: return 'COMMERCIAL A';
+                        case 34: return 'COMMERCIAL B';
+                        case 35: return 'COMMERCIAL C';
+                        case 36: return 'WHOLESALE';
+                        case 22: return 'GOVERNMENT';
+                        default: return 'RESIDENTIAL';
+                    }
+                }
+                if (raw.includes('IND')) return 'INDUSTRIAL';
+                if (raw.includes('WHOLESALE') || raw.includes('BULK')) return 'WHOLESALE';
+                if (raw.includes('COMA') || raw.includes('COMMERCIAL A')) return 'COMMERCIAL A';
+                if (raw.includes('COMB') || raw.includes('COMMERCIAL B')) return 'COMMERCIAL B';
+                if (raw.includes('COMC') || raw.includes('COMMERCIAL C')) return 'COMMERCIAL C';
+                if (raw.includes('COM')) return 'COMMERCIAL';
+                if (raw.includes('GOV')) return 'GOVERNMENT';
+                if (raw.includes('RES')) return 'RESIDENTIAL';
+                return 'RESIDENTIAL';
+            };
+
+            const classificationMultiplier = (classification) => {
+                switch (String(classification ?? '').trim().toUpperCase()) {
+                    case 'BULK':
+                    case 'WHOLESALE':
+                        return 3.00;
+                    case 'INDUSTRIAL':
+                    case 'COMMERCIAL':
+                        return 2.00;
+                    case 'COMMERCIAL A':
+                    case 'COMMERCIAL_A':
+                    case 'A':
+                        return 1.75;
+                    case 'COMMERCIAL B':
+                    case 'COMMERCIAL_B':
+                    case 'B':
+                        return 1.50;
+                    case 'COMMERCIAL C':
+                    case 'COMMERCIAL_C':
+                    case 'C':
+                        return 1.25;
+                    default:
+                        return 1.00;
+                }
+            };
+
+            const calculateWaterBillByVolume = (consumption, categoryCodeRaw) => {
+                const cu = Math.max(0, Math.round(Number(consumption) || 0));
+                const classification = resolveWaterClassification(categoryCodeRaw);
+                const base = computeResidentialWaterBill(cu);
+                if (classification === 'RESIDENTIAL' || classification === 'GOVERNMENT') {
+                    return roundMoney(base);
+                }
+                return roundMoney(base * classificationMultiplier(classification));
+            };
+
             const getSeniorDiscountByConsumption = (consumption, categoryCodeRaw) => {
-                const normalizedConsumption = Math.max(Math.floor(parseFloat(consumption) || 0), 0);
-                const cappedConsumption = Math.min(normalizedConsumption, SENIOR_DISCOUNT_LIMIT_CONSUMPTION);
-                const categoryCode = String(categoryCodeRaw ?? '').trim();
-
-                const residentialTable = {
-                    0: 9.75, 1: 9.75, 2: 9.75, 3: 9.75, 4: 9.75, 5: 9.75, 6: 9.75, 7: 9.75, 8: 9.75, 9: 9.75, 10: 9.75,
-                    11: 10.83, 12: 11.91, 13: 12.99, 14: 14.07, 15: 15.15, 16: 16.23, 17: 17.31, 18: 18.39, 19: 19.47, 20: 20.55,
-                    21: 21.74, 22: 22.92, 23: 24.11, 24: 25.30, 25: 26.49, 26: 27.68, 27: 28.86, 28: 30.05, 29: 31.24, 30: 32.42
-                };
-                const commercialTable = {
-                    0: 12.19, 1: 12.19, 2: 12.19, 3: 12.19, 4: 12.19, 5: 12.19, 6: 12.19, 7: 12.19, 8: 12.19, 9: 12.19, 10: 12.19,
-                    11: 13.54, 12: 14.89, 13: 16.24, 14: 17.59, 15: 18.94, 16: 20.29, 17: 21.64, 18: 22.99, 19: 24.34, 20: 25.69,
-                    21: 27.17, 22: 28.66, 23: 30.14, 24: 31.62, 25: 33.11, 26: 34.59, 27: 36.08, 28: 37.56, 29: 39.05, 30: 40.53
-                };
-
-                const table = categoryCode === '32' ? commercialTable : residentialTable;
-                return Math.max(parseFloat(table[cappedConsumption]) || 0, 0);
+                const cappedConsumption = Math.min(Math.max(parseFloat(consumption) || 0, 0), SENIOR_DISCOUNT_LIMIT_CONSUMPTION);
+                const waterBill = calculateWaterBillByVolume(cappedConsumption, categoryCodeRaw);
+                return Math.max(roundMoney(waterBill * SENIOR_DISCOUNT_PERCENT), 0);
             };
 
             const renderScDiscountLedgerText = (account) => {
@@ -1556,17 +1631,20 @@
 
                 if (enableCheckbox.checked) {
                     let discountValue = 0;
+                    const effectiveConsumption = Number.isFinite(currentBillConsumption)
+                        ? currentBillConsumption
+                        : 0;
+                    const volumeDiscount = effectiveConsumption > 0
+                        ? getSeniorDiscountByConsumption(effectiveConsumption, currentAccountCategory)
+                        : 0;
                     if (currentAccountIsSenior) {
-                        // Senior accounts use backend ledger-based computation.
+                        // Senior accounts use backend (unpaid months / saved OR). Volume formula is fallback only.
                         discountValue = Math.max(parseNumeric(latestServerSeniorDiscount), 0);
-                    } else {
-                        // Non-senior accounts only compute when user manually checks the box.
-                        const effectiveConsumption = Number.isFinite(currentBillConsumption)
-                            ? currentBillConsumption
-                            : 0;
-                        if (effectiveConsumption > 0) {
-                            discountValue = getSeniorDiscountByConsumption(effectiveConsumption, currentAccountCategory);
+                        if (discountValue <= 0 && volumeDiscount > 0) {
+                            discountValue = volumeDiscount;
                         }
+                    } else if (volumeDiscount > 0) {
+                        discountValue = volumeDiscount;
                     }
                     setNumberFieldValue(seniorDiscountField, discountValue);
                     // Keep editable so cashier can adjust if needed.

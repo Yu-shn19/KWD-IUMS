@@ -1444,9 +1444,8 @@ class BillMonthDetailsService
                 // - Applies automatically only when consumer has SC flag + valid OSCA ID.
                 // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition),
                 //   plus fallback paid detection from PAYMENT rows in same cycle.
-                // - unpaid_volume = SUM(volume of those rows)
-                // - capped_volume = min(unpaid_volume, 30)
-                // - senior_discount = lookup_table[capped_volume] by consumer category
+                // - Per unpaid month: 5% of WaterBillingService::calculate(min(volume, 30), category)
+                //   so RES / COM-A/B/C / GOVT / INDUSTRIAL all use the same volume formula.
                 if (!($s->orNumberInput !== '' && $s->orPayment) && $s->paymentStatus !== 'paid') {
                     $billDiscPercentRaw = $s->consumer->bill_disc_percent ?? null;
                     $billDiscPercentNorm = is_string($billDiscPercentRaw) ? strtoupper(trim($billDiscPercentRaw)) : null;
@@ -1479,25 +1478,10 @@ class BillMonthDetailsService
                             ->get()
                             ->values();
         
-                        $residentialDiscountTable = [
-                            0 => 9.75, 1 => 9.75, 2 => 9.75, 3 => 9.75, 4 => 9.75, 5 => 9.75,
-                            6 => 9.75, 7 => 9.75, 8 => 9.75, 9 => 9.75, 10 => 9.75,
-                            11 => 10.83, 12 => 11.91, 13 => 12.99, 14 => 14.07, 15 => 15.15,
-                            16 => 16.23, 17 => 17.31, 18 => 18.39, 19 => 19.47, 20 => 20.55,
-                            21 => 21.74, 22 => 22.92, 23 => 24.11, 24 => 25.30, 25 => 26.49,
-                            26 => 27.68, 27 => 28.86, 28 => 30.05, 29 => 31.24, 30 => 32.42,
-                        ];
-                        $commercialDiscountTable = [
-                            0 => 12.19, 1 => 12.19, 2 => 12.19, 3 => 12.19, 4 => 12.19, 5 => 12.19,
-                            6 => 12.19, 7 => 12.19, 8 => 12.19, 9 => 12.19, 10 => 12.19,
-                            11 => 13.54, 12 => 14.89, 13 => 16.24, 14 => 17.59, 15 => 18.94,
-                            16 => 20.29, 17 => 21.64, 18 => 22.99, 19 => 24.34, 20 => 25.69,
-                            21 => 27.17, 22 => 28.66, 23 => 30.14, 24 => 31.62, 25 => 33.11,
-                            26 => 34.59, 27 => 36.08, 28 => 37.56, 29 => 39.05, 30 => 40.53,
-                        ];
                         $categoryCode = trim((string) ($s->consumer->category_code ?? ''));
-                        $discountTable = $categoryCode === '32' ? $commercialDiscountTable : $residentialDiscountTable;
-        
+                        $rateCode = trim((string) ($s->consumer->rate_code ?? ''));
+                        $waterBilling = app(WaterBillingService::class);
+
                         $seniorDiscountTotal = 0.0;
                         // Allocate PAYMENT credits to BILLING charges FIFO by ledger date.
                         // A billing cycle is treated paid when its billing charge is fully covered by prior/available payments.
@@ -1519,8 +1503,11 @@ class BillMonthDetailsService
                             $isMarkedPaid = $billingRemaining <= 0.01;
                             if (!$isMarkedPaid) {
                                 $monthVolume = max(0.0, (float) ($billingRow->volume ?? 0));
-                                $monthVolumeKey = (int) floor(min($monthVolume, 30.0) + 1e-6);
-                                $seniorDiscountTotal += (float) ($discountTable[$monthVolumeKey] ?? 0);
+                                $seniorDiscountTotal += $waterBilling->seniorCitizenDiscount(
+                                    $monthVolume,
+                                    $categoryCode !== '' ? $categoryCode : null,
+                                    $rateCode !== '' ? $rateCode : null
+                                );
                             }
                         }
                         $s->seniorCitizenDiscount = round(max(0.0, $seniorDiscountTotal), 2);

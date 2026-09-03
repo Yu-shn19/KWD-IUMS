@@ -6,6 +6,10 @@ class WaterBillingService
 {
     public const METER_RENTAL = 20.00;
 
+    public const SENIOR_DISCOUNT_PERCENT = 0.05;
+
+    public const SENIOR_DISCOUNT_VOLUME_CAP = 30;
+
     private const MINIMUM_CHARGE = 253.00;
 
     /**
@@ -29,6 +33,18 @@ class WaterBillingService
     public function calculateWithMeterRental(float $consumption, ?string $category = null, ?string $rateCode = null): float
     {
         return round($this->calculate($consumption, $category, $rateCode) + self::METER_RENTAL, 2);
+    }
+
+    /**
+     * Senior Citizen discount: 5% of the volume-based water bill (first 30 cu.m), all categories.
+     * Category (RES, COM-A/B/C, GOVT, INDUSTRIAL, …) still selects the water rate; SC is not a lookup table.
+     */
+    public function seniorCitizenDiscount(float $consumption, ?string $category = null, ?string $rateCode = null): float
+    {
+        $eligibleVolume = min(max(0.0, $consumption), self::SENIOR_DISCOUNT_VOLUME_CAP);
+        $waterBill = $this->calculate($eligibleVolume, $category, $rateCode);
+
+        return round($waterBill * self::SENIOR_DISCOUNT_PERCENT, 2);
     }
 
     public function computeResidentialBase(int $cu): float
