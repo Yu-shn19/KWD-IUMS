@@ -27,8 +27,12 @@ if (!function_exists(__NAMESPACE__ . '\mr_col')) {
 
 class BillMonthDetailsService
 {
+    /** @var array<int, MeterReadingSchedule|null> */
+    private array $scheduleById = [];
+
     public function handle(Request $request): JsonResponse
     {
+        $this->scheduleById = [];
         $s = new BillMonthDetailsState();
 
         $early = $this->parseInputAndResolveConsumer($request, $s);
@@ -37,6 +41,7 @@ class BillMonthDetailsService
         }
 
         $this->loadLedgerEntriesWithPenalties($s);
+        $this->preloadSchedulesFromLedgers($s->ledgerEntries);
         $early = $this->resolveDateRange($request, $s);
         if ($early instanceof JsonResponse) {
             return $early;
@@ -145,40 +150,11 @@ class BillMonthDetailsService
                     ->orderBy('date', 'asc')
                     ->get();
                 
-                // Debug: Log all PENALTY entries found in consumer_ledgers
-                $penaltyEntriesFound = $s->ledgerEntries->where(mr_col('trans'), 'PENALTY');
-                Log::info('All PENALTY entries found in consumer_ledgers', [
-                    'account_number' => $s->accountNumber,
-                    'consumer_id' => $s->consumer->id,
-                    'penalty_count' => $penaltyEntriesFound->count(),
-                    'penalty_dates' => $penaltyEntriesFound->map(function($p) {
-                        return [
-                            'id' => $p->id,
-                            'date' => $p->date,
-                            'penalty' => $p->penalty,
-                            'debit' => $p->debit,
-                        ];
-                    })->toArray(),
-                ]);
-                
                 // Penalties table: always filter by consumer_zone_id so we only get this consumer's penalties
                 try {
                     $penaltiesFromTable = Penalty::query()->where(mr_col('consumer_zone_id'), $s->consumer->id)
                         ->orderBy('date', 'asc')
                         ->get();
-                    
-                    Log::info('Penalties found in penalties table', [
-                        'account_number' => $s->accountNumber,
-                        'penalty_count' => $penaltiesFromTable->count(),
-                        'penalty_dates' => $penaltiesFromTable->map(function (Penalty $p) {
-                            $penaltyDate = $p->date;
-                            return [
-                                'id' => $p->id,
-                                'date' => $penaltyDate instanceof \DateTimeInterface ? $penaltyDate->format('Y-m-d') : null,
-                                'penalty_amount' => $p->penalty_amount,
-                            ];
-                        })->toArray(),
-                    ]);
                     
                     // Convert penalties from penalties table to ledger-like entries
                     foreach ($penaltiesFromTable as $penalty) {
@@ -271,7 +247,7 @@ class BillMonthDetailsService
                 foreach ($s->ledgerEntries as $ledger) {
                     $schedule = null;
                     if ($ledger->schedule_id) {
-                        $schedule = MeterReadingSchedule::find($ledger->schedule_id);
+                        $schedule = $this->scheduleById((int) $ledger->schedule_id);
                     }
                     
                     // Determine bill month for this entry â€” always use date and due_date from the database:
@@ -336,25 +312,6 @@ class BillMonthDetailsService
                     // Include entries that fall within the from-to range
                     if ($entryDate && $entryDate->gte($s->fromMonthDate) && $entryDate->lte($s->toMonthDate)) {
                         $s->matchingEntries[] = $ledger;
-                        
-                        // Debug logging for penalty entries
-                        if ($ledger->trans === 'PENALTY') {
-                            Log::info('Penalty entry matched', [
-                                'entry_date' => $entryDate->format('Y-m-d'),
-                                'from_date' => $s->fromMonthDate->format('Y-m-d'),
-                                'to_date' => $s->toMonthDate->format('Y-m-d'),
-                                'penalty_amount' => $ledger->penalty ?? $ledger->debit ?? 0,
-                            ]);
-                        }
-                    } elseif ($ledger->trans === 'PENALTY') {
-                        // Log why penalty didn't match
-                        Log::info('Penalty entry NOT matched', [
-                            'entry_date' => $entryDate ? $entryDate->format('Y-m-d') : 'NULL',
-                            'from_date' => $s->fromMonthDate->format('Y-m-d'),
-                            'to_date' => $s->toMonthDate->format('Y-m-d'),
-                            'gte_check' => $entryDate ? $entryDate->gte($s->fromMonthDate) : false,
-                            'lte_check' => $entryDate ? $entryDate->lte($s->toMonthDate) : false,
-                        ]);
                     }
                 }
     }
@@ -419,7 +376,7 @@ class BillMonthDetailsService
                         if (!empty($ledger->due_date)) {
                             $dueDate = $ledger->due_date instanceof Carbon ? $ledger->due_date : Carbon::parse($ledger->due_date);
                         } elseif ($ledger->schedule_id) {
-                            $sch = MeterReadingSchedule::find($ledger->schedule_id);
+                            $sch = $this->scheduleById((int) $ledger->schedule_id);
                             if ($sch && !empty($sch->due_date)) {
                                 $dueDate = $sch->due_date instanceof Carbon ? $sch->due_date : Carbon::parse($sch->due_date);
                             }
@@ -450,23 +407,6 @@ class BillMonthDetailsService
                         ];
                     }
                     $s->hasBillingEntriesInRange = !empty($billingForDateRange);
-                    // Debug: Log all billing entries found
-                    Log::info('Billing For Date Range Debug', [
-                        'account_number' => $s->accountNumber,
-                        'from_date' => $s->fromMonthDate->format('Y-m-d'),
-                        'to_date' => $s->toMonthDate->format('Y-m-d'),
-                        'total_billing_entries' => count($billingForDateRange),
-                        'entries' => array_map(function($b) {
-                            return [
-                                'date' => $b['date']->format('Y-m-d'),
-                                'due_date' => $b['due_date'] ? $b['due_date']->format('Y-m-d') : null,
-                                'billamount' => $b['billamount'],
-                                'others' => $b['others'],
-                                'paid_at' => $b['paid_at'] ?? 'NULL',
-                                'ledger_id' => $b['ledger_id'] ?? null,
-                            ];
-                        }, $billingForDateRange),
-                    ]);
                     usort($billingForDateRange, function ($a, $b) {
                         $da = $a['due_date'];
                         $db = $b['due_date'];
@@ -765,15 +705,6 @@ class BillMonthDetailsService
                             ];
                         }
                         $sumBillamountBeforeCurrent = round($sumBillamountBeforeCurrent, 2);
-                        // Debug: Log Arrears PY calculation
-                        if (count($pyDebugEntries) > 0) {
-                            Log::info('Arrears PY Calculation Debug', [
-                                'account_number' => $s->accountNumber,
-                                'py_total' => $sumBillamountBeforeCurrent,
-                                'entries_count' => count($pyDebugEntries),
-                                'entries' => $pyDebugEntries,
-                            ]);
-                        }
                         // RESET RULE: Check latest ledger balance BEFORE billing month start (date < billing_month_start_date)
                         $resetCutoffDate = $billingMonthStart->copy()->startOfDay();
                         $latestBalanceBeforeCurrent = \App\Models\ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $s->consumer->id)
@@ -814,20 +745,6 @@ class BillMonthDetailsService
     private function applyBillMonthModeBreakdown(BillMonthDetailsState $s): void
     {
         if (!$s->dateRangeMode) {
-                // Debug: Log matching entries
-                $penaltyEntriesFound = array_filter($s->matchingEntries, function($e) { 
-                    return isset($e->trans) && $e->trans === 'PENALTY'; 
-                });
-                    Log::info('Bill Month Details - Matching Entries', [
-                    'account_number' => $s->accountNumber,
-                    'bill_month_from' => $s->billMonthFromKey,
-                    'bill_month_to' => $s->billMonthToKey,
-                    'from_date' => $s->fromMonthDate->format('Y-m-d'),
-                    'to_date' => $s->toMonthDate->format('Y-m-d'),
-                    'total_entries' => count($s->matchingEntries),
-                    'penalty_count' => count($penaltyEntriesFound),
-                ]);
-        
                     // Always use date and due_date from the database to drive logic:
                 // - BILLING: ledger.date = when bill applies (start); schedule.due_date or ledger.due_date = when payment is due (e.g. 12/16); penalty starts the day after (12/17).
                 // - PENALTY: ledger.date = when penalty is effective (e.g. 12/17); ledger.due_date = which bill it relates to.
@@ -842,7 +759,7 @@ class BillMonthDetailsService
                         if (!empty($ledger->due_date)) {
                             $entryDueDate = $ledger->due_date instanceof Carbon ? $ledger->due_date : Carbon::parse($ledger->due_date);
                         } elseif ($ledger->schedule_id) {
-                            $sch = MeterReadingSchedule::find($ledger->schedule_id);
+                            $sch = $this->scheduleById((int) $ledger->schedule_id);
                             if ($sch && !empty($sch->due_date)) {
                                 $entryDueDate = $sch->due_date instanceof Carbon ? $sch->due_date : Carbon::parse($sch->due_date);
                             }
@@ -898,7 +815,7 @@ class BillMonthDetailsService
                 if ($billingDueDateFromLedger) {
                     $s->dueDateForOverdue = $billingDueDateFromLedger;
                 } elseif ($billingScheduleId) {
-                    $billingSchedule = MeterReadingSchedule::find($billingScheduleId);
+                    $billingSchedule = $this->scheduleById((int) $billingScheduleId);
                     if ($billingSchedule && $billingSchedule->due_date) {
                         $s->dueDateForOverdue = $billingSchedule->due_date instanceof Carbon
                             ? $billingSchedule->due_date
@@ -1098,7 +1015,7 @@ class BillMonthDetailsService
                                 $previousPrincipal = $prevAmount;
                                 $prevScheduleId = $latestBillingBeforePeriod->schedule_id ?? null;
                                 if ($prevScheduleId) {
-                                    $prevSchedule = MeterReadingSchedule::find($prevScheduleId);
+                                    $prevSchedule = $this->scheduleById((int) $prevScheduleId);
                                     if ($prevSchedule && $prevSchedule->due_date) {
                                         $previousDueDate = $prevSchedule->due_date instanceof Carbon
                                             ? $prevSchedule->due_date
@@ -1758,6 +1675,7 @@ class BillMonthDetailsService
                         (int) $s->consumer->id,
                         $paidAfter
                     );
+                    $overlay = $this->preferLedgerBreakdownWhenOverlayEmpty($overlay, $s);
                 }
 
                 $responsePaymentStatus = $hasExplicitOrPaidBreakdown
@@ -1942,7 +1860,7 @@ class BillMonthDetailsService
         }
 
         if ($downloaded && !$schedule && $downloaded->schedule_id) {
-            $schedule = MeterReadingSchedule::find($downloaded->schedule_id);
+            $schedule = $this->scheduleById((int) $downloaded->schedule_id);
         }
 
         return [$schedule, $downloaded];
@@ -2013,6 +1931,66 @@ class BillMonthDetailsService
     }
 
     /**
+     * When the selected month has no schedule/downloaded amounts (e.g. September
+     * before next billing, or SC accounts with only a DM carry-forward), keep the
+     * ledger-computed breakdown instead of returning 0.00 on every field.
+     *
+     * @param array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float} $overlay
+     * @return array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float}
+     */
+    private function preferLedgerBreakdownWhenOverlayEmpty(array $overlay, BillMonthDetailsState $s): array
+    {
+        $overlayTotal = round(
+            max(0.0, (float) ($overlay['current_billing'] ?? 0))
+            + max(0.0, (float) ($overlay['current_meter_rental'] ?? 0))
+            + max(0.0, (float) ($overlay['prio_years'] ?? 0))
+            + max(0.0, (float) ($overlay['current_arrears'] ?? 0))
+            + max(0.0, (float) ($overlay['penalty'] ?? 0))
+            + max(0.0, (float) ($overlay['meter_rental_arrears'] ?? 0)),
+            2
+        );
+
+        $wmc = round(max(0.0, (float) $s->maintenance), 2);
+        $hasCurrentBilling = round(max(0.0, (float) $s->currentBill), 2) > 0.009;
+        $ledger = [
+            'current_billing' => round(max(0.0, (float) $s->currentBill), 2),
+            // Current MR only when this cycle has a current bill. DM/carry-forward WMC → MR Arrears.
+            'current_meter_rental' => $hasCurrentBilling ? $wmc : 0.0,
+            'prio_years' => round(max(0.0, (float) $s->arrearsPy), 2),
+            'current_arrears' => round(max(0.0, (float) $s->arrearsCy), 2),
+            'penalty' => round(max(0.0, (float) $s->penaltyAmount), 2),
+            'meter_rental_arrears' => round(
+                max(0.0, (float) ($overlay['meter_rental_arrears'] ?? 0)) + ($hasCurrentBilling ? 0.0 : $wmc),
+                2
+            ),
+        ];
+        $ledgerTotal = round(
+            $ledger['current_billing']
+            + $ledger['current_meter_rental']
+            + $ledger['prio_years']
+            + $ledger['current_arrears']
+            + $ledger['penalty']
+            + $ledger['meter_rental_arrears'],
+            2
+        );
+
+        if ($overlayTotal > 0.009) {
+            return $overlay;
+        }
+
+        if ($ledgerTotal > 0.009) {
+            return $ledger;
+        }
+
+        $balance = round(max(0.0, (float) $s->currentBalance), 2);
+        if ($balance > 0.009) {
+            $ledger['current_arrears'] = $balance;
+        }
+
+        return $ledger;
+    }
+
+    /**
      * True when a BILLING/BILL row exists in a later month than $currentBillDate.
      */
     private function hasNextCycleBilling(int $consumerZoneId, ?Carbon $currentBillDate): bool
@@ -2031,5 +2009,41 @@ class BillMonthDetailsService
             })
             ->whereRaw('DATE(COALESCE(date, txtime)) >= ?', [$nextMonthStart])
             ->exists();
+    }
+
+    private function preloadSchedulesFromLedgers($ledgers): void
+    {
+        $ids = [];
+        foreach ($ledgers as $ledger) {
+            $id = (int) ($ledger->schedule_id ?? 0);
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+        if ($ids === []) {
+            return;
+        }
+
+        $rows = MeterReadingSchedule::query()->whereIn('id', array_values($ids))->get();
+        foreach ($rows as $row) {
+            $this->scheduleById[(int) $row->id] = $row;
+        }
+        foreach ($ids as $id) {
+            if (!array_key_exists($id, $this->scheduleById)) {
+                $this->scheduleById[$id] = null;
+            }
+        }
+    }
+
+    private function scheduleById(int $id): ?MeterReadingSchedule
+    {
+        if ($id <= 0) {
+            return null;
+        }
+        if (!array_key_exists($id, $this->scheduleById)) {
+            $this->scheduleById[$id] = MeterReadingSchedule::find($id);
+        }
+
+        return $this->scheduleById[$id];
     }
 }

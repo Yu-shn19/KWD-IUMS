@@ -2234,18 +2234,9 @@
 
                     updateLookupStatus(statusMessage, toneBase);
                     lastLookupKey = `${searchValue}|${effectiveBillMonth || 'AUTO'}`;
-                    // Load full breakdown after account lookup - use same logic as date picker
-                    // Use setTimeout to ensure populateFromLookup has finished setting transaction date
-                    setTimeout(() => {
-                        if (lockPaidOrBreakdown) {
-                            return;
-                        }
-                        if (resolvedAccount) {
-                            const dateVal = transactionDateField?.value?.trim();
-                            if (!dateVal) return;
-                            
-                            // Prefer latest unpaid / lookup bill month. Do not roll to today's
-                            // calendar month until next-month billing exists.
+                    if (!lockPaidOrBreakdown && resolvedAccount) {
+                        const dateVal = transactionDateField?.value?.trim();
+                        if (dateVal) {
                             const unpaidBillMonth = document.getElementById('unpaidBillMonth');
                             const selectedMonth = unpaidBillMonth?.value?.trim();
                             let billMonthKey = selectedMonth || resolvedBillMonth || (billMonthField?.value || '').trim();
@@ -2255,17 +2246,14 @@
                                     billMonthKey = `${m}-${y}`;
                                 }
                             }
-                            
-                            // Sync bill month field
                             if (billMonthKey && billMonthField) {
                                 billMonthField.value = billMonthKey;
                             }
-                            
                             if (billMonthKey) {
                                 loadBillMonthDetails(resolvedAccount, billMonthKey, dateVal, dateVal);
                             }
                         }
-                    }, 100);
+                    }
                 } catch (error) {
                     if (error.name === 'AbortError') {
                         return;
@@ -2342,22 +2330,19 @@
                     updateLookupStatus(payload.message || `Billing record loaded for OR # ${orNumber} (${resolvedAccount}).`, 'success');
                     lastLookupKey = `${orNumber}|OR|${resolvedAccount}`;
                     // When paid with breakdown from OR # search, skip loadBillMonthDetails to avoid modal and overwriting breakdown
-                    if (!paidWithBreakdown) {
-                        setTimeout(() => {
-                            if (resolvedAccount) {
-                                const dateVal = transactionDateField?.value?.trim();
-                                if (!dateVal) return;
-                                const unpaidBillMonth = document.getElementById('unpaidBillMonth');
-                                const selectedMonth = unpaidBillMonth?.value?.trim();
-                                let billMonthKey = selectedMonth || resolvedBillMonth || (billMonthField?.value || '').trim();
-                                if (!billMonthKey) {
-                                    const [y, m] = dateVal.split('-');
-                                    if (m && y) billMonthKey = `${m}-${y}`;
-                                }
-                                if (billMonthKey && billMonthField) billMonthField.value = billMonthKey;
-                                if (billMonthKey) loadBillMonthDetails(resolvedAccount, billMonthKey, dateVal, dateVal);
+                    if (!paidWithBreakdown && resolvedAccount) {
+                        const dateVal = transactionDateField?.value?.trim();
+                        if (dateVal) {
+                            const unpaidBillMonth = document.getElementById('unpaidBillMonth');
+                            const selectedMonth = unpaidBillMonth?.value?.trim();
+                            let billMonthKey = selectedMonth || resolvedBillMonth || (billMonthField?.value || '').trim();
+                            if (!billMonthKey) {
+                                const [y, m] = dateVal.split('-');
+                                if (m && y) billMonthKey = `${m}-${y}`;
                             }
-                        }, 100);
+                            if (billMonthKey && billMonthField) billMonthField.value = billMonthKey;
+                            if (billMonthKey) loadBillMonthDetails(resolvedAccount, billMonthKey, dateVal, dateVal);
+                        }
                     }
                 } catch (e) {
                     if (e.name === 'AbortError') return;
