@@ -686,6 +686,7 @@ class DownloadedReadingPaymentService
 
         $scDiscount = round($validated['senior_citizen_discount'] ?? 0, 2);
         if ($scDiscount <= 0) {
+            $this->deleteSeniorCitizenLedgerRows($consumerId, $orNumber);
             return;
         }
 
@@ -697,8 +698,7 @@ class DownloadedReadingPaymentService
             $orNumber,
             $ledgerDate,
             $scDiscount,
-            $newBalance,
-            $isUpdate
+            $newBalance
         );
     }
 
@@ -754,9 +754,7 @@ class DownloadedReadingPaymentService
     ): void {
         if ($readingId !== null) {
             if ($isUpdate) {
-                $ledgerRow = ConsumerLedger::query()->where(mr_col('consumer_payment_id'), $consumerPayment->id)
-                    ->where(mr_col('trans'), 'PAYMENT')
-                    ->first();
+                $ledgerRow = $this->findMainPaymentLedgerRow($consumerPayment);
                 if ($ledgerRow) {
                     $ledgerRow->update($ledgerPayload);
                 } else {
@@ -778,9 +776,7 @@ class DownloadedReadingPaymentService
         }
 
         if ($isUpdate) {
-            $ledgerRow = ConsumerLedger::query()->where(mr_col('consumer_payment_id'), $consumerPayment->id)
-                ->where(mr_col('trans'), 'PAYMENT')
-                ->first();
+            $ledgerRow = $this->findMainPaymentLedgerRow($consumerPayment);
             if ($ledgerRow) {
                 $ledgerRow->update($ledgerPayload);
             } else {
@@ -799,6 +795,19 @@ class DownloadedReadingPaymentService
         ]));
     }
 
+    private function findMainPaymentLedgerRow(ConsumerPayment $consumerPayment): ?ConsumerLedger
+    {
+        return ConsumerLedger::query()
+            ->where(mr_col('consumer_payment_id'), $consumerPayment->id)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(function ($q) {
+                $q->whereNull(mr_col('reference'))
+                    ->orWhere(mr_col('reference'), 'not like', '%-SC');
+            })
+            ->orderBy(mr_col('id'), 'asc')
+            ->first();
+    }
+
     private function upsertSeniorCitizenLedgerRow(
         int $consumerId,
         ConsumerPayment $consumerPayment,
@@ -807,11 +816,12 @@ class DownloadedReadingPaymentService
         string $orNumber,
         Carbon $ledgerDate,
         float $scDiscount,
-        float $newBalance,
-        bool $isUpdate
+        float $newBalance
     ): void {
+        $scReference = $orNumber . '-SC';
         $scPayload = [
             'consumer_payment_id' => $consumerPayment->id,
+            'downloaded_reading_id' => $readingId,
             'schedule_id' => $downloaded?->schedule_id,
             'date' => $ledgerDate->format('Y-m-d'),
             'due_date' => null,
@@ -828,28 +838,35 @@ class DownloadedReadingPaymentService
             'paid_at' => $ledgerDate,
         ];
 
-        if ($isUpdate && $downloaded && $readingId !== null) {
-            ConsumerLedger::updateOrCreate(
-                [
-                    'consumer_zone_id' => $consumerId,
-                    'trans' => 'PAYMENT',
-                    'downloaded_reading_id' => $readingId,
-                    'reference' => $orNumber . '-SC',
-                ],
-                array_merge($scPayload, [
-                    'schedule_id' => $downloaded->schedule_id,
-                ])
-            );
+        $scRow = ConsumerLedger::updateOrCreate(
+            [
+                'consumer_zone_id' => $consumerId,
+                'trans' => 'PAYMENT',
+                'reference' => $scReference,
+            ],
+            $scPayload
+        );
 
+        ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerId)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $scReference)
+            ->where(mr_col('id'), '!=', $scRow->id)
+            ->delete();
+    }
+
+    private function deleteSeniorCitizenLedgerRows(int $consumerId, string $orNumber): void
+    {
+        $or = preg_replace('/-SC$/i', '', trim($orNumber));
+        if ($or === '') {
             return;
         }
 
-        ConsumerLedger::create(array_merge($scPayload, [
-            'consumer_zone_id' => $consumerId,
-            'downloaded_reading_id' => $downloaded?->id,
-            'trans' => 'PAYMENT',
-            'reference' => $orNumber . '-SC',
-        ]));
+        ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerId)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $or . '-SC')
+            ->delete();
     }
 
     /**
