@@ -849,8 +849,8 @@
         <div class="print-footer">
             <div class="signature-line left">
                 <hr>
-                <div class="signature-name">FLORAME L. FLORA</div>
-                <div class="signature-title">Cashier D</div>
+                <div class="signature-name">MERRY ROSE A. BACULNA</div>
+                <div class="signature-title">Cashier</div>
             </div>
             <div class="signature-line right">
                 <hr>
