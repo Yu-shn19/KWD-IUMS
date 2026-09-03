@@ -2001,36 +2001,35 @@ class MeterReadingController extends Controller
         return $penaltyEntries;
     }
 
-    /** OR number sequence starts at this value (100000, 100001, 100002, ...). */
-    const OR_NUMBER_START = 334844;
+    /** OR number sequence starts at this value (000160, 000161, 000162, ...). */
+    const OR_NUMBER_START = 160;
+
+    const OR_NUMBER_PAD = 6;
 
     /**
      * Generate the next Official Receipt (OR) number in sequence.
-     * Sequence: 100000, 100001, 100002, ... (auto-increment from 100000).
-     * 
+     * Sequence: 000160, 000161, 000162, ... (6-digit, zero-padded).
+     *
      * @return \Illuminate\Http\JsonResponse
      */
     public function generateOrNumber()
     {
         try {
-            $maxOrNumber = 0;
-            
-            // Check downloaded_readings table for OR numbers (numeric only)
+            $usedOrNumbers = [];
+
             $hasOrColumn = Schema::hasColumn('downloaded_readings', 'official_receipt_number');
             if ($hasOrColumn) {
-                $maxOrFromReadings = DB::table(mr_col('downloaded_readings'))
+                $readingOrs = DB::table(mr_col('downloaded_readings'))
                     ->whereNotNull(mr_col('official_receipt_number'))
                     ->where(mr_col('official_receipt_number'), '!=', '')
-                    ->whereRaw('official_receipt_number REGEXP "^[0-9]+$"')
-                    ->selectRaw('MAX(CAST(official_receipt_number AS UNSIGNED)) as max_or')
-                    ->value(mr_col('max_or'));
-                
-                if ($maxOrFromReadings) {
-                    $maxOrNumber = max($maxOrNumber, (int) $maxOrFromReadings);
+                    ->pluck(mr_col('official_receipt_number'));
+                foreach ($readingOrs as $orVal) {
+                    if (preg_match('/^(\d+)/', (string) $orVal, $m)) {
+                        $usedOrNumbers[(int) $m[1]] = true;
+                    }
                 }
             }
-            
-            // Check consumer_payments: include base number from "123456-SC" so sequence is correct
+
             $hasPaymentsOrColumn = Schema::hasColumn('consumer_payments', 'or_number');
             if ($hasPaymentsOrColumn) {
                 $paymentOrs = DB::table(mr_col('consumer_payments'))
@@ -2038,33 +2037,18 @@ class MeterReadingController extends Controller
                     ->where(mr_col('or_number'), '!=', '')
                     ->pluck(mr_col('or_number'));
                 foreach ($paymentOrs as $orVal) {
-                    if (preg_match('/^(\d+)/', $orVal, $m)) {
-                        $maxOrNumber = max($maxOrNumber, (int) $m[1]);
+                    if (preg_match('/^(\d+)/', (string) $orVal, $m)) {
+                        $usedOrNumbers[(int) $m[1]] = true;
                     }
                 }
             }
 
-            // Next OR: max(existing) + 1, but never below 100000
-            $newOrNumber = max(self::OR_NUMBER_START, $maxOrNumber + 1);
-            $orNumber = (string) $newOrNumber;
-
-            // Uniqueness check for exact numeric OR (in case of race)
-            $exists = false;
-            if ($hasOrColumn) {
-                $exists = DB::table(mr_col('downloaded_readings'))
-                    ->where(mr_col('official_receipt_number'), $orNumber)
-                    ->exists();
-            }
-            if (!$exists && $hasPaymentsOrColumn) {
-                $exists = DB::table(mr_col('consumer_payments'))
-                    ->where(mr_col('or_number'), $orNumber)
-                    ->exists();
-            }
-            if ($exists) {
+            $newOrNumber = self::OR_NUMBER_START;
+            while (isset($usedOrNumbers[$newOrNumber])) {
                 $newOrNumber++;
-                $orNumber = (string) $newOrNumber;
             }
-            
+            $orNumber = $this->formatOrNumber($newOrNumber);
+
             return response()->json([
                 'success' => true,
                 'or_number' => $orNumber,
@@ -2074,15 +2058,18 @@ class MeterReadingController extends Controller
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            
-            $fallbackOr = (string) self::OR_NUMBER_START;
-            
+
             return response()->json([
                 'success' => true,
-                'or_number' => $fallbackOr,
+                'or_number' => $this->formatOrNumber(self::OR_NUMBER_START),
                 'warning' => 'Using fallback OR number (database error). Retry to get next in sequence.',
             ]);
         }
+    }
+
+    private function formatOrNumber(int $orNumber): string
+    {
+        return str_pad((string) $orNumber, self::OR_NUMBER_PAD, '0', STR_PAD_LEFT);
     }
     
     /**

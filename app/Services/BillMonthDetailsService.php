@@ -517,14 +517,19 @@ class BillMonthDetailsService
                         return true;
                     };
         
-                    // Current bill = bill whose period [date, due_date] contains to_date (to_date >= date and to_date <= due_date)
+                    // Current bill = latest unpaid billing on or before to_date.
+                    // Stays current until the next billing cycle is posted (not when due date passes).
                     $s->currentBillEntry = null;
                     foreach ($billingForDateRange as $b) {
-                        $due = $b['due_date'];
-                        $date = $b['date'];
-                        if ($due && $toDateOnly->gte($date) && $toDateOnly->lte($due)) {
+                        if (!$isChargeUnpaid($b)) {
+                            continue;
+                        }
+                        $date = $b['date'] ?? null;
+                        if (!$date || $toDateOnly->lt($date)) {
+                            continue;
+                        }
+                        if (!$s->currentBillEntry || $date->gt($s->currentBillEntry['date'])) {
                             $s->currentBillEntry = $b;
-                            break;
                         }
                     }
                     // Method A: Current Bill = â‚±195 if current billing month BILLING row has paid_at IS NULL, else 0
@@ -539,14 +544,20 @@ class BillMonthDetailsService
                     }
                     $s->noBillingInViewedMonth = ($s->currentBillEntry === null);
         
-                    // Overdue unpaid = bills with due_date < to_date AND that charge row paid_at IS NULL (no double-count)
+                    // Older unpaid cycles only (exclude the current/latest unpaid bill).
                     $overdueUnpaid = [];
+                    $currentLedgerId = $s->currentBillEntry['ledger_id'] ?? null;
                     foreach ($billingForDateRange as $b) {
-                        $due = $b['due_date'];
-                        if (!$due || !$toDateOnly->gt($due)) continue;
-                        if ($isChargeUnpaid($b)) {
-                            $overdueUnpaid[] = $b;
+                        if (!$isChargeUnpaid($b)) {
+                            continue;
                         }
+                        if ($currentLedgerId !== null && ($b['ledger_id'] ?? null) === $currentLedgerId) {
+                            continue;
+                        }
+                        if ($s->currentBillEntry && !empty($b['date']) && !empty($s->currentBillEntry['date']) && !$b['date']->lt($s->currentBillEntry['date'])) {
+                            continue;
+                        }
+                        $overdueUnpaid[] = $b;
                     }
                     usort($overdueUnpaid, function ($a, $b) {
                         $da = $a['due_date'];
@@ -1177,17 +1188,11 @@ class BillMonthDetailsService
                     $s->arrearsPy = max(0, round($s->currentBalance - $s->currentBill, 2));
                 }
         
-                // No billing in selected month: show only PY = current balance; Current Bill = 0, Penalty = 0, Meter Rental = 0
-                // Use schedules OR actual ledger BILLING entries to decide. Do not zero out if ledger has billing rows for the month.
+                // No billing in selected month: do not force Current = 0 here.
+                // applyDatabaseBreakdownAndCredits keeps the latest unpaid bill as current
+                // until the next-month billing exists.
                 $hasLedgerBillingForMonth = isset($s->hasBillingEntriesInRange) ? $s->hasBillingEntriesInRange : true;
                 $s->isNoBillingInMonth = ($s->schedulesInRange->isEmpty() && !$hasLedgerBillingForMonth) || ($s->dateRangeMode && $s->noBillingInViewedMonth && !$hasLedgerBillingForMonth);
-                if ($s->isNoBillingInMonth) {
-                    $s->currentBill = 0;
-                    $s->penaltyAmount = 0;
-                    $s->maintenance = 0;
-                    $s->arrearsCy = 0;
-                    $s->arrearsPy = max(0, round($s->currentBalance, 2));
-                }
     }
 
     private function applyDatabaseBreakdownAndCredits(Request $request, BillMonthDetailsState $s): void
@@ -1196,10 +1201,7 @@ class BillMonthDetailsService
                 $balanceEndOfPreviousYear = $this->getLedgerBalanceAsOfDate((int) $s->consumer->id, Carbon::now()->subYear()->endOfYear()->format('Y-m-d'));
         
                 // Always use database-backed breakdown (paid_at only).
-                // PRE-DUE vs POST-DUE: compare transaction_date (from date button) to the selected bill's due_date.
-                // PRE-DUE (transaction_date <= due_date): Current Bill = 195, Arrears CY = current year (excluding selected month), Arrears PY = past years.
-                // POST-DUE (transaction_date > due_date): Current Bill = 0, Arrears CY = current year, Arrears PY = past years.
-                // When selecting a bill month, if date is after due_date â†’ POST-DUE; if date is within billing period â†’ PRE-DUE.
+                // Latest unpaid BILLING stays Current until the next-month billing is posted.
                 $billingController = app(BillingProcessController::class);
                 $asOfDate = $request->input('transaction_date') ? Carbon::parse($request->input('transaction_date')) : Carbon::now();
                 $selectedBillMonthYmd = null;
@@ -1209,36 +1211,7 @@ class BillMonthDetailsService
                         $selectedBillMonthYmd = $parts[1] . '-' . $parts[0];
                     }
                 }
-                // Resolve due_date for the selected bill month to determine PRE-DUE vs POST-DUE based on date button
-                $selectedBillDueDate = null;
-                if (!empty($s->schedulesInRange) && $s->schedulesInRange->isNotEmpty()) {
-                    $scheduleWithDue = MeterReadingSchedule::whereIn('id', $s->schedulesInRange)
-                        ->whereNotNull(mr_col('due_date'))
-                        ->first();
-                    if ($scheduleWithDue && $scheduleWithDue->due_date) {
-                        $selectedBillDueDate = $scheduleWithDue->due_date instanceof Carbon
-                            ? $scheduleWithDue->due_date
-                            : Carbon::parse($scheduleWithDue->due_date);
-                    }
-                }
-                if (!$selectedBillDueDate) {
-                    // Fallback: get due_date from ledger BILLING for the selected month
-                    $billingWithDue = \App\Models\ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $s->consumer->id)
-                        ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
-                        ->whereNotNull(mr_col('due_date'))
-                        ->when(!empty($s->schedulesInRange) && $s->schedulesInRange->isNotEmpty(), function ($q) use ($s) {
-                            $q->whereIn(mr_col('schedule_id'), $s->schedulesInRange->toArray());
-                        })
-                        ->orderBy('date', 'desc')
-                        ->first();
-                    if ($billingWithDue && $billingWithDue->due_date) {
-                        $selectedBillDueDate = $billingWithDue->due_date instanceof Carbon
-                            ? $billingWithDue->due_date
-                            : Carbon::parse($billingWithDue->due_date);
-                    }
-                }
-                // Determine viewType: PRE-DUE if transaction_date <= due_date, POST-DUE if transaction_date > due_date
-                $viewType = ($selectedBillDueDate && $asOfDate->gt($selectedBillDueDate)) ? 'post_due' : 'pre_due';
+                $viewType = $this->resolveBreakdownViewType((int) $s->consumer->id, $selectedBillMonthYmd);
                 $dbBreakdown = $billingController->getBillingBreakdownData((int) $s->consumer->id, $viewType, $asOfDate, null, $selectedBillMonthYmd);
                 $s->currentBill = (float) ($dbBreakdown['current_billing'] ?? 0);
                 $s->penaltyAmount = (float) ($dbBreakdown['penalty'] ?? 0);
@@ -1352,9 +1325,10 @@ class BillMonthDetailsService
                 // so the same formula (year-based PY, year+month for CY) is used regardless of which month is selected.
                 $dbHasArrears = (round($s->arrearsCy, 2) + round($s->arrearsPy, 2)) > 0;
                 $applyBalanceSplit = ($s->isNoBillingInMonth || $s->schedulesInRange->isEmpty()) && $s->currentBalance > 0 && !$dbHasArrears;
-                // If DB breakdown already found a current bill for the selected month,
-                // never reclassify it into arrears via fallback balance split.
-                if ($hasDbCurrentBillForSelectedMonth) {
+                // Latest unpaid bill stays current until next-month billing exists.
+                // Do not reclassify that current amount into arrears just because the
+                // viewed month has no schedule yet.
+                if ($hasDbCurrentBillForSelectedMonth || round($s->currentBill, 2) > 0) {
                     $applyBalanceSplit = false;
                 }
                 if ($applyBalanceSplit) {
@@ -1642,43 +1616,8 @@ class BillMonthDetailsService
 
     private function applyReconciliationAndFinalize(Request $request, BillMonthDetailsState $s): void
     {
-        // Post-due split rule:
-                // If selected/as-of date is after billing due date, move Current Bill to Arrears CY.
-                // Example target: Current Bill 0.00, Arrears CY includes former current bill amount.
-                if (!($s->orNumberInput !== '' && $s->orPayment) && (float) $s->currentBill > 0.009) {
-                    $asOfDate = isset($s->toMonthDate) && $s->toMonthDate instanceof Carbon
-                        ? $s->toMonthDate->copy()->startOfDay()
-                        : Carbon::today()->startOfDay();
-        
-                    $dueDate = null;
-                    if (isset($s->currentBillEntry) && is_array($s->currentBillEntry) && !empty($s->currentBillEntry['due_date'])) {
-                        $dueDate = $s->currentBillEntry['due_date'] instanceof Carbon
-                            ? $s->currentBillEntry['due_date']->copy()->startOfDay()
-                            : Carbon::parse($s->currentBillEntry['due_date'])->startOfDay();
-                    } else {
-                        // Fallback when currentBillEntry is unavailable in this path:
-                        // use latest BILLING due date from ledger for this consumer up to as-of date.
-                        $latestBillingRowForDue = \App\Models\ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $s->consumer->id)
-                            ->whereIn(DB::raw("UPPER(TRIM(trans))"), ['BILLING', 'BILL'])
-                            ->where(function ($q) {
-                                $q->where(mr_col('debit'), '>', 0)->orWhere(mr_col('billamount'), '>', 0);
-                            })
-                            ->whereRaw('COALESCE(date, txtime) <= ?', [$asOfDate->format('Y-m-d H:i:s')])
-                            ->orderByRaw('COALESCE(due_date, date, txtime) DESC')
-                            ->orderBy(mr_col('id'), 'desc')
-                            ->first();
-                        if ($latestBillingRowForDue && !empty($latestBillingRowForDue->due_date)) {
-                            $dueDate = $latestBillingRowForDue->due_date instanceof Carbon
-                                ? $latestBillingRowForDue->due_date->copy()->startOfDay()
-                                : Carbon::parse($latestBillingRowForDue->due_date)->startOfDay();
-                        }
-                    }
-        
-                    if ($dueDate && $asOfDate->gt($dueDate)) {
-                        $s->arrearsCy = round((float) $s->arrearsCy + (float) $s->currentBill, 2);
-                        $s->currentBill = 0.0;
-                    }
-                }
+        // Current Bill stays current until the next billing cycle is posted.
+                // Due date no longer moves Current → Arrears (penalty still applies separately).
         
                 // Final reconciliation for non-explicit-paid-OR flows vs displayed ledger balance:
                 // - If breakdown sum > balance: trim buckets (existing behavior).
@@ -2039,5 +1978,58 @@ class BillMonthDetailsService
         }
 
         return $balanceAsOf !== null ? (float) $balanceAsOf : 0.0;
+    }
+
+    /**
+     * Keep pre_due (current stays current) until a later billing cycle exists.
+     * Due date does not flip the latest unpaid bill into arrears.
+     */
+    private function resolveBreakdownViewType(int $consumerZoneId, ?string $selectedBillMonthYmd): string
+    {
+        $currentBillDate = null;
+        if (!empty($selectedBillMonthYmd)) {
+            try {
+                $currentBillDate = Carbon::createFromFormat('Y-m', $selectedBillMonthYmd)->startOfMonth();
+            } catch (Throwable $e) {
+                $currentBillDate = null;
+            }
+        }
+        if (!$currentBillDate) {
+            $latestBilling = \App\Models\ConsumerLedger::query()
+                ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
+                ->where(function ($q) {
+                    $q->where(mr_col('billamount'), '>', 0)->orWhere(mr_col('debit'), '>', 0);
+                })
+                ->orderByRaw('COALESCE(date, txtime) DESC')
+                ->orderBy(mr_col('id'), 'desc')
+                ->first();
+            if ($latestBilling && !empty($latestBilling->date)) {
+                $currentBillDate = Carbon::parse($latestBilling->date)->startOfMonth();
+            }
+        }
+
+        return $this->hasNextCycleBilling($consumerZoneId, $currentBillDate) ? 'post_due' : 'pre_due';
+    }
+
+    /**
+     * True when a BILLING/BILL row exists in a later month than $currentBillDate.
+     */
+    private function hasNextCycleBilling(int $consumerZoneId, ?Carbon $currentBillDate): bool
+    {
+        if (!$currentBillDate) {
+            return false;
+        }
+
+        $nextMonthStart = $currentBillDate->copy()->startOfMonth()->addMonth()->format('Y-m-d');
+
+        return \App\Models\ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
+            ->where(function ($q) {
+                $q->where(mr_col('billamount'), '>', 0)->orWhere(mr_col('debit'), '>', 0);
+            })
+            ->whereRaw('DATE(COALESCE(date, txtime)) >= ?', [$nextMonthStart])
+            ->exists();
     }
 }
