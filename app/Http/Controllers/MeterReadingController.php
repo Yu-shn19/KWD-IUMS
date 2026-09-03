@@ -2098,22 +2098,22 @@ class MeterReadingController extends Controller
             ], 404);
         }
         
-        // Get all ledger entries with debits (charges) from consumer_ledgers
+        // Unpaid months: BILLING/BILL and DM carry-forward (SC / opening balance).
         $ledgerEntries = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
-            ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
+            ->whereIn(mr_col('trans'), ['BILLING', 'BILL', 'DM'])
             ->where(mr_col('debit'), '>', 0)
             ->orderBy(mr_col('date'), 'desc')
             ->get();
         
         $billMonthsData = [];
         $seenMonths = [];
+        $scheduleIds = $ledgerEntries->pluck('schedule_id')->filter()->unique()->values();
+        $schedulesById = $scheduleIds->isEmpty()
+            ? collect()
+            : MeterReadingSchedule::query()->whereIn(mr_col('id'), $scheduleIds)->get()->keyBy('id');
         
         foreach ($ledgerEntries as $ledger) {
-            // Get associated schedule for bill_month
-            $schedule = null;
-            if ($ledger->schedule_id) {
-                $schedule = MeterReadingSchedule::find($ledger->schedule_id);
-            }
+            $schedule = $ledger->schedule_id ? ($schedulesById[$ledger->schedule_id] ?? null) : null;
             
             // Determine bill month
             $sortDate = null;
