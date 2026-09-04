@@ -19,8 +19,8 @@ class Setting extends Model
             'org_short_name' => 'MWS-IUMS',
             'org_address' => 'Malalag, Davao del Sur',
             'org_tagline' => 'Integrated Water Utility Management System',
-            'logo' => 'WDMS/img/logo/malalag.png',
-            'favicon' => 'WDMS/img/logo/malalag.png',
+            'logo' => 'WDMS/img/logo/logo_1785730399.png',
+            'favicon' => 'WDMS/img/logo/logo_1785730399.png',
             'hero_image' => 'WDMS/img/logo/hero.jpeg',
         ];
     }

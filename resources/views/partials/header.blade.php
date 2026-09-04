@@ -7,7 +7,9 @@
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta name="theme-color" content="#3b82f6">
   
-  <link href="{{ $branding['favicon_url'] }}" rel="icon">
+  <link href="{{ $branding['favicon_url'] }}" rel="icon" type="image/png">
+  <link href="{{ $branding['favicon_url'] }}" rel="shortcut icon" type="image/png">
+  <link href="{{ $branding['favicon_url'] }}" rel="apple-touch-icon">
   <title>{{ $branding['org_short_name'] }} | Water Management System</title>
   
   <!-- Font Awesome -->
