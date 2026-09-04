@@ -5,6 +5,18 @@ namespace App\Support;
 class AcctCodeTitles
 {
     public const TITLES = [
+        '100' => 'MEMBERSHIP FEE',
+        '101' => 'INSTALLATION FEE',
+        '102' => 'SECURITY DEPOSIT',
+        '103' => 'WATER METER',
+        '104' => 'SERVICE FEE',
+        '105' => 'MATERIALS NEW CONNECTION',
+        '106' => 'A/R MATERIALS',
+        '107' => 'A/R MOTORPLAN',
+        '108' => 'RECONNECTION FEE',
+        '109' => 'OTHERS',
+        '110' => 'CELLPHONE PLAN',
+        '111' => 'CERTIFICATION FEE',
         '19901020' => 'Advances for Payroll',
         '19901030' => 'Advances to Special Disbursing Offices',
         '19901040' => 'Advances to Officers and Employees',

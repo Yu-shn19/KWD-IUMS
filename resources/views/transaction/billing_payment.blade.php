@@ -507,13 +507,18 @@
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay1" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown1" class="bam-acct-dropdown" style="display: none;">
                                                                     <div class="bam-acct-option" data-code="" data-desc="">— Select Acct Code —</div>
-                                                                    <div class="bam-acct-option" data-code="19901020" data-desc="Advances for Payroll">19901020 Advances for Payroll</div>
-                                                                    <div class="bam-acct-option" data-code="19901030" data-desc="Advances to Special Disbursing Offices">19901030 Advances to Special Disbursing Offices</div>
-                                                                    <div class="bam-acct-option" data-code="19901040" data-desc="Advances to Officers and Employees">19901040 Advances to Officers and Employees</div>
-                                                                    <div class="bam-acct-option" data-code="20102040" data-desc="Loans Payable-Domestic - Non-Current">20102040 Loans Payable-Domestic - Non-Current</div>
-                                                                    <div class="bam-acct-option" data-code="20401090" data-desc="Customer's Deposit Payable">20401090 Customer's Deposit Payable</div>
-                                                                    <div class="bam-acct-option" data-code="40201990" data-desc="Other Service Income">40201990 Other Service Income</div>
-                                                                    <div class="bam-acct-option" data-code="40603990" data-desc="Miscellineous Income">40603990 Miscellineous Income</div>
+                                                                    <div class="bam-acct-option" data-code="106" data-desc="A/R MATERIALS">106 - A/R MATERIALS</div>
+                                                                    <div class="bam-acct-option" data-code="111" data-desc="CERTIFICATION FEE">111 - CERTIFICATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="107" data-desc="A/R MOTORPLAN">107 - A/R MOTORPLAN</div>
+                                                                    <div class="bam-acct-option" data-code="110" data-desc="CELLPHONE PLAN">110 - CELLPHONE PLAN</div>
+                                                                    <div class="bam-acct-option" data-code="101" data-desc="INSTALLATION FEE">101 - INSTALLATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="105" data-desc="MATERIALS NEW CONNECTION">105 - MATERIALS NEW CONNECTION</div>
+                                                                    <div class="bam-acct-option" data-code="100" data-desc="MEMBERSHIP FEE">100 - MEMBERSHIP FEE</div>
+                                                                    <div class="bam-acct-option" data-code="109" data-desc="OTHERS">109 - OTHERS</div>
+                                                                    <div class="bam-acct-option" data-code="108" data-desc="RECONNECTION FEE">108 - RECONNECTION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="102" data-desc="SECURITY DEPOSIT">102 - SECURITY DEPOSIT</div>
+                                                                    <div class="bam-acct-option" data-code="104" data-desc="SERVICE FEE">104 - SERVICE FEE</div>
+                                                                    <div class="bam-acct-option" data-code="103" data-desc="WATER METER">103 - WATER METER</div>
                                                                 </div>
                                                             </div>
                                                         </td>
@@ -529,13 +534,18 @@
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay2" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown2" class="bam-acct-dropdown" style="display: none;">
                                                                     <div class="bam-acct-option" data-code="" data-desc="">— Select Acct Code —</div>
-                                                                    <div class="bam-acct-option" data-code="19901020" data-desc="Advances for Payroll">19901020 Advances for Payroll</div>
-                                                                    <div class="bam-acct-option" data-code="19901030" data-desc="Advances to Special Disbursing Offices">19901030 Advances to Special Disbursing Offices</div>
-                                                                    <div class="bam-acct-option" data-code="19901040" data-desc="Advances to Officers and Employees">19901040 Advances to Officers and Employees</div>
-                                                                    <div class="bam-acct-option" data-code="20102040" data-desc="Loans Payable-Domestic - Non-Current">20102040 Loans Payable-Domestic - Non-Current</div>
-                                                                    <div class="bam-acct-option" data-code="20401090" data-desc="Customer's Deposit Payable">20401090 Customer's Deposit Payable</div>
-                                                                    <div class="bam-acct-option" data-code="40201990" data-desc="Other Service Income">40201990 Other Service Income</div>
-                                                                    <div class="bam-acct-option" data-code="40603990" data-desc="Miscellineous Income">40603990 Miscellineous Income</div>
+                                                                    <div class="bam-acct-option" data-code="106" data-desc="A/R MATERIALS">106 - A/R MATERIALS</div>
+                                                                    <div class="bam-acct-option" data-code="111" data-desc="CERTIFICATION FEE">111 - CERTIFICATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="107" data-desc="A/R MOTORPLAN">107 - A/R MOTORPLAN</div>
+                                                                    <div class="bam-acct-option" data-code="110" data-desc="CELLPHONE PLAN">110 - CELLPHONE PLAN</div>
+                                                                    <div class="bam-acct-option" data-code="101" data-desc="INSTALLATION FEE">101 - INSTALLATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="105" data-desc="MATERIALS NEW CONNECTION">105 - MATERIALS NEW CONNECTION</div>
+                                                                    <div class="bam-acct-option" data-code="100" data-desc="MEMBERSHIP FEE">100 - MEMBERSHIP FEE</div>
+                                                                    <div class="bam-acct-option" data-code="109" data-desc="OTHERS">109 - OTHERS</div>
+                                                                    <div class="bam-acct-option" data-code="108" data-desc="RECONNECTION FEE">108 - RECONNECTION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="102" data-desc="SECURITY DEPOSIT">102 - SECURITY DEPOSIT</div>
+                                                                    <div class="bam-acct-option" data-code="104" data-desc="SERVICE FEE">104 - SERVICE FEE</div>
+                                                                    <div class="bam-acct-option" data-code="103" data-desc="WATER METER">103 - WATER METER</div>
                                                                 </div>
                                                             </div>
                                                         </td>
@@ -551,13 +561,18 @@
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay3" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown3" class="bam-acct-dropdown" style="display: none;">
                                                                     <div class="bam-acct-option" data-code="" data-desc="">— Select Acct Code —</div>
-                                                                    <div class="bam-acct-option" data-code="19901020" data-desc="Advances for Payroll">19901020 Advances for Payroll</div>
-                                                                    <div class="bam-acct-option" data-code="19901030" data-desc="Advances to Special Disbursing Offices">19901030 Advances to Special Disbursing Offices</div>
-                                                                    <div class="bam-acct-option" data-code="19901040" data-desc="Advances to Officers and Employees">19901040 Advances to Officers and Employees</div>
-                                                                    <div class="bam-acct-option" data-code="20102040" data-desc="Loans Payable-Domestic - Non-Current">20102040 Loans Payable-Domestic - Non-Current</div>
-                                                                    <div class="bam-acct-option" data-code="20401090" data-desc="Customer's Deposit Payable">20401090 Customer's Deposit Payable</div>
-                                                                    <div class="bam-acct-option" data-code="40201990" data-desc="Other Service Income">40201990 Other Service Income</div>
-                                                                    <div class="bam-acct-option" data-code="40603990" data-desc="Miscellineous Income">40603990 Miscellineous Income</div>
+                                                                    <div class="bam-acct-option" data-code="106" data-desc="A/R MATERIALS">106 - A/R MATERIALS</div>
+                                                                    <div class="bam-acct-option" data-code="111" data-desc="CERTIFICATION FEE">111 - CERTIFICATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="107" data-desc="A/R MOTORPLAN">107 - A/R MOTORPLAN</div>
+                                                                    <div class="bam-acct-option" data-code="110" data-desc="CELLPHONE PLAN">110 - CELLPHONE PLAN</div>
+                                                                    <div class="bam-acct-option" data-code="101" data-desc="INSTALLATION FEE">101 - INSTALLATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="105" data-desc="MATERIALS NEW CONNECTION">105 - MATERIALS NEW CONNECTION</div>
+                                                                    <div class="bam-acct-option" data-code="100" data-desc="MEMBERSHIP FEE">100 - MEMBERSHIP FEE</div>
+                                                                    <div class="bam-acct-option" data-code="109" data-desc="OTHERS">109 - OTHERS</div>
+                                                                    <div class="bam-acct-option" data-code="108" data-desc="RECONNECTION FEE">108 - RECONNECTION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="102" data-desc="SECURITY DEPOSIT">102 - SECURITY DEPOSIT</div>
+                                                                    <div class="bam-acct-option" data-code="104" data-desc="SERVICE FEE">104 - SERVICE FEE</div>
+                                                                    <div class="bam-acct-option" data-code="103" data-desc="WATER METER">103 - WATER METER</div>
                                                                 </div>
                                                             </div>
                                                         </td>
@@ -573,13 +588,18 @@
                                                                 <input type="text" class="form-control form-control-sm" id="sundryAcctCodeDisplay4" readonly placeholder="— Select Acct Code —" style="cursor: pointer; background-color: #fff; font-size: 0.875rem;">
                                                                 <div id="sundryAcctCodeDropdown4" class="bam-acct-dropdown" style="display: none;">
                                                                     <div class="bam-acct-option" data-code="" data-desc="">— Select Acct Code —</div>
-                                                                    <div class="bam-acct-option" data-code="19901020" data-desc="Advances for Payroll">19901020 Advances for Payroll</div>
-                                                                    <div class="bam-acct-option" data-code="19901030" data-desc="Advances to Special Disbursing Offices">19901030 Advances to Special Disbursing Offices</div>
-                                                                    <div class="bam-acct-option" data-code="19901040" data-desc="Advances to Officers and Employees">19901040 Advances to Officers and Employees</div>
-                                                                    <div class="bam-acct-option" data-code="20102040" data-desc="Loans Payable-Domestic - Non-Current">20102040 Loans Payable-Domestic - Non-Current</div>
-                                                                    <div class="bam-acct-option" data-code="20401090" data-desc="Customer's Deposit Payable">20401090 Customer's Deposit Payable</div>
-                                                                    <div class="bam-acct-option" data-code="40201990" data-desc="Other Service Income">40201990 Other Service Income</div>
-                                                                    <div class="bam-acct-option" data-code="40603990" data-desc="Miscellineous Income">40603990 Miscellineous Income</div>
+                                                                    <div class="bam-acct-option" data-code="106" data-desc="A/R MATERIALS">106 - A/R MATERIALS</div>
+                                                                    <div class="bam-acct-option" data-code="111" data-desc="CERTIFICATION FEE">111 - CERTIFICATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="107" data-desc="A/R MOTORPLAN">107 - A/R MOTORPLAN</div>
+                                                                    <div class="bam-acct-option" data-code="110" data-desc="CELLPHONE PLAN">110 - CELLPHONE PLAN</div>
+                                                                    <div class="bam-acct-option" data-code="101" data-desc="INSTALLATION FEE">101 - INSTALLATION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="105" data-desc="MATERIALS NEW CONNECTION">105 - MATERIALS NEW CONNECTION</div>
+                                                                    <div class="bam-acct-option" data-code="100" data-desc="MEMBERSHIP FEE">100 - MEMBERSHIP FEE</div>
+                                                                    <div class="bam-acct-option" data-code="109" data-desc="OTHERS">109 - OTHERS</div>
+                                                                    <div class="bam-acct-option" data-code="108" data-desc="RECONNECTION FEE">108 - RECONNECTION FEE</div>
+                                                                    <div class="bam-acct-option" data-code="102" data-desc="SECURITY DEPOSIT">102 - SECURITY DEPOSIT</div>
+                                                                    <div class="bam-acct-option" data-code="104" data-desc="SERVICE FEE">104 - SERVICE FEE</div>
+                                                                    <div class="bam-acct-option" data-code="103" data-desc="WATER METER">103 - WATER METER</div>
                                                                 </div>
                                                             </div>
                                                         </td>

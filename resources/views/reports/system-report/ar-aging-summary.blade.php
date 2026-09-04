@@ -200,7 +200,7 @@
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['_90'] ?? 0, 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['_over90'] ?? 0, 2) }}</td>
                                                                 <td class="text-right py-1 px-1">{{ number_format($record['prev_year'] ?? 0, 2) }}</td>
-                                                                <td class="text-right py-1 px-1 font-weight-bold">{{ number_format($record['balance'], 2) }}</td>
+                                                                <td class="text-right py-1 px-1 font-weight-bold{{ ((float) ($record['balance'] ?? 0) < 0) ? ' text-success' : '' }}">{{ number_format($record['balance'], 2) }}</td>
                                                             </tr>
                                                         @empty
                                                             <tr>

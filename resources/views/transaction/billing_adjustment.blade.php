@@ -236,9 +236,10 @@
                                             <div id="bamAcctCodeDropdown" class="bam-acct-dropdown" style="display: none;">
                                                 <div class="bam-acct-option" data-code="" data-desc="">— Select Acct Code —</div>
                                                 <div class="bam-acct-option" data-code="106" data-desc="A/R MATERIALS">106 - A/R MATERIALS</div>
+                                                <div class="bam-acct-option" data-code="111" data-desc="CERTIFICATION FEE">111 - CERTIFICATION FEE</div>
                                                 <div class="bam-acct-option" data-code="107" data-desc="A/R MOTORPLAN">107 - A/R MOTORPLAN</div>
                                                 <div class="bam-acct-option" data-code="110" data-desc="CELLPHONE PLAN">110 - CELLPHONE PLAN</div>
-                                                <div class="bam-acct-option" data-code="101" data-desc="CONNECTION FEE">101 - CONNECTION FEE</div>
+                                                <div class="bam-acct-option" data-code="101" data-desc="INSTALLATION FEE">101 - INSTALLATION FEE</div>
                                                 <div class="bam-acct-option" data-code="105" data-desc="MATERIALS NEW CONNECTION">105 - MATERIALS NEW CONNECTION</div>
                                                 <div class="bam-acct-option" data-code="100" data-desc="MEMBERSHIP FEE">100 - MEMBERSHIP FEE</div>
                                                 <div class="bam-acct-option" data-code="109" data-desc="OTHERS">109 - OTHERS</div>
@@ -352,7 +353,7 @@
                                                     : ($item->type === 'DM' ? 'badge-warning' : 'badge-info');
                                                 $acctCodeLabels = [
                                                     '100' => '100 - MEMBERSHIP FEE',
-                                                    '101' => '101 - CONNECTION FEE',
+                                                    '101' => '101 - INSTALLATION FEE',
                                                     '102' => '102 - SECURITY DEPOSIT',
                                                     '103' => '103 - WATER METER',
                                                     '104' => '104 - SERVICE FEE',
@@ -362,6 +363,7 @@
                                                     '108' => '108 - RECONNECTION FEE',
                                                     '109' => '109 - OTHERS',
                                                     '110' => '110 - CELLPHONE PLAN',
+                                                    '111' => '111 - CERTIFICATION FEE',
                                                 ];
                                                 $acctCodeKey = (string) ($item->acct_code ?? '');
                                                 $acctCodeLabel = $acctCodeLabels[$acctCodeKey]

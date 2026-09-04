@@ -1495,6 +1495,13 @@ class ReportController extends Controller
     
     /**
      * FIFO AR aging: one row per account with bucket columns and total_balance (same logic as AR Aging Summary).
+     *
+     * BILLING/PENALTY: CURRENT until due date; on/after due → _30, then _60, _90, _OVER90 by due month.
+     * DM prio_years: always PREV YEAR.
+     * First DM per account (system opening): remainder always _OVER90.
+     * Later DMs: remainder ages from the date entered (same month = CURRENT, then _30/_60/_90/_OVER90).
+     * PAYMENT/CM apply FIFO: PREV YEAR, then _OVER90, then _90, _60, _30, CURRENT.
+     * Overpayment / CM credit is kept on the report as a negative BALANCE (aging buckets 0).
      */
     protected function runArAgingFifoAccountQuery(
         Carbon $asOf,
@@ -1543,27 +1550,113 @@ class ReportController extends Controller
         $asOfDate = $asOf->format('Y-m-d');
         $billingCutoffDate = $billingCutOff->format('Y-m-d');
         $paymentCutoffDate = $paymentCutOff->format('Y-m-d');
+        $prioYearsSql = Schema::hasColumn('consumer_ledgers', 'prio_years')
+            ? 'GREATEST(COALESCE(cl.prio_years, 0), 0)'
+            : '0';
 
         $agingSql = "
-            WITH charges AS (
+            WITH first_dm AS (
+                SELECT consumer_zone_id, id AS first_id
+                FROM (
+                    SELECT
+                        cl.consumer_zone_id,
+                        cl.id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY cl.consumer_zone_id
+                            ORDER BY cl.`date` ASC, cl.id ASC
+                        ) AS rn
+                    FROM consumer_ledgers cl
+                    INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
+                    WHERE UPPER(TRIM(cl.trans)) = 'DM'
+                      AND cl.debit > 0
+                      {$chargeWhere}
+                ) ranked
+                WHERE rn = 1
+            ),
+            charges AS (
                 SELECT
                     cl.consumer_zone_id,
                     cz.account_no,
                     UPPER(TRIM(cl.trans)) AS trans,
+                    CASE
+                        WHEN COALESCE(cl.due_date, cl.`date`) > ? THEN 'current'
+                        ELSE ELT(
+                            LEAST(
+                                PERIOD_DIFF(
+                                    DATE_FORMAT(?, '%Y%m'),
+                                    DATE_FORMAT(COALESCE(cl.due_date, cl.`date`), '%Y%m')
+                                ) + 1,
+                                4
+                            ),
+                            '_30', '_60', '_90', 'over90'
+                        )
+                    END AS bucket,
                     cl.id,
                     cl.`date` AS trans_date,
                     COALESCE(cl.due_date, cl.`date`) AS aging_date,
                     cl.debit AS amount
                 FROM consumer_ledgers cl
                 INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
-                WHERE UPPER(TRIM(cl.trans)) IN ('DM', 'BILLING', 'PENALTY')
+                WHERE UPPER(TRIM(cl.trans)) IN ('BILLING', 'BILL', 'PENALTY')
                   AND cl.debit > 0
+                  AND cl.`date` <= ?
+                  {$chargeWhere}
+
+                UNION ALL
+
+                SELECT
+                    cl.consumer_zone_id,
+                    cz.account_no,
+                    'DM' AS trans,
+                    'prev_year' AS bucket,
+                    cl.id,
+                    cl.`date` AS trans_date,
+                    cl.`date` AS aging_date,
+                    LEAST(cl.debit, {$prioYearsSql}) AS amount
+                FROM consumer_ledgers cl
+                INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
+                WHERE UPPER(TRIM(cl.trans)) = 'DM'
+                  AND cl.debit > 0
+                  AND LEAST(cl.debit, {$prioYearsSql}) > 0
+                  AND cl.`date` <= ?
+                  {$chargeWhere}
+
+                UNION ALL
+
+                SELECT
+                    cl.consumer_zone_id,
+                    cz.account_no,
+                    'DM' AS trans,
+                    CASE
+                        WHEN fd.first_id IS NOT NULL AND cl.id = fd.first_id THEN 'over90'
+                        ELSE ELT(
+                            LEAST(
+                                GREATEST(
+                                    PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(cl.`date`, '%Y%m')) + 1,
+                                    1
+                                ),
+                                5
+                            ),
+                            'current', '_30', '_60', '_90', 'over90'
+                        )
+                    END AS bucket,
+                    cl.id,
+                    cl.`date` AS trans_date,
+                    cl.`date` AS aging_date,
+                    GREATEST(0, cl.debit - LEAST(cl.debit, {$prioYearsSql})) AS amount
+                FROM consumer_ledgers cl
+                INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
+                LEFT JOIN first_dm fd ON fd.consumer_zone_id = cl.consumer_zone_id
+                WHERE UPPER(TRIM(cl.trans)) = 'DM'
+                  AND cl.debit > 0
+                  AND GREATEST(0, cl.debit - LEAST(cl.debit, {$prioYearsSql})) > 0
                   AND cl.`date` <= ?
                   {$chargeWhere}
             ),
             payments AS (
                 SELECT
                     cl.consumer_zone_id,
+                    cz.account_no,
                     SUM(
                         CASE
                             WHEN UPPER(TRIM(cl.trans)) = 'CM'
@@ -1583,7 +1676,7 @@ class ReportController extends Controller
                   )
                   AND cl.`date` <= ?
                   {$chargeWhere}
-                GROUP BY cl.consumer_zone_id
+                GROUP BY cl.consumer_zone_id, cz.account_no
             ),
             ordered AS (
                 SELECT
@@ -1592,7 +1685,15 @@ class ReportController extends Controller
                         SUM(c.amount) OVER (
                             PARTITION BY c.consumer_zone_id
                             ORDER BY
-                                CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
+                                CASE c.bucket
+                                    WHEN 'prev_year' THEN 0
+                                    WHEN 'over90' THEN 1
+                                    WHEN '_90' THEN 2
+                                    WHEN '_60' THEN 3
+                                    WHEN '_30' THEN 4
+                                    WHEN 'current' THEN 5
+                                    ELSE 6
+                                END,
                                 c.aging_date,
                                 c.trans_date,
                                 c.id
@@ -1603,7 +1704,15 @@ class ReportController extends Controller
                     SUM(c.amount) OVER (
                         PARTITION BY c.consumer_zone_id
                         ORDER BY
-                            CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
+                            CASE c.bucket
+                                WHEN 'prev_year' THEN 0
+                                WHEN 'over90' THEN 1
+                                WHEN '_90' THEN 2
+                                WHEN '_60' THEN 3
+                                WHEN '_30' THEN 4
+                                WHEN 'current' THEN 5
+                                ELSE 6
+                            END,
                             c.aging_date,
                             c.trans_date,
                             c.id
@@ -1615,8 +1724,7 @@ class ReportController extends Controller
                 SELECT
                     o.consumer_zone_id,
                     o.account_no,
-                    o.trans,
-                    o.aging_date,
+                    o.bucket,
                     GREATEST(
                         0,
                         GREATEST(0, o.run_total - COALESCE(p.total_payment, 0))
@@ -1624,70 +1732,95 @@ class ReportController extends Controller
                     ) AS unpaid_amount
                 FROM ordered o
                 LEFT JOIN payments p ON p.consumer_zone_id = o.consumer_zone_id
+            ),
+            aged AS (
+                SELECT
+                    consumer_zone_id,
+                    account_no,
+                    ROUND(SUM(CASE WHEN unpaid_amount > 0 AND bucket = 'current' THEN unpaid_amount ELSE 0 END), 2) AS current,
+                    ROUND(SUM(CASE WHEN unpaid_amount > 0 AND bucket = '_30' THEN unpaid_amount ELSE 0 END), 2) AS _30,
+                    ROUND(SUM(CASE WHEN unpaid_amount > 0 AND bucket = '_60' THEN unpaid_amount ELSE 0 END), 2) AS _60,
+                    ROUND(SUM(CASE WHEN unpaid_amount > 0 AND bucket = '_90' THEN unpaid_amount ELSE 0 END), 2) AS _90,
+                    ROUND(SUM(CASE WHEN unpaid_amount > 0 AND bucket = 'over90' THEN unpaid_amount ELSE 0 END), 2) AS _over90,
+                    ROUND(SUM(CASE WHEN unpaid_amount > 0 AND bucket = 'prev_year' THEN unpaid_amount ELSE 0 END), 2) AS prev_year,
+                    ROUND(SUM(unpaid_amount), 2) AS total_balance
+                FROM unpaid
+                GROUP BY consumer_zone_id, account_no
+            ),
+            charge_tot AS (
+                SELECT
+                    consumer_zone_id,
+                    MAX(account_no) AS account_no,
+                    SUM(amount) AS total_charges
+                FROM charges
+                GROUP BY consumer_zone_id
+            ),
+            all_ar AS (
+                SELECT
+                    COALESCE(ct.consumer_zone_id, p.consumer_zone_id) AS consumer_zone_id,
+                    COALESCE(ct.account_no, p.account_no) AS account_no,
+                    CASE WHEN ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) < 0
+                        THEN 0 ELSE COALESCE(a.current, 0) END AS current,
+                    CASE WHEN ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) < 0
+                        THEN 0 ELSE COALESCE(a._30, 0) END AS _30,
+                    CASE WHEN ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) < 0
+                        THEN 0 ELSE COALESCE(a._60, 0) END AS _60,
+                    CASE WHEN ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) < 0
+                        THEN 0 ELSE COALESCE(a._90, 0) END AS _90,
+                    CASE WHEN ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) < 0
+                        THEN 0 ELSE COALESCE(a._over90, 0) END AS _over90,
+                    CASE WHEN ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) < 0
+                        THEN 0 ELSE COALESCE(a.prev_year, 0) END AS prev_year,
+                    ROUND(COALESCE(ct.total_charges, 0) - COALESCE(p.total_payment, 0), 2) AS total_balance
+                FROM charge_tot ct
+                LEFT JOIN payments p ON p.consumer_zone_id = ct.consumer_zone_id
+                LEFT JOIN aged a ON a.consumer_zone_id = ct.consumer_zone_id
+
+                UNION ALL
+
+                SELECT
+                    p.consumer_zone_id,
+                    p.account_no,
+                    0 AS current,
+                    0 AS _30,
+                    0 AS _60,
+                    0 AS _90,
+                    0 AS _over90,
+                    0 AS prev_year,
+                    ROUND(0 - p.total_payment, 2) AS total_balance
+                FROM payments p
+                LEFT JOIN charge_tot ct ON ct.consumer_zone_id = p.consumer_zone_id
+                WHERE ct.consumer_zone_id IS NULL
             )
             SELECT
                 consumer_zone_id,
                 account_no,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) <= 0
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS current,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND DATEDIFF(?, aging_date) > 0
-                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 0
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _30,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 1
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _60,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND trans <> 'DM'
-                         AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 2
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _90,
-                ROUND(SUM(
-                    CASE
-                        WHEN unpaid_amount > 0
-                         AND (
-                             trans = 'DM'
-                            OR PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) >= 3
-                         )
-                        THEN unpaid_amount ELSE 0
-                    END
-                ), 2) AS _over90,
-                ROUND(SUM(unpaid_amount), 2) AS total_balance
-            FROM unpaid
-            GROUP BY consumer_zone_id, account_no
+                current,
+                _30,
+                _60,
+                _90,
+                _over90,
+                prev_year,
+                total_balance
+            FROM all_ar
         ";
 
         if ($selectedBalanceFilter === 'with_balance') {
-            $agingSql .= "    HAVING ROUND(SUM(unpaid_amount), 2) > 0\n";
+            $agingSql .= "    WHERE ABS(total_balance) > 0.009\n";
         }
 
         $agingSql .= "    ORDER BY account_no\n";
 
         $queryBindings = array_merge(
+            $agingBindings,
+            [$asOfDate, $asOfDate, $billingCutoffDate],
+            $agingBindings,
             [$billingCutoffDate],
             $agingBindings,
-            [$paymentCutoffDate],
+            [$asOfDate, $billingCutoffDate],
             $agingBindings,
-            [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
+            [$paymentCutoffDate],
+            $agingBindings
         );
 
         return collect(DB::select($agingSql, $queryBindings));
@@ -1923,7 +2056,7 @@ class ReportController extends Controller
             $bucket60 = (float) ($row->_60 ?? 0);
             $bucket90 = (float) ($row->_90 ?? 0);
             $bucketOver90 = (float) ($row->_over90 ?? 0);
-            $prevYear = 0.0;
+            $prevYear = (float) ($row->prev_year ?? 0);
             $total_balance = (float) ($row->total_balance ?? 0);
 
             $detailRecords[] = [
@@ -1947,7 +2080,7 @@ class ReportController extends Controller
 
         if ($selectedBalanceFilter === 'with_balance') {
             $detailRecords = array_values(array_filter($detailRecords, function ($r) {
-                return (float) ($r['balance'] ?? 0) > 0;
+                return abs((float) ($r['balance'] ?? 0)) > 0.009;
             }));
         }
 
@@ -2177,192 +2310,15 @@ class ReportController extends Controller
                     ->with('error', 'No AR aging records found for the selected criteria to export.');
             }
 
-            // FIFO aging SQL logic for export (same logic as on-screen report).
-            $agingFilters = [];
-            $agingBindings = [];
-
-            if ($status && $status !== '' && $status !== 'All Status') {
-                $statusMap = [
-                    'A - ACTIVE' => ['A', 'ACTIVE', 'Active', 'active'],
-                    'P - PENDING' => ['P', 'PENDING', 'Pending', 'pending'],
-                    'X - DISCONNECTED' => ['X', 'DISCONNECTED', 'Disconnected', 'disconnected', 'D'],
-                ];
-                if (isset($statusMap[$status])) {
-                    $placeholders = implode(',', array_fill(0, count($statusMap[$status]), '?'));
-                    $agingFilters[] = "cz.status_code IN ({$placeholders})";
-                    foreach ($statusMap[$status] as $statusValue) {
-                        $agingBindings[] = $statusValue;
-                    }
-                } else {
-                    $agingFilters[] = 'cz.status_code = ?';
-                    $agingBindings[] = $status;
-                }
-            }
-            if ($zone && $zone !== '' && $zone !== 'All Zones') {
-                $agingFilters[] = 'cz.zone_code = ?';
-                $agingBindings[] = $zone;
-            }
-            if ($category && $category !== '' && $category !== 'All Categories') {
-                $agingFilters[] = 'cz.category_code = ?';
-                $agingBindings[] = $category;
-            }
-
-            $chargeWhere = '';
-            if (!empty($agingFilters)) {
-                $chargeWhere = ' AND ' . implode(' AND ', $agingFilters);
-            }
-
-            $asOfDate = $asOf->format('Y-m-d');
-            $billingCutoffDate = $billingCutOff->format('Y-m-d');
-            $paymentCutoffDate = $paymentCutOff->format('Y-m-d');
-
-            $agingSql = "
-                WITH charges AS (
-                    SELECT
-                        cl.consumer_zone_id,
-                        cz.account_no,
-                        UPPER(TRIM(cl.trans)) AS trans,
-                        cl.id,
-                        cl.`date` AS trans_date,
-                        COALESCE(cl.due_date, cl.`date`) AS aging_date,
-                        cl.debit AS amount
-                    FROM consumer_ledgers cl
-                    INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
-                    WHERE UPPER(TRIM(cl.trans)) IN ('DM', 'BILLING', 'PENALTY')
-                      AND cl.debit > 0
-                      AND cl.`date` <= ?
-                      {$chargeWhere}
-                ),
-                payments AS (
-                    SELECT
-                        cl.consumer_zone_id,
-                        SUM(
-                            CASE
-                                WHEN UPPER(TRIM(cl.trans)) = 'CM'
-                                    THEN GREATEST(COALESCE(cl.credit, 0), COALESCE(-cl.debit, 0), 0)
-                                ELSE GREATEST(COALESCE(cl.credit, 0), 0)
-                            END
-                        ) AS total_payment
-                    FROM consumer_ledgers cl
-                    INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
-                    WHERE UPPER(TRIM(cl.trans)) IN ('PAYMENT', 'CM')
-                      AND (
-                          cl.credit > 0
-                          OR (
-                              UPPER(TRIM(cl.trans)) = 'CM'
-                              AND (COALESCE(cl.credit, 0) <> 0 OR COALESCE(cl.debit, 0) < 0)
-                          )
-                      )
-                      AND cl.`date` <= ?
-                      {$chargeWhere}
-                    GROUP BY cl.consumer_zone_id
-                ),
-                ordered AS (
-                    SELECT
-                        c.*,
-                        COALESCE(
-                            SUM(c.amount) OVER (
-                                PARTITION BY c.consumer_zone_id
-                                ORDER BY
-                                    CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
-                                    c.aging_date,
-                                    c.trans_date,
-                                    c.id
-                                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                            ),
-                            0
-                        ) AS prev_total,
-                        SUM(c.amount) OVER (
-                            PARTITION BY c.consumer_zone_id
-                            ORDER BY
-                                CASE WHEN c.trans = 'DM' THEN 0 ELSE 1 END,
-                                c.aging_date,
-                                c.trans_date,
-                                c.id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                        ) AS run_total
-                    FROM charges c
-                ),
-                unpaid AS (
-                    SELECT
-                        o.consumer_zone_id,
-                        o.account_no,
-                        o.trans,
-                        o.aging_date,
-                        GREATEST(
-                            0,
-                            GREATEST(0, o.run_total - COALESCE(p.total_payment, 0))
-                            - GREATEST(0, o.prev_total - COALESCE(p.total_payment, 0))
-                        ) AS unpaid_amount
-                    FROM ordered o
-                    LEFT JOIN payments p ON p.consumer_zone_id = o.consumer_zone_id
-                )
-                SELECT
-                    consumer_zone_id,
-                    account_no,
-                    ROUND(SUM(
-                        CASE
-                            WHEN unpaid_amount > 0
-                             AND trans <> 'DM'
-                        AND DATEDIFF(?, aging_date) <= 0
-                            THEN unpaid_amount ELSE 0
-                        END
-                    ), 2) AS current,
-                    ROUND(SUM(
-                        CASE
-                            WHEN unpaid_amount > 0
-                             AND trans <> 'DM'
-                             AND DATEDIFF(?, aging_date) > 0
-                             AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 0
-                            THEN unpaid_amount ELSE 0
-                        END
-                    ), 2) AS _30,
-                    ROUND(SUM(
-                        CASE
-                            WHEN unpaid_amount > 0
-                             AND trans <> 'DM'
-                             AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 1
-                            THEN unpaid_amount ELSE 0
-                        END
-                    ), 2) AS _60,
-                    ROUND(SUM(
-                        CASE
-                            WHEN unpaid_amount > 0
-                             AND trans <> 'DM'
-                             AND PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) = 2
-                            THEN unpaid_amount ELSE 0
-                        END
-                    ), 2) AS _90,
-                    ROUND(SUM(
-                        CASE
-                            WHEN unpaid_amount > 0
-                             AND (
-                                 trans = 'DM'
-                                 OR PERIOD_DIFF(DATE_FORMAT(?, '%Y%m'), DATE_FORMAT(aging_date, '%Y%m')) >= 3
-                             )
-                            THEN unpaid_amount ELSE 0
-                        END
-                    ), 2) AS _over90,
-                    ROUND(SUM(unpaid_amount), 2) AS total_balance
-                FROM unpaid
-                GROUP BY consumer_zone_id, account_no
-            ";
-
-            if ($selectedBalanceFilter === 'with_balance') {
-                $agingSql .= "    HAVING ROUND(SUM(unpaid_amount), 2) > 0\n";
-            }
-
-            $agingSql .= "    ORDER BY account_no\n";
-
-            $queryBindings = array_merge(
-                [$billingCutoffDate],
-                $agingBindings,
-                [$paymentCutoffDate],
-                $agingBindings,
-                [$asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate, $asOfDate]
+            $fifoRows = $this->runArAgingFifoAccountQuery(
+                $asOf,
+                $billingCutOff,
+                $paymentCutOff,
+                $zone ?? '',
+                $category ?? '',
+                $status ?? '',
+                $selectedBalanceFilter
             );
-
-            $fifoRows = collect(DB::select($agingSql, $queryBindings));
             $consumerMeta = collect();
             if ($fifoRows->isNotEmpty()) {
                 $consumerMeta = DB::table(mr_col('consumer_zone'))
@@ -2388,7 +2344,7 @@ class ReportController extends Controller
                 $bucket60 = (float) ($row->_60 ?? 0);
                 $bucket90 = (float) ($row->_90 ?? 0);
                 $bucketOver90 = (float) ($row->_over90 ?? 0);
-                $prevYear = 0.0;
+                $prevYear = (float) ($row->prev_year ?? 0);
                 $total_balance = (float) ($row->total_balance ?? 0);
 
                 $detailRecords[] = [
@@ -2406,7 +2362,7 @@ class ReportController extends Controller
 
             if ($selectedBalanceFilter === 'with_balance') {
                 $detailRecords = array_values(array_filter($detailRecords, function ($r) {
-                    return (float) ($r['BALANCE'] ?? 0) > 0;
+                    return abs((float) ($r['BALANCE'] ?? 0)) > 0.009;
                 }));
             }
 
