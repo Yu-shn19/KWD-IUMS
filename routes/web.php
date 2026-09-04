@@ -34,8 +34,8 @@ Route::get('/profile-pictures/{filename}', [UserController::class, 'serveProfile
     ->name('profile-pictures.file');
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
-Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
-Route::post('/register', [AuthController::class, 'register']);
+//Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
+//Route::post('/register', [AuthController::class, 'register']);
 
 // Protected routes (authentication and admin role required)
 Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
