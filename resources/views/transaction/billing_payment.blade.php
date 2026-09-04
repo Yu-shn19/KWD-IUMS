@@ -1723,6 +1723,10 @@
             const loadBillMonthDetails = async (accountNumber, billMonth, fromDate, toDate) => {
                 const useDateRange = !billMonth && fromDate && toDate;
                 if (!billMonth && !useDateRange) return;
+                // Paid OR lookup: keep saved breakdown so changing Date can be saved via Update Payment.
+                if (lockPaidOrBreakdown || useOrForBreakdownLookup) {
+                    return;
+                }
                 
                 isLoadingFromMonthSelector = true;
                 
@@ -1941,16 +1945,27 @@
                     viewLedgerBtn.disabled = false;
                 }
 
-                // Use current date (today) as the transaction date so it always reflects the updated date (e.g. 31/01/2026 today, 01/02/2026 tomorrow)
+                // Use saved payment date when loaded by OR #; otherwise today (new collection).
                 if (transactionDateField) {
-                    const now = new Date();
-                    const y = now.getFullYear();
-                    const m = String(now.getMonth() + 1).padStart(2, '0');
-                    const d = String(now.getDate()).padStart(2, '0');       
-                    transactionDateField.value = `${y}-${m}-${d}`;
+                    const paidAtRaw = String(payment?.paid_at || '').trim();
+                    const paidDate = useOrForBreakdownLookup && /^\d{4}-\d{2}-\d{2}/.test(paidAtRaw)
+                        ? paidAtRaw.slice(0, 10)
+                        : '';
+                    if (paidDate) {
+                        transactionDateField.value = paidDate;
+                    } else {
+                        const now = new Date();
+                        const y = now.getFullYear();
+                        const m = String(now.getMonth() + 1).padStart(2, '0');
+                        const d = String(now.getDate()).padStart(2, '0');
+                        transactionDateField.value = `${y}-${m}-${d}`;
+                    }
                     // Only set bill month from today's date if it wasn't already set from lookup
                     if (billMonthField && !billing.bill_month_input) {
-                        billMonthField.value = `${m}-${y}`;
+                        const [yPart, mPart] = String(transactionDateField.value).split('-');
+                        if (mPart && yPart) {
+                            billMonthField.value = `${mPart}-${yPart}`;
+                        }
                     }
                 }
 
@@ -2872,6 +2887,9 @@
 
             if (billMonthField) {
                 const handleBillMonthChange = () => {
+                    if (lockPaidOrBreakdown || useOrForBreakdownLookup) {
+                        return;
+                    }
                     debouncedLookup();
                     const accountNumber = accountNumberField?.value?.trim();
                     const billMonthKey = billMonthField.value?.trim();
@@ -2889,6 +2907,10 @@
             // e.g. 23/1/2026 is after due 20/1 → Current 0, Arrears CY 390, Arrears PY 0; before due → Current 195, Arrears PY 195.
             if (transactionDateField) {
                 transactionDateField.addEventListener('change', () => {
+                    // OR-loaded paid receipt: Date is only for Update Payment — do not reload/zero the breakdown.
+                    if (lockPaidOrBreakdown || useOrForBreakdownLookup) {
+                        return;
+                    }
                     const dateVal = transactionDateField.value;
                     const accountNumber = accountNumberField?.value?.trim();
                     if (!dateVal || !accountNumber) return;
@@ -3506,6 +3528,9 @@
             // Handle bill month selection (single month). Use transaction date when set so 12/16 cutoff applies: before due = Current 195, Penalty 0, Maintenance 20; on/after 12/16 = Current 0, Arrears CY 195, Penalty 19.5, Maintenance 20.
             const unpaidBillMonth = document.getElementById('unpaidBillMonth');
             const handleBillMonthSelection = () => {
+                if (lockPaidOrBreakdown || useOrForBreakdownLookup) {
+                    return;
+                }
                 const billMonth = unpaidBillMonth?.value;
                 const accountNumber = accountNumberField?.value?.trim();
                 // Always sync the top "Bill Month" field with the dropdown selection
