@@ -69,7 +69,8 @@
         padding-top: 0.5rem;
         padding-bottom: 0.5rem;
     }
-    .payment-grid input[type="number"] {
+    .payment-grid input[type="number"],
+    .payment-grid input.amount-input {
         text-align: right;
     }
     /* Hide number input spinner arrows */
@@ -449,27 +450,27 @@
                                                 <tbody>
                                                     <tr>
                                                         <td>Current Billing</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldCurrentBill" data-charge value="216.60"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldCurrentBill" data-charge value="216.60"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>Current MR</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldArrearsCurrent" data-charge value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldArrearsCurrent" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>Prio Years</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldArrearsPrevious" data-charge value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldArrearsPrevious" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>Current Arrears</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldPenalty" data-charge value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldPenalty" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>Current Penalty</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldMaintenance" data-charge value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldMaintenance" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>MR Arrears</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldMrArrears" data-charge value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldMrArrears" data-charge value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>
@@ -482,11 +483,11 @@
                                                                 </label>
                                                             </div>
                                                         </td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldSeniorDiscount" data-discount value="0.00" placeholder="0.00" readonly></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldSeniorDiscount" data-discount value="0.00" placeholder="0.00" readonly></td>
                                                     </tr>
                                                     <tr>
                                                         <td>Advances</td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="fieldAdvances" data-charge value="20.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldAdvances" data-charge value="20.00"></td>
                                                     </tr>
                                                     
                                                     <tr>
@@ -522,7 +523,7 @@
                                                                 </div>
                                                             </div>
                                                         </td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="sundryAmount1" data-charge data-sundry value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="sundryAmount1" data-charge data-sundry value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td style="padding: 0.5rem;">
@@ -549,7 +550,7 @@
                                                                 </div>
                                                             </div>
                                                         </td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="sundryAmount2" data-charge data-sundry value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="sundryAmount2" data-charge data-sundry value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td style="padding: 0.5rem;">
@@ -576,7 +577,7 @@
                                                                 </div>
                                                             </div>
                                                         </td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="sundryAmount3" data-charge data-sundry value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="sundryAmount3" data-charge data-sundry value="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td style="padding: 0.5rem;">
@@ -603,7 +604,7 @@
                                                                 </div>
                                                             </div>
                                                         </td>
-                                                        <td><input type="number" step="0.01" min="0" class="form-control form-control-sm text-right" id="sundryAmount4" data-charge data-sundry value="0.00"></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="sundryAmount4" data-charge data-sundry value="0.00"></td>
                                                     </tr>
                                                 </tbody>
                                                 <tfoot>
@@ -623,11 +624,11 @@
                                             <div class="row align-items-center">
                                                 <div class="col-sm-4">
                                                     <label>Cash Tendered</label>
-                                                    <input type="number" step="0.01" min="0" class="form-control form-control-lg text-right bg-white text-dark" id="cashTendered" placeholder="Enter amount">
+                                                    <input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-lg text-right bg-white text-dark amount-input" id="cashTendered" placeholder="Enter amount">
                                                 </div>
                                                 <div class="col-sm-4 mt-3 mt-sm-0">
                                                     <label>Change</label>
-                                                    <input type="number" step="0.01" min="0" class="form-control form-control-lg text-right bg-white text-dark" id="cashChange" placeholder="0.00" readonly>
+                                                    <input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-lg text-right bg-white text-dark amount-input" id="cashChange" placeholder="0.00" readonly>
                                                 </div>
                                                 <div class="col-sm-4 mt-3 mt-sm-0 text-sm-right">
                                                     <label class="d-block">Total Payment</label>
@@ -1226,8 +1227,70 @@
                 if (input === null || input === undefined || input === '') {
                     return 0;
                 }
-                const value = typeof input === 'number' ? input : parseFloat(input);
+                if (typeof input === 'number') {
+                    return Number.isFinite(input) ? input : 0;
+                }
+                const cleaned = String(input).replace(/,/g, '').trim();
+                if (cleaned === '') {
+                    return 0;
+                }
+                const value = parseFloat(cleaned);
                 return Number.isFinite(value) ? value : 0;
+            };
+
+            // Live typing: 12345 → 12,345 (commas once 4+ integer digits)
+            const formatAmountWhileTyping = (raw) => {
+                let str = String(raw ?? '').replace(/[^\d.]/g, '');
+                const firstDot = str.indexOf('.');
+                if (firstDot !== -1) {
+                    str = str.slice(0, firstDot + 1) + str.slice(firstDot + 1).replace(/\./g, '');
+                }
+                let [intPart, decPart] = str.split('.');
+                if (intPart === undefined) {
+                    intPart = '';
+                }
+                intPart = intPart.replace(/^0+(?=\d)/, '');
+                const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                if (decPart !== undefined) {
+                    return `${withCommas}.${decPart.slice(0, 2)}`;
+                }
+                return withCommas;
+            };
+
+            const formatAmountFixed = (value) => {
+                const fixed = parseNumeric(value).toFixed(2);
+                const [intPart, decPart] = fixed.split('.');
+                return `${intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${decPart}`;
+            };
+
+            const applyLiveAmountFormat = (input) => {
+                if (!input) {
+                    return;
+                }
+                const old = String(input.value ?? '');
+                const sel = typeof input.selectionStart === 'number' ? input.selectionStart : old.length;
+                const digitsBefore = old.slice(0, sel).replace(/[^\d.]/g, '').length;
+                const formatted = formatAmountWhileTyping(old);
+                if (formatted === old) {
+                    return;
+                }
+                input.value = formatted;
+                let pos = formatted.length;
+                let count = 0;
+                for (let i = 0; i < formatted.length; i++) {
+                    if (/[\d.]/.test(formatted[i])) {
+                        count += 1;
+                    }
+                    if (count >= digitsBefore) {
+                        pos = i + 1;
+                        break;
+                    }
+                }
+                try {
+                    input.setSelectionRange(pos, pos);
+                } catch (_) {
+                    // ignore (some browsers when not focused)
+                }
             };
 
             const collectSundriesToSave = () => {
@@ -1373,8 +1436,7 @@
                 if (!field) {
                     return;
                 }
-                const numeric = parseNumeric(value);
-                field.value = numeric.toFixed(2);
+                field.value = formatAmountFixed(value);
             };
 
             // Labels on screen: Current Billing, Current MR, Prio Years, Current Arrears, Current Penalty, MR Arrears
@@ -1549,7 +1611,7 @@
                 const tendered = parseNumeric(cashTenderedField.value) || 0;
                 const change = Math.max(tendered - overallTotal, 0);
                 if (cashChangeField) {
-                    cashChangeField.value = change > 0 ? change.toFixed(2) : '0.00';
+                    cashChangeField.value = formatAmountFixed(change);
                 }
             };
 
@@ -2184,12 +2246,12 @@
 
                 // Populate cash tendered and change if payment was already made
                 if (payment.tendered && payment.tendered > 0) {
-                    cashTenderedField.value = payment.tendered.toFixed(2);
+                    cashTenderedField.value = formatAmountFixed(payment.tendered);
                 }
                 if (payment.change !== undefined && payment.change !== null) {
-                    cashChangeField.value = payment.change.toFixed(2);
+                    cashChangeField.value = formatAmountFixed(payment.change);
                     } else {
-                        cashChangeField.value = '0.00';
+                        cashChangeField.value = formatAmountFixed(0);
                     }
                     
                     if (formStatusText) {
@@ -2559,10 +2621,16 @@
                 fieldsToClear.forEach(fieldId => {
                     const field = document.getElementById(fieldId);
                     if (field) {
-                        if (field.type === 'number') {
-                            setNumberFieldValue(field, 0);
-                        } else if (field.type === 'checkbox') {
+                        if (field.type === 'checkbox') {
                             field.checked = false;
+                        } else if (
+                            field.classList.contains('amount-input')
+                            || field.type === 'number'
+                            || field.hasAttribute('data-charge')
+                            || field.hasAttribute('data-discount')
+                        ) {
+                            // Amount fields are type=text (for comma formatting) — keep 0.00, not blank.
+                            setNumberFieldValue(field, 0);
                         } else {
                             field.value = '';
                         }
@@ -2628,7 +2696,7 @@
                     cashTenderedField.value = '';
                 }
                 if (cashChangeField) {
-                    cashChangeField.value = '';
+                    cashChangeField.value = formatAmountFixed(0);
                 }
 
                 // Clear lookup status and payment status badge
@@ -2644,9 +2712,13 @@
 
             // Format charge inputs:
             // - On focus: show/select 0 so user can type immediately.
-            // - On blur: always format to 2 decimals (e.g. 40 -> 40.00).
+            // - On input: thousand separators while typing (12345 → 12,345).
+            // - On blur: always format to 2 decimals (e.g. 1,000 → 1,000.00).
             chargeInputs.forEach(input => {
-                input.addEventListener('input', updateTotals);
+                input.addEventListener('input', () => {
+                    applyLiveAmountFormat(input);
+                    updateTotals();
+                });
 
                 input.addEventListener('focus', () => {
                     const raw = (input.value ?? '').toString().trim();
@@ -2667,7 +2739,10 @@
             });
             discountInputs.forEach(input => input.addEventListener('input', updateTotals));
             if (cashTenderedField) {
-                cashTenderedField.addEventListener('input', updateTotals);
+                cashTenderedField.addEventListener('input', () => {
+                    applyLiveAmountFormat(cashTenderedField);
+                    updateTotals();
+                });
                 cashTenderedField.addEventListener('focus', () => {
                     const raw = (cashTenderedField.value ?? '').toString().trim();
                     const numeric = parseNumeric(raw);

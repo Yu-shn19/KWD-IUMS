@@ -492,7 +492,7 @@
                     </h5>
                     <button type="button" class="btn-close btn-close-white" data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <form id="editConsumerForm">
+                <form id="editConsumerForm" novalidate>
                     @csrf
                     <input type="hidden" id="edit_consumer_id" name="consumer_id">
                     <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
@@ -642,7 +642,7 @@
                                                 <p class="form-control-plaintext border rounded px-3 py-2 mb-0 bg-light small" id="edit_bill_disc_last_updated_display">—</p>
                                             </div>
                                             <div class="col-md-6 mb-3" id="edit_bill_disc_updated_at_wrap">
-                                                <label for="edit_bill_disc_updated_at" class="form-label">Date of bill discount change</label>
+                                                <label for="edit_bill_disc_updated_at" class="form-label">Date of bill discount change <span class="text-muted fw-normal">(optional)</span></label>
                                                 <input type="date" class="form-control" id="edit_bill_disc_updated_at" name="bill_disc_updated_at" autocomplete="off">
                                                 <div class="invalid-feedback"></div>
                                             </div>
