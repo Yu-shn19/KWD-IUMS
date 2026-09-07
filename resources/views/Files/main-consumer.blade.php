@@ -635,14 +635,14 @@
                                             <div class="invalid-feedback"></div>
                                         </div>
                                     </div>
-                                    <div class="col-12">
+                                            <div class="col-12">
                                         <div class="row align-items-end">
                                             <div class="col-md-6 mb-3">
                                                 <label class="form-label small text-muted mb-1">Bill discount last updated</label>
                                                 <p class="form-control-plaintext border rounded px-3 py-2 mb-0 bg-light small" id="edit_bill_disc_last_updated_display">—</p>
                                             </div>
-                                            <div class="col-md-6 mb-3" id="edit_bill_disc_updated_at_wrap" style="display: none;">
-                                                <label for="edit_bill_disc_updated_at" class="form-label">Date of bill discount change <span class="text-danger">*</span></label>
+                                            <div class="col-md-6 mb-3" id="edit_bill_disc_updated_at_wrap">
+                                                <label for="edit_bill_disc_updated_at" class="form-label">Date of bill discount change</label>
                                                 <input type="date" class="form-control" id="edit_bill_disc_updated_at" name="bill_disc_updated_at" autocomplete="off">
                                                 <div class="invalid-feedback"></div>
                                             </div>
@@ -1077,10 +1077,14 @@
             const accountNo = ($('#' + prefix + 'account_no').val() || '').trim();
             const categoryToken = getCategoryToken('#' + prefix + 'category');
             const zoneShort = getZoneShort('#' + prefix + 'zone');
+            // SC DISCOUNT → ..._(#acct_CAT)_SC_ZONE ; otherwise → ..._(#acct_CAT)__ZONE
+            const isSc = prefix === 'edit_'
+                && normBillDiscPercentVal($('#edit_bill_disc_percent').val()) === 'SC DISCOUNT';
+            const zoneSep = isSc ? '_SC_' : '__';
 
             if (lastName && firstName && accountNo && categoryToken && zoneShort) {
                 $('#' + prefix + 'account_name').val(
-                    `${lastName}_${firstName}_(#${accountNo}_${categoryToken})__${zoneShort}`
+                    `${lastName}_${firstName}_(#${accountNo}_${categoryToken})${zoneSep}${zoneShort}`
                 );
             } else {
                 $('#' + prefix + 'account_name').val('');
@@ -1247,17 +1251,10 @@
         }
 
         function refreshEditBillDiscDateUi() {
-            const showDate = isEditScDiscountSelected() && isEditBillDiscDirty();
-            const $wrap = $('#edit_bill_disc_updated_at_wrap');
             const $input = $('#edit_bill_disc_updated_at');
-            if (showDate) {
-                $wrap.show();
-                $input.prop('required', true);
-            } else {
-                $wrap.hide();
-                $input.prop('required', false).val('').removeClass('is-invalid');
-                $input.siblings('.invalid-feedback').text('');
-            }
+            // Field stays visible; never required.
+            $input.prop('required', false).removeClass('is-invalid');
+            $input.siblings('.invalid-feedback').text('');
         }
 
         function applyBillDiscSelectChange(selectEl) {
@@ -1271,6 +1268,7 @@
                     $('#edit_bill_disc_amount').val('');
                 }
                 refreshEditBillDiscDateUi();
+                generateAccountName('edit_');
             }
         }
 
@@ -2134,11 +2132,6 @@
                 $('#edit_status').val(currentConsumer.status_code || 'A');
                 $('#edit_last_name').val(currentConsumer.last_name || '');
                 $('#edit_first_name').val(currentConsumer.first_name || '');
-                if (currentConsumer.last_name && currentConsumer.first_name) {
-                    generateAccountName('edit_');
-                } else {
-                    $('#edit_account_name').val(currentConsumer.account_name || '');
-                }
                 $('#edit_gender').val(currentConsumer.gender || '');
                 
                 $('#edit_contact_number').val('');
@@ -2157,6 +2150,12 @@
                     const n = parseFloat(a);
                     return Number.isFinite(n) ? n.toFixed(1) : '';
                 })());
+                // Rebuild account name after bill disc is set so _SC_ is applied when needed.
+                if (currentConsumer.last_name && currentConsumer.first_name) {
+                    generateAccountName('edit_');
+                } else {
+                    $('#edit_account_name').val(currentConsumer.account_name || '');
+                }
                 $('#edit_osca_id_no').val(currentConsumer.osca_id_no || currentConsumer.osca_id || '');
                 $('#edit_remark').val(currentConsumer.remark || currentConsumer.remarks || '');
 
@@ -2196,21 +2195,6 @@
             $('.is-invalid').removeClass('is-invalid');
             $('.invalid-feedback').text('');
             
-            if (isEditScDiscountSelected() && isEditBillDiscDirty()) {
-                const bdu = $('#edit_bill_disc_updated_at').val();
-                if (!bdu) {
-                    $('#edit_bill_disc_updated_at').addClass('is-invalid');
-                    $('#edit_bill_disc_updated_at').siblings('.invalid-feedback').text('Please choose the date when the bill discount was changed.');
-                    Swal.fire({
-                        icon: 'warning',
-                        title: 'Date required',
-                        text: 'Enter the date of the bill discount change.',
-                        confirmButtonColor: '#ffc107'
-                    });
-                    return;
-                }
-            }
-
             // Disable submit button
             $('#updateBtn').prop('disabled', true).html('<i class="fas fa-spinner fa-spin me-1"></i>Updating...');
 
@@ -2248,8 +2232,11 @@
             if (sequenceRaw !== '' && sequenceRaw != null) {
                 updateData.sequence = sequenceRaw;
             }
-            if (isEditScDiscountSelected() && isEditBillDiscDirty()) {
-                updateData.bill_disc_updated_at = $('#edit_bill_disc_updated_at').val();
+            if (isEditScDiscountSelected()) {
+                const bdu = $('#edit_bill_disc_updated_at').val();
+                if (bdu) {
+                    updateData.bill_disc_updated_at = bdu;
+                }
             }
             
             console.log('Update data prepared:', updateData);

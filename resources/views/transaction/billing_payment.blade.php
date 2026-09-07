@@ -1020,13 +1020,17 @@
                 const isSc = normalizedPercent === 'SC DISCOUNT'
                     || (Number.isFinite(percentNum) && Math.abs(percentNum - 5) < 0.001);
                 const oscaId = String(account?.osca_id_no ?? account?.osca_id ?? '').trim();
-                if (!isSc || !oscaId) {
+                if (!isSc) {
                     scDiscountLedgerText.textContent = '';
                     scDiscountLedgerText.classList.add('d-none');
                     return;
                 }
                 const dateDisplay = formatLongDate(account?.bill_disc_updated_at);
-                scDiscountLedgerText.textContent = dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
+                if (oscaId) {
+                    scDiscountLedgerText.textContent = dateDisplay ? `${oscaId} - ${dateDisplay}` : oscaId;
+                } else {
+                    scDiscountLedgerText.textContent = dateDisplay ? `SC DISCOUNT - ${dateDisplay}` : 'SC DISCOUNT';
+                }
                 scDiscountLedgerText.classList.remove('d-none');
             };
 
@@ -1063,8 +1067,7 @@
                 const percentNum = parseFloat(rawPercent);
                 const isSc = normalizedPercent === 'SC DISCOUNT'
                     || (Number.isFinite(percentNum) && Math.abs(percentNum - 5) < 0.001);
-                const oscaId = String(account?.osca_id_no ?? account?.osca_id ?? '').trim();
-                return !!(isSc && oscaId);
+                return !!isSc;
             };
 
             if (openBamSearchModalBtn) {

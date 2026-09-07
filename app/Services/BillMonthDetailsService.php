@@ -1441,7 +1441,8 @@ class BillMonthDetailsService
                 
                 // Senior discount based on ledger/billing volume.
                 // Rule:
-                // - Applies automatically only when consumer has SC flag + valid OSCA ID.
+                // - Applies automatically when consumer has SC DISCOUNT on bill_disc_percent.
+                // - OSCA ID is optional and not required for eligibility.
                 // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition),
                 //   plus fallback paid detection from PAYMENT rows in same cycle.
                 // - Per unpaid month: 5% of WaterBillingService::calculate(min(volume, 30), category)
@@ -1452,8 +1453,8 @@ class BillMonthDetailsService
                     if (is_numeric($billDiscPercentRaw) && abs(((float) $billDiscPercentRaw) - 5.0) < 0.001) {
                         $billDiscPercentNorm = 'SC DISCOUNT';
                     }
-                    $oscaId = trim((string) ($s->consumer->osca_id_no ?? ''));
-                    $isSeniorConsumer = $billDiscPercentNorm === 'SC DISCOUNT' && $oscaId !== '';
+                    // SC eligibility is driven by bill_disc_percent only; OSCA ID is optional.
+                    $isSeniorConsumer = $billDiscPercentNorm === 'SC DISCOUNT';
         
                     if ($isSeniorConsumer) {
                         try {
