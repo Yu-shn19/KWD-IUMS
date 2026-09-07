@@ -284,6 +284,10 @@ Route::middleware(['auth', 'role:admin', 'log.activity'])->group(function () {
     Route::get('/monthly-billing-report', [ReportController::class, 'monthlyBillingReport'])->name('monthly-billing-report');
     Route::get('/monthly-billing-report/export', [ReportController::class, 'exportMonthlyBillingReport'])->name('monthly-billing-report.export');
 
+    // statement-of-account page routes
+    Route::get('/statement-of-account', [ReportController::class, 'statementOfAccount'])->name('statement-of-account');
+    Route::get('/statement-of-account/export', [ReportController::class, 'exportStatementOfAccount'])->name('statement-of-account.export');
+
     // ar-aging-summary page routes
     Route::get('/ar-aging-summary', [ReportController::class, 'arAgingSummary'])->name('ar-aging-summary');
     Route::get('/ar-aging-summary/export', [ReportController::class, 'exportArAgingSummary'])->name('ar-aging-summary.export'); 

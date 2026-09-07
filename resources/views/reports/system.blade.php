@@ -17,6 +17,12 @@
             'icon' => 'file-invoice-dollar',
         ],
         [
+            'title' => 'Statement of Account',
+            'description' => 'Invoice-style SOA: successful readings by month × charge per consumer (default ₱10.00).',
+            'route' => 'statement-of-account',
+            'icon' => 'file-alt',
+        ],
+        [
             'title' => 'Collection Report',
             'description' => 'Cashiering summary across payment channels, tellers, and posting dates.',
             'route' => 'collection-report',

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Exports\ConsumerLedgerMultiSheetExport;
 use App\Services\ConsumerLedgerCardBuilder;
+use App\Services\StatementOfAccountReportService;
 use App\Models\ConsumerZone;
 use App\Models\DisconnectionOrder;
 use App\Models\MeterReadingSchedule;
@@ -16,6 +17,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\View\View;
 
 if (!function_exists(__NAMESPACE__ . '\mr_col')) {
     /**
@@ -3462,5 +3464,178 @@ class ReportController extends Controller
         if (isset($statusMap[$status])) {
             $query->whereIn(mr_col('status_code'), $statusMap[$status]);
         }
+    }
+
+    /**
+     * Statement of Account: successful readings × charge per consumer (From–To invoice).
+     */
+    public function statementOfAccount(Request $request, StatementOfAccountReportService $service): View
+    {
+        return view('reports.system-report.statement-of-account', $service->buildReportData($request));
+    }
+
+    /**
+     * Export Statement of Account (invoice lines + optional detail) to Excel.
+     */
+    public function exportStatementOfAccount(Request $request, StatementOfAccountReportService $service)
+    {
+        $data = $service->buildReportData($request);
+        $invoiceRows = $data['invoiceRows'] ?? $data['monthlyRows'];
+        $detailRows = $data['detailRows'];
+        $charge = (float) $data['chargePerConsumer'];
+        $totals = $data['totals'];
+        $description = (string) ($data['description'] ?? StatementOfAccountReportService::DEFAULT_DESCRIPTION);
+
+        $exportRows = collect();
+        $exportRows->push([
+            'Section' => 'INVOICE',
+            'Date' => '',
+            'Description' => '',
+            'Zone' => '',
+            'Account #' => '',
+            'Account Name' => '',
+            'Qty' => '',
+            'Rate (₱)' => '',
+            'Amount (₱)' => '',
+            'Reading Date' => '',
+            'Status' => '',
+        ]);
+
+        foreach ($invoiceRows as $row) {
+            $exportRows->push([
+                'Section' => 'Line',
+                'Date' => $row->date_label ?? $row->reading_month_label,
+                'Description' => $row->description ?? $description,
+                'Zone' => $data['selectedZone'] ? 'Zone ' . $data['selectedZone'] : 'All Zones',
+                'Account #' => '',
+                'Account Name' => '',
+                'Qty' => number_format((float) ($row->quantity ?? $row->successful_consumers), 2, '.', ''),
+                'Rate (₱)' => number_format($row->rate, 2, '.', ''),
+                'Amount (₱)' => number_format($row->amount, 2, '.', ''),
+                'Reading Date' => '',
+                'Status' => '',
+            ]);
+        }
+
+        $exportRows->push([
+            'Section' => 'SUBTOTAL',
+            'Date' => '',
+            'Description' => '',
+            'Zone' => '',
+            'Account #' => '',
+            'Account Name' => '',
+            'Qty' => $totals['consumers'],
+            'Rate (₱)' => number_format($charge, 2, '.', ''),
+            'Amount (₱)' => number_format($totals['subtotal'] ?? $totals['amount'] ?? 0, 2, '.', ''),
+            'Reading Date' => '',
+            'Status' => '',
+        ]);
+
+        $exportRows->push([
+            'Section' => 'INTEREST',
+            'Date' => '',
+            'Description' => '',
+            'Zone' => '',
+            'Account #' => '',
+            'Account Name' => '',
+            'Qty' => '',
+            'Rate (₱)' => '',
+            'Amount (₱)' => number_format($totals['interest'] ?? 0, 2, '.', ''),
+            'Reading Date' => '',
+            'Status' => '',
+        ]);
+
+        $exportRows->push([
+            'Section' => 'TOTAL DUE',
+            'Date' => '',
+            'Description' => '',
+            'Zone' => '',
+            'Account #' => '',
+            'Account Name' => '',
+            'Qty' => '',
+            'Rate (₱)' => '',
+            'Amount (₱)' => number_format($totals['total_due'] ?? ($totals['subtotal'] ?? 0), 2, '.', ''),
+            'Reading Date' => '',
+            'Status' => '',
+        ]);
+
+        if ($detailRows->isNotEmpty()) {
+            $exportRows->push([
+                'Section' => 'CONSUMER DETAIL',
+                'Date' => '',
+                'Description' => '',
+                'Zone' => '',
+                'Account #' => '',
+                'Account Name' => '',
+                'Qty' => '',
+                'Rate (₱)' => '',
+                'Amount (₱)' => '',
+                'Reading Date' => '',
+                'Status' => '',
+            ]);
+
+            foreach ($detailRows as $row) {
+                $exportRows->push([
+                    'Section' => 'Detail',
+                    'Date' => optional($row->bill_month)->format('F Y') ?? '',
+                    'Description' => $description,
+                    'Zone' => $row->zone ?? '',
+                    'Account #' => $row->account_number ?? '',
+                    'Account Name' => $row->account_name ?? '',
+                    'Qty' => '1.00',
+                    'Rate (₱)' => number_format($row->charge, 2, '.', ''),
+                    'Amount (₱)' => number_format($row->charge, 2, '.', ''),
+                    'Reading Date' => optional($row->reading_date)->format('Y-m-d') ?? '',
+                    'Status' => $row->status ?? '',
+                ]);
+            }
+        }
+
+        if (! class_exists(\Maatwebsite\Excel\Facades\Excel::class)) {
+            return redirect()
+                ->route('statement-of-account', $request->query())
+                ->with('error', 'Excel export is not available. Laravel Excel package is missing.');
+        }
+
+        $filename = 'statement-of-account-' . ($data['fromMonthInput'] ?? '') . '-to-' . ($data['toMonthInput'] ?? '') . '.xlsx';
+
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new class($exportRows) implements \Maatwebsite\Excel\Concerns\FromCollection, \Maatwebsite\Excel\Concerns\WithHeadings, \Maatwebsite\Excel\Concerns\WithTitle {
+                protected $data;
+
+                public function __construct($data)
+                {
+                    $this->data = collect($data);
+                }
+
+                public function collection()
+                {
+                    return $this->data;
+                }
+
+                public function headings(): array
+                {
+                    return [
+                        'Section',
+                        'Date',
+                        'Description',
+                        'Zone',
+                        'Account #',
+                        'Account Name',
+                        'Qty',
+                        'Rate (₱)',
+                        'Amount (₱)',
+                        'Reading Date',
+                        'Status',
+                    ];
+                }
+
+                public function title(): string
+                {
+                    return 'Statement of Account';
+                }
+            },
+            $filename
+        );
     }
 }
