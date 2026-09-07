@@ -789,9 +789,8 @@
                 const percentNum = parseFloat(rawPercent);
                 const isSc = normalizedPercent === 'SC DISCOUNT'
                     || (Number.isFinite(percentNum) && Math.abs(percentNum - 5) < 0.001);
-                const oscaId = String(consumer?.osca_id_no ?? consumer?.osca_id ?? '').trim();
 
-                return !!(isSc && oscaId);
+                return !!isSc;
             }
 
             function buildOscaDisplay(consumer) {

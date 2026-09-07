@@ -659,9 +659,9 @@
                             <div style="margin-bottom: 38px;">
                                 <p style="margin: 0 0 20px 0; font-size:13px; font-weight:bold; color:#222;">PREPARED BY:</p>
                                 <div style="border-bottom:1.5px solid #222; width:100%; margin-bottom: 10px;"></div>
-                                <p style="margin: 0; font-size: 15px; font-weight: bold; color: #222; text-align: left;">MARLO B. PORRAS</p>
+                                <p style="margin: 0; font-size: 15px; font-weight: bold; color: #222; text-align: left;">MERRY ROSE A. BACULNA</p>
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
-                                    <span style="margin: 0; font-size: 13px; color: #353535;">Billing and Collection Clerk</span>
+                                    <span style="margin: 0; font-size: 13px; color: #353535;">Cashiering Assistantk</span>
                                     <span style="margin: 0; font-size: 13px; color: #222;">Date: <span id="currentPrintDate"></span></span>
                                     <script>
                                         document.addEventListener('DOMContentLoaded', function() {
@@ -677,7 +677,7 @@
                             <div style="margin-top: 48px;">
                                 <p style="margin: 0 0 20px 0; font-size:13px; font-weight:bold; color:#222;">Verified by:</p>
                                     <div style="display: flex; flex-direction: column; align-items: center;">
-                                        <p style="margin:0 0 10px 0; font-size: 15px; font-weight: bold; color: #222; text-align: center;">MERAFLOR C. DOLORITOS</p>
+                                        <p style="margin:0 0 10px 0; font-size: 15px; font-weight: bold; color: #222; text-align: center;">AINA CLAIRE C. ALPOS</p>
                                         <p style="margin: 0; font-size: 13px; color: #353535; text-align: center;">Accounting Processor</p>
                                     </div>
                             </div>

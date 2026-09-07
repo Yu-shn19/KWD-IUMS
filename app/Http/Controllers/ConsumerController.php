@@ -675,7 +675,6 @@ class ConsumerController extends Controller
       public function update(Request $request, ConsumerZone $consumer)
     {
         $this->normalizeConsumerRequestInput($request);
-        $billDiscChanged = $this->consumerBillDiscChangedFromRequest($request, $consumer);
 
         $rules = [
             'install_date' => 'nullable|date',
@@ -702,10 +701,6 @@ class ConsumerController extends Controller
             'remark' => 'nullable|string|max:2000',
             'bill_disc_updated_at' => 'nullable|date',
         ];
-
-        if ($billDiscChanged && $this->isScDiscountPercent($request->input('bill_disc_percent'))) {
-            $rules['bill_disc_updated_at'] = 'required|date';
-        }
 
         $validator = Validator::make($request->all(), $rules);
 
@@ -865,59 +860,6 @@ class ConsumerController extends Controller
                 'message' => 'Failed to delete consumer: ' . $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * Normalize bill_disc_percent for comparison (null = None, SC DISCOUNT = senior discount).
-     */
-    private function normalizeBillDiscPercent($value): ?string
-    {
-        if ($value === '' || $value === null) {
-            return null;
-        }
-        $s = trim((string) $value);
-        if ($s === '') {
-            return null;
-        }
-        // Backward compatibility: treat numeric 5/5.00 as SC DISCOUNT.
-        if (is_numeric($s) && abs(((float) $s) - 5.0) < 0.001) {
-            return 'SC DISCOUNT';
-        }
-        if (strtoupper($s) === 'SC DISCOUNT') {
-            return 'SC DISCOUNT';
-        }
-
-        // Legacy non-SC values (e.g. "0", "10") match UI "None".
-        return null;
-    }
-
-    private function isScDiscountPercent($value): bool
-    {
-        return $this->normalizeBillDiscPercent($value) === 'SC DISCOUNT';
-    }
-
-    /**
-     * True when bill discount fields in request differ from stored values.
-     */
-    private function consumerBillDiscChangedFromRequest(Request $request, ConsumerZone $consumer): bool
-    {
-        $normAmount = function ($v) {
-            if ($v === '' || $v === null) {
-                return null;
-            }
-            if (! is_numeric($v)) {
-                return null;
-            }
-
-            return round((float) $v, 4);
-        };
-
-        $percentChanged = $this->normalizeBillDiscPercent($request->input('bill_disc_percent'))
-            !== $this->normalizeBillDiscPercent($consumer->bill_disc_percent);
-        $amountChanged = $request->has('bill_disc_amount')
-            && $normAmount($request->input('bill_disc_amount')) !== $normAmount($consumer->bill_disc_amount);
-
-        return $percentChanged || $amountChanged;
     }
 
     /**
