@@ -3466,6 +3466,7 @@ class BillingProcessController extends Controller
             'is_update' => 'nullable|boolean',
             'current_billing' => 'nullable|numeric|min:0',
             'senior_citizen_discount' => 'nullable|numeric|min:0',
+            'tax_discount' => 'nullable|numeric|min:0',
             'current_penalty' => 'nullable|numeric|min:0',
             'mr_arrears' => 'nullable|numeric|min:0',
             'current_arrears' => 'nullable|numeric|min:0',
@@ -4880,7 +4881,7 @@ class BillingProcessController extends Controller
                 'or_number' => 'required|string'
             ]);
 
-            $orNumber = preg_replace('/-SC$/i', '', trim($validated['or_number']));
+            $orNumber = preg_replace('/-(?:SC|tx)$/i', '', trim($validated['or_number']));
 
             // Find payment by OR number
             $payment = ConsumerPayment::query()->where(mr_col('or_number'), $orNumber)->first();
@@ -4894,7 +4895,8 @@ class BillingProcessController extends Controller
                     ->where(mr_col('trans'), 'PAYMENT')
                     ->where(function ($q) use ($orNumber) {
                         $q->where(mr_col('reference'), $orNumber)
-                            ->orWhere(mr_col('reference'), $orNumber . '-SC');
+                            ->orWhere(mr_col('reference'), $orNumber . '-SC')
+                            ->orWhere(mr_col('reference'), $orNumber . '-tx');
                     })
                     ->value(mr_col('consumer_zone_id')) ?? 0);
 

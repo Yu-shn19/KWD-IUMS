@@ -657,7 +657,10 @@ class DownloadedReadingPaymentService
             ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerId)
                 ->where(mr_col('trans'), 'PAYMENT')
                 ->where(mr_col('downloaded_reading_id'), $downloaded->id)
-                ->where(mr_col('reference'), 'like', '%-SC')
+                ->where(function ($q) {
+                    $q->where(mr_col('reference'), 'like', '%-SC')
+                        ->orWhere(mr_col('reference'), 'like', '%-tx');
+                })
                 ->whereNull(mr_col('consumer_payment_id'))
                 ->delete();
         }
@@ -685,21 +688,55 @@ class DownloadedReadingPaymentService
         $this->upsertMainPaymentLedgerRow($ledgerPayload, $consumerPayment, $readingId, $isUpdate);
 
         $scDiscount = round($validated['senior_citizen_discount'] ?? 0, 2);
+        $taxDiscount = $this->resolveTaxDiscount($validated);
+        $runningBalance = $newBalance;
+
         if ($scDiscount <= 0) {
             $this->deleteSeniorCitizenLedgerRows($consumerId, $orNumber);
+        } else {
+            $this->upsertSeniorCitizenLedgerRow(
+                $consumerId,
+                $consumerPayment,
+                $downloaded,
+                $readingId,
+                $orNumber,
+                $ledgerDate,
+                $scDiscount,
+                $runningBalance
+            );
+            $runningBalance = round($runningBalance - $scDiscount, 2);
+        }
+
+        if ($taxDiscount <= 0) {
+            $this->deleteTaxLedgerRows($consumerId, $orNumber);
             return;
         }
 
-        $this->upsertSeniorCitizenLedgerRow(
+        $this->upsertTaxLedgerRow(
             $consumerId,
             $consumerPayment,
             $downloaded,
             $readingId,
             $orNumber,
             $ledgerDate,
-            $scDiscount,
-            $newBalance
+            $taxDiscount,
+            $runningBalance
         );
+    }
+
+    private function resolveTaxDiscount(array $validated): float
+    {
+        $taxDiscount = round((float) ($validated['tax_discount'] ?? 0), 2);
+        if ($taxDiscount > 0) {
+            return $taxDiscount;
+        }
+
+        $remarks = (string) ($validated['remarks'] ?? '');
+        if (preg_match('/Tax 2%(?: of Current Billing)?:\s*([0-9,]+(?:\.\d+)?)/i', $remarks, $match)) {
+            return round((float) str_replace(',', '', $match[1]), 2);
+        }
+
+        return 0.0;
     }
 
     private function resolveBalanceForPaymentUpdate(
@@ -711,7 +748,11 @@ class DownloadedReadingPaymentService
         $existingPaymentRow = ConsumerLedger::query()->where(mr_col('consumer_payment_id'), $consumerPayment->id)
             ->where(mr_col('trans'), 'PAYMENT')
             ->where(function ($q) {
-                $q->whereNull(mr_col('reference'))->orWhere(mr_col('reference'), 'not like', '%-SC');
+                $q->whereNull(mr_col('reference'))
+                    ->orWhere(function ($q2) {
+                        $q2->where(mr_col('reference'), 'not like', '%-SC')
+                            ->where(mr_col('reference'), 'not like', '%-tx');
+                    });
             })
             ->first();
 
@@ -802,7 +843,10 @@ class DownloadedReadingPaymentService
             ->where(mr_col('trans'), 'PAYMENT')
             ->where(function ($q) {
                 $q->whereNull(mr_col('reference'))
-                    ->orWhere(mr_col('reference'), 'not like', '%-SC');
+                    ->orWhere(function ($q2) {
+                        $q2->where(mr_col('reference'), 'not like', '%-SC')
+                            ->where(mr_col('reference'), 'not like', '%-tx');
+                    });
             })
             ->orderBy(mr_col('id'), 'asc')
             ->first();
@@ -866,6 +910,67 @@ class DownloadedReadingPaymentService
             ->where(mr_col('consumer_zone_id'), $consumerId)
             ->where(mr_col('trans'), 'PAYMENT')
             ->where(mr_col('reference'), $or . '-SC')
+            ->delete();
+    }
+
+    private function upsertTaxLedgerRow(
+        int $consumerId,
+        ConsumerPayment $consumerPayment,
+        ?DownloadedReading $downloaded,
+        ?int $readingId,
+        string $orNumber,
+        Carbon $ledgerDate,
+        float $taxDiscount,
+        float $newBalance
+    ): void {
+        $taxReference = preg_replace('/-(?:SC|tx)$/i', '', trim($orNumber)) . '-tx';
+        $taxPayload = [
+            'consumer_payment_id' => $consumerPayment->id,
+            'downloaded_reading_id' => $readingId,
+            'schedule_id' => $downloaded?->schedule_id,
+            'date' => $ledgerDate->format('Y-m-d'),
+            'due_date' => null,
+            'reading' => 0,
+            'volume' => 0,
+            'billamount' => 0,
+            'current_penalty' => 0,
+            'current_mr' => 0,
+            'debit' => 0,
+            'credit' => $taxDiscount,
+            'balance' => round($newBalance - $taxDiscount, 2),
+            'username' => $this->getFormattedUserName(),
+            'txtime' => $ledgerDate->format('Y-m-d H:i:s'),
+            'paid_at' => $ledgerDate,
+        ];
+
+        $taxRow = ConsumerLedger::updateOrCreate(
+            [
+                'consumer_zone_id' => $consumerId,
+                'trans' => 'PAYMENT',
+                'reference' => $taxReference,
+            ],
+            $taxPayload
+        );
+
+        ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerId)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $taxReference)
+            ->where(mr_col('id'), '!=', $taxRow->id)
+            ->delete();
+    }
+
+    private function deleteTaxLedgerRows(int $consumerId, string $orNumber): void
+    {
+        $or = preg_replace('/-(?:SC|tx)$/i', '', trim($orNumber));
+        if ($or === '') {
+            return;
+        }
+
+        ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerId)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $or . '-tx')
             ->delete();
     }
 

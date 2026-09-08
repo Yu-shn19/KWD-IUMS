@@ -486,6 +486,19 @@
                                                         <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldSeniorDiscount" data-discount value="0.00" placeholder="0.00" readonly></td>
                                                     </tr>
                                                     <tr>
+                                                        <td>
+                                                            <div class="d-flex align-items-center">
+                                                                <div class="senior-discount-checkbox">
+                                                                    <input type="checkbox" id="enableTaxDiscount">
+                                                                </div>
+                                                                <label for="enableTaxDiscount" class="senior-discount-label mb-0">
+                                                                    Tax <small class="text-muted">(2% of Current Billing, Prio Years, Current Arrears)</small>
+                                                                </label>
+                                                            </div>
+                                                        </td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldTaxDiscount" data-discount value="0.00" placeholder="0.00" readonly></td>
+                                                    </tr>
+                                                    <tr>
                                                         <td>Advances</td>
                                                         <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldAdvances" data-charge value="20.00"></td>
                                                     </tr>
@@ -1415,9 +1428,9 @@
             const disableFormFields = (disabled) => {
                 const fieldsToDisable = [
                     'fieldCurrentBill', 'fieldPenalty', 'fieldMaintenance', 'fieldMrArrears', 'fieldAdvances',
-                    'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldSeniorDiscount',
+                    'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldSeniorDiscount', 'fieldTaxDiscount',
                     'fieldOthers', 'fieldMaterials', 'fieldFees', 'fieldInspection',
-                    'paymentType', 'paymentRemarks', 'cashTendered', 'enableSeniorDiscount'
+                    'paymentType', 'paymentRemarks', 'cashTendered', 'enableSeniorDiscount', 'enableTaxDiscount'
                 ];
                 
                 fieldsToDisable.forEach(fieldId => {
@@ -1460,6 +1473,38 @@
                 }
                 setNumberFieldValue(document.getElementById('fieldMaintenance'), data.penalty ?? 0);
                 setNumberFieldValue(document.getElementById('fieldMrArrears'), data.meter_rental_arrears ?? 0);
+            };
+
+            const parseTaxDiscountAmount = (payment) => {
+                const direct = parseNumeric(payment?.tax_discount ?? 0);
+                if (direct > 0) {
+                    return direct;
+                }
+                const remarks = String(payment?.remarks ?? '');
+                const match = remarks.match(/Tax 2%(?: of Current Billing)?:\s*([0-9,]+(?:\.\d+)?)/i);
+                return match ? parseNumeric(String(match[1]).replace(/,/g, '')) : 0;
+            };
+
+            const restorePaidTaxDiscount = (payment) => {
+                const taxAmount = parseTaxDiscountAmount(payment);
+                const taxCheckbox = document.getElementById('enableTaxDiscount');
+                const taxField = document.getElementById('fieldTaxDiscount');
+                const currentBillField = document.getElementById('fieldCurrentBill');
+                if (!taxCheckbox || !taxField) {
+                    return;
+                }
+                if (taxAmount <= 0) {
+                    taxCheckbox.checked = false;
+                    setNumberFieldValue(taxField, 0);
+                    return;
+                }
+                if (currentBillField) {
+                    const storedCurrent = parseNumeric(currentBillField.value);
+                    setNumberFieldValue(currentBillField, storedCurrent + taxAmount);
+                }
+                taxCheckbox.checked = true;
+                setNumberFieldValue(taxField, taxAmount);
+                taxField.readOnly = true;
             };
 
             const applySavedPaymentBreakdown = (payment) => {
@@ -1590,6 +1635,11 @@
                 if (seniorDiscountEnabled) {
                 const seniorDiscount = Math.max(parseNumeric(document.getElementById('fieldSeniorDiscount')?.value), 0);
                 subtotal = Math.max(subtotal - seniorDiscount, 0);
+                }
+                const taxDiscountEnabled = !!document.getElementById('enableTaxDiscount')?.checked;
+                if (taxDiscountEnabled) {
+                    const taxDiscount = Math.max(parseNumeric(document.getElementById('fieldTaxDiscount')?.value), 0);
+                    subtotal = Math.max(subtotal - taxDiscount, 0);
                 }
 
                 subtotalField.value = formatCurrency(subtotal);
@@ -1740,6 +1790,29 @@
                     seniorDiscountField.readOnly = true; // Disable field when unchecked
                 }
                 
+                updateTotals();
+            };
+
+            const TAX_DISCOUNT_RATE = 0.02;
+            const taxBaseAmount = () => {
+                const currentBill = Math.max(parseNumeric(document.getElementById('fieldCurrentBill')?.value), 0);
+                const prioYears = Math.max(parseNumeric(document.getElementById('fieldArrearsPrevious')?.value), 0);
+                const currentArrears = Math.max(parseNumeric(document.getElementById('fieldPenalty')?.value), 0);
+                return currentBill + prioYears + currentArrears;
+            };
+            const applyTaxDiscount = () => {
+                const taxDiscountField = document.getElementById('fieldTaxDiscount');
+                const enableCheckbox = document.getElementById('enableTaxDiscount');
+                if (!taxDiscountField || !enableCheckbox) {
+                    return;
+                }
+                if (enableCheckbox.checked) {
+                    const taxAmount = Math.round(taxBaseAmount() * TAX_DISCOUNT_RATE * 100) / 100;
+                    setNumberFieldValue(taxDiscountField, taxAmount);
+                } else {
+                    setNumberFieldValue(taxDiscountField, 0);
+                }
+                taxDiscountField.readOnly = true;
                 updateTotals();
             };
             
@@ -2048,6 +2121,15 @@
                     setNumberFieldValue(seniorDiscountField, 0);
                     seniorDiscountField.readOnly = true;
                 }
+                const enableTaxDiscountCheckbox = document.getElementById('enableTaxDiscount');
+                if (enableTaxDiscountCheckbox) {
+                    enableTaxDiscountCheckbox.checked = false;
+                }
+                const taxDiscountField = document.getElementById('fieldTaxDiscount');
+                if (taxDiscountField) {
+                    setNumberFieldValue(taxDiscountField, 0);
+                    taxDiscountField.readOnly = true;
+                }
                 
                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                 setNumberFieldValue(document.getElementById('fieldFees'), 0);
@@ -2170,6 +2252,7 @@
                     if (enableSeniorDiscountCheckboxPaid) {
                         enableSeniorDiscountCheckboxPaid.checked = (parseFloat(payment.senior_citizen_discount) || 0) > 0;
                     }
+                    restorePaidTaxDiscount(payment);
                     setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
                     setNumberFieldValue(document.getElementById('fieldFees'), 0);
                     setNumberFieldValue(document.getElementById('fieldInspection'), 0);
@@ -2602,6 +2685,10 @@
                 if (enableSeniorDiscountCheckbox) {
                     enableSeniorDiscountCheckbox.checked = false;
                 }
+                const enableTaxDiscountCheckbox = document.getElementById('enableTaxDiscount');
+                if (enableTaxDiscountCheckbox) {
+                    enableTaxDiscountCheckbox.checked = false;
+                }
                 
                 // Enable all form fields
                 disableFormFields(false);
@@ -2611,7 +2698,7 @@
                 // Clear all fields to empty/zero
                 const fieldsToClear = [
                     'fieldCurrentBill', 'fieldPenalty', 'fieldMaintenance', 'fieldMrArrears', 'fieldAdvances',
-                    'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldSeniorDiscount',
+                    'fieldArrearsCurrent', 'fieldArrearsPrevious', 'fieldSeniorDiscount', 'fieldTaxDiscount',
                     'fieldOthers', 'fieldMaterials', 'fieldFees', 'fieldInspection',
                     'accountNumber', 'accountName', 'billMonth', 'transactionDate',
                     'paymentType', 'paymentRemarks', 'cashTendered', 'cashChange',
@@ -2781,17 +2868,30 @@
                 // When checkbox is toggled, apply or remove discount
                 enableSeniorDiscountCheckbox.addEventListener('change', applySeniorCitizenDiscount);
             }
+
+            const enableTaxDiscountCheckbox = document.getElementById('enableTaxDiscount');
+            if (enableTaxDiscountCheckbox) {
+                enableTaxDiscountCheckbox.addEventListener('change', applyTaxDiscount);
+            }
             
-            // When Current Bill changes and discount is enabled, recalculate
-            if (currentBillField && enableSeniorDiscountCheckbox) {
-                currentBillField.addEventListener('input', () => {
-                    if (enableSeniorDiscountCheckbox.checked) {
+            // Recalculate Tax when any of its 2% base fields change.
+            ['fieldCurrentBill', 'fieldArrearsPrevious', 'fieldPenalty'].forEach((fieldId) => {
+                const field = document.getElementById(fieldId);
+                if (!field) {
+                    return;
+                }
+                field.addEventListener('input', () => {
+                    if (enableTaxDiscountCheckbox && enableTaxDiscountCheckbox.checked) {
+                        applyTaxDiscount();
+                        return;
+                    }
+                    if (fieldId === 'fieldCurrentBill' && enableSeniorDiscountCheckbox && enableSeniorDiscountCheckbox.checked) {
                         applySeniorCitizenDiscount();
-                    } else {
+                    } else if (fieldId === 'fieldCurrentBill') {
                         updateTotals();
                     }
                 });
-            }
+            });
             
             // Allow manual adjustment of discount amount when enabled
             if (seniorDiscountField) {
@@ -3196,6 +3296,17 @@
                 // Get Senior Citizen Discount amount
                 const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
                 const scDiscountAmount = seniorDiscountField ? parseNumeric(seniorDiscountField.value || 0) : 0;
+                const enableTaxDiscountCheckbox = document.getElementById('enableTaxDiscount');
+                const hasTaxDiscount = !!(enableTaxDiscountCheckbox && enableTaxDiscountCheckbox.checked);
+                const taxDiscountAmount = hasTaxDiscount
+                    ? parseNumeric(document.getElementById('fieldTaxDiscount')?.value || 0)
+                    : 0;
+                const remarksWithTax = (hasTaxDiscount && taxDiscountAmount > 0)
+                    ? [remarks, `Tax 2%: ${taxDiscountAmount.toFixed(2)}`].filter(Boolean).join(' | ')
+                    : remarks;
+                if (taxDiscountAmount > 0 && allocated.current_billing > 0) {
+                    allocated.current_billing = Math.max(allocated.current_billing - taxDiscountAmount, 0);
+                }
 
                 // Ensure base OR number doesn't have -SC suffix
                 const baseOrNumber = orNumber.replace(/-SC$/i, '');
@@ -3245,11 +3356,12 @@
                         amount_tendered: amountTendered,
                         payment_method: paymentMethod,
                         reference_number: referenceNumber,
-                        remarks: remarks,
+                        remarks: remarksWithTax,
                         official_receipt_number: baseOrNumber,
                         is_update: false,
                         current_billing: allocated.current_billing,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
+                        tax_discount: (hasTaxDiscount && taxDiscountAmount > 0) ? taxDiscountAmount : 0,
                         current_penalty: allocated.current_penalty,
                         mr_arrears: allocated.mr_arrears,
                         advances: advancesValue,
@@ -3270,6 +3382,9 @@
                         const discountLine = (hasSeniorCitizenDiscount && scDiscountAmount > 0)
                             ? `<p><strong>Senior Citizen Discount:</strong> ${formatCurrency(scDiscountAmount)}</p>`
                             : '';
+                        const taxLine = (hasTaxDiscount && taxDiscountAmount > 0)
+                            ? `<p><strong>Tax (2% Discount):</strong> ${formatCurrency(taxDiscountAmount)}</p>`
+                            : '';
                         Swal.fire({
                             icon: 'success',
                             title: 'Payment Saved Successfully!',
@@ -3278,6 +3393,7 @@
                                     <p><strong>OR Number:</strong> ${result.data.official_receipt_number || baseOrNumber}</p>
                                     <p><strong>Amount:</strong> ${formatCurrency(allocated.paymentAmount)}</p>
                                     ${discountLine}
+                                    ${taxLine}
                                 </div>
                             `,
                             confirmButtonColor: '#1cc88a',
@@ -3382,6 +3498,17 @@
                     const hasSeniorCitizenDiscount = enableSeniorDiscountCheckbox && enableSeniorDiscountCheckbox.checked;
                     const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
                     const scDiscountAmount = seniorDiscountField ? parseNumeric(seniorDiscountField.value || 0) : 0;
+                    const enableTaxDiscountCheckbox = document.getElementById('enableTaxDiscount');
+                    const hasTaxDiscount = !!(enableTaxDiscountCheckbox && enableTaxDiscountCheckbox.checked);
+                    const taxDiscountAmount = hasTaxDiscount
+                        ? parseNumeric(document.getElementById('fieldTaxDiscount')?.value || 0)
+                        : 0;
+                    if (taxDiscountAmount > 0 && allocated.current_billing > 0) {
+                        allocated.current_billing = Math.max(allocated.current_billing - taxDiscountAmount, 0);
+                    }
+                    const remarksWithTax = (hasTaxDiscount && taxDiscountAmount > 0)
+                        ? [remarks, `Tax 2%: ${taxDiscountAmount.toFixed(2)}`].filter(Boolean).join(' | ')
+                        : remarks;
                     const baseOrNumber = orNumber.replace(/-SC$/i, '');
                     const transactionDateValue = transactionDateField ? transactionDateField.value : null;
                     let sundriesToSave = [];
@@ -3406,11 +3533,12 @@
                         amount_tendered: amountTendered,
                         payment_method: paymentMethod,
                         reference_number: referenceNumber,
-                        remarks: remarks,
+                        remarks: remarksWithTax,
                         official_receipt_number: baseOrNumber,
                         is_update: true,
                         current_billing: allocated.current_billing,
                         senior_citizen_discount: (hasSeniorCitizenDiscount && scDiscountAmount > 0) ? scDiscountAmount : 0,
+                        tax_discount: (hasTaxDiscount && taxDiscountAmount > 0) ? taxDiscountAmount : 0,
                         current_penalty: allocated.current_penalty,
                         mr_arrears: allocated.mr_arrears,
                         advances: advancesValue,
@@ -3439,6 +3567,9 @@
                             const discountLine = (hasSeniorCitizenDiscount && scDiscountAmount > 0)
                                 ? `<p><strong>Senior Citizen Discount:</strong> ${formatCurrency(scDiscountAmount)}</p>`
                                 : '';
+                            const taxLine = (hasTaxDiscount && taxDiscountAmount > 0)
+                                ? `<p><strong>Tax (2% of Current Billing, Prio Years, Current Arrears):</strong> ${formatCurrency(taxDiscountAmount)}</p>`
+                                : '';
                             Swal.fire({
                                 icon: 'success',
                             title: 'Payment Updated Successfully!',
@@ -3447,6 +3578,7 @@
                                     <p><strong>OR Number:</strong> ${result.data.official_receipt_number || baseOrNumber}</p>
                                     <p><strong>Amount:</strong> ${formatCurrency(allocated.paymentAmount)}</p>
                                         ${discountLine}
+                                        ${taxLine}
                                     </div>
                                 `,
                                 confirmButtonColor: '#1cc88a',
@@ -3485,10 +3617,14 @@
                 });
             }
 
-            // Initialize Senior Citizen Discount field as readonly
+            // Initialize Senior Citizen Discount and Tax fields as readonly
             const seniorDiscountFieldInit = document.getElementById('fieldSeniorDiscount');
             if (seniorDiscountFieldInit) {
                 seniorDiscountFieldInit.readOnly = true;
+            }
+            const taxDiscountFieldInit = document.getElementById('fieldTaxDiscount');
+            if (taxDiscountFieldInit) {
+                taxDiscountFieldInit.readOnly = true;
             }
 
             // Generate OR number when page loads

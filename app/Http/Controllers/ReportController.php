@@ -1140,6 +1140,8 @@ class ReportController extends Controller
                 'cp.mr_arrears',
                 'cp.current_arrears',
                 'cp.prio_years',
+                'cp.advances',
+                'cp.remarks',
                 'cp.payment_method',
                 'cp.created_by as collector',
                 DB::raw('CASE
@@ -1232,6 +1234,8 @@ class ReportController extends Controller
                 'zone' => $record->zone ?? '',
                 'bill_month' => $record->bill_month ?? 'N/A',
                 'amount' => '₱ ' . number_format((float)($record->payment_amount ?? 0), 2),
+                'advances' => (float) ($record->advances ?? 0),
+                'remarks' => (string) ($record->remarks ?? ''),
                 'payment_type' => $record->payment_method ? ucfirst($record->payment_method) : '',
                 'collector' => $record->collector ?? 'N/A',
                 'status' => ucfirst($record->status ?? 'pending'),
