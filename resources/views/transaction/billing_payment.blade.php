@@ -492,7 +492,7 @@
                                                                     <input type="checkbox" id="enableTaxDiscount">
                                                                 </div>
                                                                 <label for="enableTaxDiscount" class="senior-discount-label mb-0">
-                                                                    Tax <small class="text-muted">(2% of Current Billing, Prio Years, Current Arrears)</small>
+                                                                    Tax <small class="text-muted">(2% Discount)</small>
                                                                 </label>
                                                             </div>
                                                         </td>
@@ -3568,7 +3568,7 @@
                                 ? `<p><strong>Senior Citizen Discount:</strong> ${formatCurrency(scDiscountAmount)}</p>`
                                 : '';
                             const taxLine = (hasTaxDiscount && taxDiscountAmount > 0)
-                                ? `<p><strong>Tax (2% of Current Billing, Prio Years, Current Arrears):</strong> ${formatCurrency(taxDiscountAmount)}</p>`
+                                ? `<p><strong>Tax (2% Discount):</strong> ${formatCurrency(taxDiscountAmount)}</p>`
                                 : '';
                             Swal.fire({
                                 icon: 'success',
