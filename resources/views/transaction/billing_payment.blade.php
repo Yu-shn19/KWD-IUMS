@@ -483,7 +483,7 @@
                                                                 </label>
                                                             </div>
                                                         </td>
-                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldSeniorDiscount" data-discount value="0.00" placeholder="0.00" readonly></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldSeniorDiscount" data-discount value="0.00" placeholder="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>
@@ -496,7 +496,7 @@
                                                                 </label>
                                                             </div>
                                                         </td>
-                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldTaxDiscount" data-discount value="0.00" placeholder="0.00" readonly></td>
+                                                        <td><input type="text" inputmode="decimal" autocomplete="off" class="form-control form-control-sm text-right amount-input" id="fieldTaxDiscount" data-discount value="0.00" placeholder="0.00"></td>
                                                     </tr>
                                                     <tr>
                                                         <td>Advances</td>
@@ -1504,7 +1504,7 @@
                 }
                 taxCheckbox.checked = true;
                 setNumberFieldValue(taxField, taxAmount);
-                taxField.readOnly = true;
+                taxField.readOnly = false;
             };
 
             const applySavedPaymentBreakdown = (payment) => {
@@ -1782,12 +1782,10 @@
                         discountValue = volumeDiscount;
                     }
                     setNumberFieldValue(seniorDiscountField, discountValue);
-                    // Keep editable so cashier can adjust if needed.
                     seniorDiscountField.readOnly = false;
                 } else {
-                    // Set to 0 when disabled
                     setNumberFieldValue(seniorDiscountField, 0);
-                    seniorDiscountField.readOnly = true; // Disable field when unchecked
+                    seniorDiscountField.readOnly = false;
                 }
                 
                 updateTotals();
@@ -1812,7 +1810,7 @@
                 } else {
                     setNumberFieldValue(taxDiscountField, 0);
                 }
-                taxDiscountField.readOnly = true;
+                taxDiscountField.readOnly = false;
                 updateTotals();
             };
             
@@ -1927,7 +1925,7 @@
                                 // Keep computed value in cache, but do not apply discount when unchecked.
                                 setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), 0);
                                 const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
-                                if (seniorDiscountField) seniorDiscountField.readOnly = true;
+                                if (seniorDiscountField) seniorDiscountField.readOnly = false;
                                 if (typeof updateTotals === 'function') updateTotals();
                             }
                         }
@@ -2119,7 +2117,7 @@
                 const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
                 if (seniorDiscountField) {
                     setNumberFieldValue(seniorDiscountField, 0);
-                    seniorDiscountField.readOnly = true;
+                    seniorDiscountField.readOnly = false;
                 }
                 const enableTaxDiscountCheckbox = document.getElementById('enableTaxDiscount');
                 if (enableTaxDiscountCheckbox) {
@@ -2128,7 +2126,7 @@
                 const taxDiscountField = document.getElementById('fieldTaxDiscount');
                 if (taxDiscountField) {
                     setNumberFieldValue(taxDiscountField, 0);
-                    taxDiscountField.readOnly = true;
+                    taxDiscountField.readOnly = false;
                 }
                 
                 setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
@@ -2226,7 +2224,7 @@
                                         // Keep computed value in cache, but do not apply discount when unchecked.
                                         setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), 0);
                                         const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
-                                        if (seniorDiscountField) seniorDiscountField.readOnly = true;
+                                        if (seniorDiscountField) seniorDiscountField.readOnly = false;
                                         if (typeof updateTotals === 'function') updateTotals();
                                     }
                                 }
@@ -2776,7 +2774,7 @@
                 // Ensure Senior Citizen Discount field is readonly and reset
                 const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
                 if (seniorDiscountField) {
-                    seniorDiscountField.readOnly = true;
+                    seniorDiscountField.readOnly = false;
                 }
 
                 if (cashTenderedField) {
@@ -2824,7 +2822,27 @@
                     updateTotals();
                 });
             });
-            discountInputs.forEach(input => input.addEventListener('input', updateTotals));
+            discountInputs.forEach(input => {
+                input.readOnly = false;
+                input.addEventListener('input', () => {
+                    applyLiveAmountFormat(input);
+                    updateTotals();
+                });
+                input.addEventListener('focus', () => {
+                    const raw = (input.value ?? '').toString().trim();
+                    const numeric = parseNumeric(raw);
+                    if (raw === '' || numeric === 0) {
+                        input.value = '0';
+                    }
+                    if (typeof input.select === 'function') {
+                        input.select();
+                    }
+                });
+                input.addEventListener('blur', () => {
+                    setNumberFieldValue(input, parseNumeric(input.value));
+                    updateTotals();
+                });
+            });
             if (cashTenderedField) {
                 cashTenderedField.addEventListener('input', () => {
                     applyLiveAmountFormat(cashTenderedField);
@@ -2874,18 +2892,43 @@
                 enableTaxDiscountCheckbox.addEventListener('change', applyTaxDiscount);
             }
             
-            // Recalculate Tax when any of its 2% base fields change.
+            // Suggested amounts fill only when the checkbox is turned on.
+            // After that, the amount stays editable and is not overwritten.
+            let taxDiscountManual = false;
+            let seniorDiscountManual = false;
+            if (enableTaxDiscountCheckbox) {
+                enableTaxDiscountCheckbox.addEventListener('change', () => {
+                    taxDiscountManual = false;
+                });
+            }
+            if (enableSeniorDiscountCheckbox) {
+                enableSeniorDiscountCheckbox.addEventListener('change', () => {
+                    seniorDiscountManual = false;
+                });
+            }
+            const taxDiscountField = document.getElementById('fieldTaxDiscount');
+            if (taxDiscountField) {
+                taxDiscountField.addEventListener('input', () => {
+                    taxDiscountManual = true;
+                });
+            }
+            if (seniorDiscountField) {
+                seniorDiscountField.addEventListener('input', () => {
+                    seniorDiscountManual = true;
+                });
+            }
+
             ['fieldCurrentBill', 'fieldArrearsPrevious', 'fieldPenalty'].forEach((fieldId) => {
                 const field = document.getElementById(fieldId);
                 if (!field) {
                     return;
                 }
                 field.addEventListener('input', () => {
-                    if (enableTaxDiscountCheckbox && enableTaxDiscountCheckbox.checked) {
+                    if (enableTaxDiscountCheckbox && enableTaxDiscountCheckbox.checked && !taxDiscountManual) {
                         applyTaxDiscount();
                         return;
                     }
-                    if (fieldId === 'fieldCurrentBill' && enableSeniorDiscountCheckbox && enableSeniorDiscountCheckbox.checked) {
+                    if (fieldId === 'fieldCurrentBill' && enableSeniorDiscountCheckbox && enableSeniorDiscountCheckbox.checked && !seniorDiscountManual) {
                         applySeniorCitizenDiscount();
                     } else if (fieldId === 'fieldCurrentBill') {
                         updateTotals();
@@ -3617,14 +3660,13 @@
                 });
             }
 
-            // Initialize Senior Citizen Discount and Tax fields as readonly
             const seniorDiscountFieldInit = document.getElementById('fieldSeniorDiscount');
             if (seniorDiscountFieldInit) {
-                seniorDiscountFieldInit.readOnly = true;
+                seniorDiscountFieldInit.readOnly = false;
             }
             const taxDiscountFieldInit = document.getElementById('fieldTaxDiscount');
             if (taxDiscountFieldInit) {
-                taxDiscountFieldInit.readOnly = true;
+                taxDiscountFieldInit.readOnly = false;
             }
 
             // Generate OR number when page loads
