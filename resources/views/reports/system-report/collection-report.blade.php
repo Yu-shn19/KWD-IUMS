@@ -637,6 +637,8 @@
             $totalPenalty = 0;
             $totalMeterMaint = 0;
             $totalMrArrears = 0;
+            $totalAdvance = 0;
+            $totalTax = 0;
             $totalServiceRev = 0;
             $totalRebate = 0;
         @endphp
@@ -653,6 +655,8 @@
                 $pagePenalty = 0;
                 $pageMeterMaint = 0;
                 $pageMrArrears = 0;
+                $pageAdvance = 0;
+                $pageTax = 0;
                 $pageServiceRev = 0;
                 $pageRebate = 0;
             @endphp
@@ -660,22 +664,24 @@
             <div class="print-page {{ $isLastPage ? 'is-last' : '' }}">
                 <table class="print-table">
                     <colgroup>
-                        <col style="width: 9%;">
-                        <col style="width: 20%;">
                         <col style="width: 8%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
-                        <col style="width: 7.5%;">
+                        <col style="width: 18%;">
+                        <col style="width: 7%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
+                        <col style="width: 6.5%;">
                     </colgroup>
                     <thead>
                         @if($pageIndex === 0)
                             <tr>
-                                <td colspan="11" class="print-header-cell">
+                                <td colspan="13" class="print-header-cell">
                                     <div class="print-header-inner">
                                         <img src="{{ $branding['logo_url'] }}" alt="{{ $branding['org_name'] }}" class="print-header-logo">
                                         <h2>{{ $branding['org_name_upper'] }}</h2>
@@ -686,17 +692,17 @@
                                 </td>
                             </tr>
                             <tr>
-                                <td colspan="11" class="print-section-title" style="border: 1px solid #000; border-bottom-width: 2px; padding: 8px 12px;">ACCOUNTS CREDITED</td>
+                                <td colspan="13" class="print-section-title" style="border: 1px solid #000; border-bottom-width: 2px; padding: 8px 12px;">ACCOUNTS CREDITED</td>
                             </tr>
                             <tr>
-                                <td colspan="11" class="print-subsection" style="border: 1px solid #000; padding: 8px 12px;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</td>
+                                <td colspan="13" class="print-subsection" style="border: 1px solid #000; padding: 8px 12px;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</td>
                             </tr>
                         @endif
                         <tr>
                             <th rowspan="2">OR #</th>
                             <th rowspan="2">PAYOR</th>
                             <th rowspan="2">AMOUNT<br>COLLECTED</th>
-                            <th colspan="6" style="text-align: center;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</th>
+                            <th colspan="8" style="text-align: center;">A/R - CUSTOMER ({{ $selectedZone !== '' && $selectedZone !== null ? $selectedZone : 'All zone' }})</th>
                             <th rowspan="2">Service Rev.<br>(648)</th>
                             <th rowspan="2">Rebate<br>(895)</th>
                         </tr>
@@ -707,6 +713,8 @@
                             <th>Prio<br>Years</th>
                             <th>Current<br>Penalty</th>
                             <th>MR<br>Arrears</th>
+                            <th>Advance</th>
+                            <th>Tax</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -722,12 +730,31 @@
                                 $penalty = 0;
                                 $meterMaint = 0;
                                 $mrArrears = 0;
+                                $advance = 0;
+                                $tax = 0;
                                 $serviceRev = 0;
                                 $rebate = 0;
 
-                                // Get payment details from consumer_payments
-                                $payment = DB::table('consumer_payments as cp')
-                                    ->where('cp.or_number', $record['or_number'] ?? null)
+                                // Get payment details from consumer_payments.
+                                // One OR can have several rows (main bill, sundries, SC). Use the main bill row,
+                                // and pull Advance / Tax from whichever row stored them.
+                                $orNumLookup = trim((string) ($record['or_number'] ?? ''));
+                                $paymentsForOr = collect();
+                                if ($orNumLookup !== '' && $orNumLookup !== 'N/A') {
+                                    $paymentsForOr = DB::table('consumer_payments')
+                                        ->where(function ($q) use ($orNumLookup) {
+                                            $q->where('or_number', $orNumLookup)
+                                                ->orWhere('or_number', 'like', $orNumLookup . '-%');
+                                        })
+                                        ->get();
+                                }
+                                $payment = $paymentsForOr
+                                    ->sortByDesc(function ($row) {
+                                        return ((float) ($row->current_billing ?? 0))
+                                            + ((float) ($row->current_mr ?? 0))
+                                            + ((float) ($row->advances ?? 0))
+                                            + ((float) ($row->payment_amount ?? 0));
+                                    })
                                     ->first();
 
                                 if ($payment) {
@@ -743,8 +770,27 @@
                                         || (float)($payment->current_mr ?? 0) != 0
                                         || (float)($payment->current_arrears ?? 0) != 0
                                         || (float)($payment->prio_years ?? 0) != 0
-                                        || (float)($payment->current_billing ?? 0) != 0);
+                                        || (float)($payment->current_billing ?? 0) != 0
+                                        || (float)($payment->advances ?? 0) != 0);
                                     $readingId = $payment->reading_id ?? null;
+                                    $advance = (float) $paymentsForOr->max(function ($row) {
+                                        return (float) ($row->advances ?? 0);
+                                    });
+                                    if ($advance <= 0) {
+                                        $advance = (float) ($record['advances'] ?? 0);
+                                    }
+                                    $tax = 0;
+                                    foreach ($paymentsForOr as $taxRow) {
+                                        $remarks = (string) ($taxRow->remarks ?? '');
+                                        if (preg_match('/Tax 2%(?: of Current Billing)?:\s*([0-9,]+(?:\.\d+)?)/i', $remarks, $taxMatch)) {
+                                            $tax = max($tax, (float) str_replace(',', '', $taxMatch[1]));
+                                        }
+                                    }
+                                    if ($tax <= 0 && !empty($record['remarks'])
+                                        && preg_match('/Tax 2%(?: of Current Billing)?:\s*([0-9,]+(?:\.\d+)?)/i', (string) $record['remarks'], $taxMatch)) {
+                                        $tax = (float) str_replace(',', '', $taxMatch[1]);
+                                    }
+
                                     if (empty($readingId) && $amount > 0 && !$hasStoredBreakdown) {
                                         $serviceRev = $amount;
                                         $current = 0;
@@ -761,7 +807,9 @@
                                         $penalty = (float)($payment->current_penalty ?? 0);
                                         $meterMaint = (float)($payment->current_mr ?? 0);
                                         $mrArrears = (float)($payment->mr_arrears ?? 0);
-                                        $rebate = (float)($payment->senior_citizen_discount ?? 0);
+                                        $rebate = (float) $paymentsForOr->max(function ($row) {
+                                            return (float) ($row->senior_citizen_discount ?? 0);
+                                        });
                                     }
                                 } else {
                                     // No payment record found - show zeros for breakdown
@@ -771,6 +819,8 @@
                                     $penalty = 0;
                                     $meterMaint = 0;
                                     $mrArrears = 0;
+                                    $advance = 0;
+                                    $tax = 0;
                                     $rebate = 0;
                                 }
 
@@ -782,6 +832,8 @@
                                 $pagePenalty += $penalty;
                                 $pageMeterMaint += $meterMaint;
                                 $pageMrArrears += $mrArrears;
+                                $pageAdvance += $advance;
+                                $pageTax += $tax;
                                 $pageServiceRev += $serviceRev;
                                 $pageRebate += $rebate;
 
@@ -793,6 +845,8 @@
                                 $totalPenalty += $penalty;
                                 $totalMeterMaint += $meterMaint;
                                 $totalMrArrears += $mrArrears;
+                                $totalAdvance += $advance;
+                                $totalTax += $tax;
                                 $totalServiceRev += $serviceRev;
                                 $totalRebate += $rebate;
                             @endphp
@@ -807,6 +861,8 @@
                                 <td class="text-center">{{ $arrearsPY > 0 ? number_format($arrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $penalty > 0 ? number_format($penalty, 2) : '' }}</td>
                                 <td class="text-center">{{ $mrArrears > 0 ? number_format($mrArrears, 2) : '' }}</td>
+                                <td class="text-center">{{ $advance > 0 ? number_format($advance, 2) : '' }}</td>
+                                <td class="text-center">{{ $tax > 0 ? number_format($tax, 2) : '' }}</td>
                                 <td class="text-center">{{ $serviceRev > 0 ? number_format($serviceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $rebate > 0 ? number_format($rebate, 2) : '' }}</td>
                             </tr>
@@ -823,6 +879,8 @@
                                 <td class="text-center">{{ $pageArrearsPY > 0 ? number_format($pageArrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $pagePenalty > 0 ? number_format($pagePenalty, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageMrArrears > 0 ? number_format($pageMrArrears, 2) : '' }}</td>
+                                <td class="text-center">{{ $pageAdvance > 0 ? number_format($pageAdvance, 2) : '' }}</td>
+                                <td class="text-center">{{ $pageTax > 0 ? number_format($pageTax, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageServiceRev > 0 ? number_format($pageServiceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $pageRebate > 0 ? number_format($pageRebate, 2) : '' }}</td>
                             </tr>
@@ -837,6 +895,8 @@
                                 <td class="text-center">{{ $totalArrearsPY > 0 ? number_format($totalArrearsPY, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalPenalty > 0 ? number_format($totalPenalty, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalMrArrears > 0 ? number_format($totalMrArrears, 2) : '' }}</td>
+                                <td class="text-center">{{ $totalAdvance > 0 ? number_format($totalAdvance, 2) : '' }}</td>
+                                <td class="text-center">{{ $totalTax > 0 ? number_format($totalTax, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalServiceRev > 0 ? number_format($totalServiceRev, 2) : '' }}</td>
                                 <td class="text-center">{{ $totalRebate > 0 ? number_format($totalRebate, 2) : '' }}</td>
                             </tr>

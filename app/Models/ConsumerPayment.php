@@ -332,7 +332,7 @@ class ConsumerPayment extends Model
      */
     public static function deleteRelatedLedgerPaymentRows(?int $paymentId, ?int $consumerZoneId, ?string $orNumber): int
     {
-        $or = preg_replace('/-SC$/i', '', trim((string) $orNumber));
+        $or = preg_replace('/-(?:SC|tx)$/i', '', trim((string) $orNumber));
         $ledgerIds = collect();
 
         if ($paymentId) {
@@ -349,7 +349,8 @@ class ConsumerPayment extends Model
                 ->where(mr_col('trans'), 'PAYMENT')
                 ->where(function ($q) use ($or) {
                     $q->where(mr_col('reference'), $or)
-                        ->orWhere(mr_col('reference'), $or . '-SC');
+                        ->orWhere(mr_col('reference'), $or . '-SC')
+                        ->orWhere(mr_col('reference'), $or . '-tx');
                 });
             if ($consumerZoneId) {
                 $byReference->where(mr_col('consumer_zone_id'), $consumerZoneId);

@@ -1105,7 +1105,11 @@ class BillingLookupService
                     ->where(mr_col('trans'), 'PAYMENT')
                     ->whereNotNull(mr_col('paid_at'))
                     ->where(function ($q) {
-                        $q->whereNull(mr_col('reference'))->orWhereRaw("reference NOT LIKE '%-SC'");
+                        $q->whereNull(mr_col('reference'))
+                            ->orWhere(function ($q2) {
+                                $q2->whereRaw("reference NOT LIKE '%-SC'")
+                                    ->whereRaw("reference NOT LIKE '%-tx'");
+                            });
                     })
                     ->orderBy(mr_col('paid_at'), 'desc')
                     ->first();
@@ -1144,6 +1148,7 @@ class BillingLookupService
                 $paymentData['prio_years'] = round((float) ($paymentRow->prio_years ?? 0), 2);
                 $paymentData['advances'] = round((float) ($paymentRow->advances ?? 0), 2);
                 $paymentData['senior_citizen_discount'] = round((float) ($paymentRow->senior_citizen_discount ?? 0), 2);
+                $paymentData['tax_discount'] = $this->resolveTaxDiscountAmount($paymentRow);
                 $paymentData['current_mr'] = round((float) ($paymentRow->current_mr ?? 0), 2);
             }
         } else {
@@ -1178,10 +1183,86 @@ class BillingLookupService
             $paymentData['prio_years'] = round((float) ($state->orLookupPayment->prio_years ?? 0), 2);
             $paymentData['advances'] = round((float) ($state->orLookupPayment->advances ?? 0), 2);
             $paymentData['senior_citizen_discount'] = round((float) ($state->orLookupPayment->senior_citizen_discount ?? 0), 2);
+            $paymentData['tax_discount'] = $this->resolveTaxDiscountAmount($state->orLookupPayment);
+            $this->ensureTaxLedgerRow($state->orLookupPayment, (float) $paymentData['tax_discount']);
             $paymentData['current_mr'] = round((float) ($state->orLookupPayment->current_mr ?? 0), 2);
         }
 
         return $paymentData;
+    }
+
+    private function resolveTaxDiscountAmount(object $paymentRow): float
+    {
+        $remarks = (string) ($paymentRow->remarks ?? '');
+        if (preg_match('/Tax 2%(?: of Current Billing)?:\s*([0-9,]+(?:\.\d+)?)/i', $remarks, $match)) {
+            return round((float) str_replace(',', '', $match[1]), 2);
+        }
+
+        $orNumber = preg_replace('/-(?:SC|tx)$/i', '', trim((string) ($paymentRow->or_number ?? '')));
+        if ($orNumber === '') {
+            return 0.0;
+        }
+
+        $taxCredit = ConsumerLedger::query()
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $orNumber . '-tx')
+            ->value(mr_col('credit'));
+
+        return round((float) ($taxCredit ?? 0), 2);
+    }
+
+    private function ensureTaxLedgerRow(object $paymentRow, float $taxDiscount): void
+    {
+        if ($taxDiscount <= 0) {
+            return;
+        }
+
+        $orNumber = preg_replace('/-(?:SC|tx)$/i', '', trim((string) ($paymentRow->or_number ?? '')));
+        $consumerId = (int) ($paymentRow->consumer_zone_id ?? 0);
+        if ($orNumber === '' || $consumerId <= 0) {
+            return;
+        }
+
+        $taxReference = $orNumber . '-tx';
+        $existing = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerId)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $taxReference)
+            ->exists();
+        if ($existing) {
+            return;
+        }
+
+        $mainRow = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerId)
+            ->where(mr_col('trans'), 'PAYMENT')
+            ->where(mr_col('reference'), $orNumber)
+            ->orderBy(mr_col('id'), 'desc')
+            ->first();
+
+        $paidAt = !empty($paymentRow->paid_at) ? Carbon::parse($paymentRow->paid_at) : now();
+        $balanceAfterTax = $mainRow
+            ? round((float) ($mainRow->balance ?? 0) - $taxDiscount, 2)
+            : 0.0;
+
+        ConsumerLedger::create([
+            'consumer_zone_id' => $consumerId,
+            'consumer_payment_id' => $paymentRow->id ?? null,
+            'downloaded_reading_id' => $paymentRow->reading_id ?? null,
+            'trans' => 'PAYMENT',
+            'date' => $paidAt->format('Y-m-d'),
+            'due_date' => null,
+            'reference' => $taxReference,
+            'reading' => 0,
+            'volume' => 0,
+            'billamount' => 0,
+            'debit' => 0,
+            'credit' => $taxDiscount,
+            'balance' => $balanceAfterTax,
+            'username' => $paymentRow->created_by ?? null,
+            'txtime' => $paidAt->format('Y-m-d H:i:s'),
+            'paid_at' => $paidAt,
+        ]);
     }
 
     /**
