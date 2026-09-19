@@ -469,7 +469,7 @@ class MeterReadingApiController extends Controller
                     $downloadedPayload['senior_citizen_discount'] = $seniorCitizenDiscount;
                 }
                 if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
-                    $downloadedPayload['completed_at'] = $readAtManila;
+                    $downloadedPayload['completed_at'] = now('Asia/Manila');
                 }
                 if (Schema::hasColumn('downloaded_readings', 'read_at')) {
                     $downloadedPayload['read_at'] = $readAtManila;
@@ -519,8 +519,8 @@ class MeterReadingApiController extends Controller
                         'credit' => $ledgerEntry ? (float) ($ledgerEntry->credit ?? 0) : 0,
                         'balance' => $newBalance,
                         'username' => $readerName,
-                        // Same Manila wall-clock as downloaded_readings.read_at / receipt
-                        'txtime' => $readAtManila,
+                        // Server time (not receipt read_at)
+                        'txtime' => now(),
                     ];
 
                     if (Schema::hasColumn('consumer_ledgers', 'downloaded_reading_id')) {

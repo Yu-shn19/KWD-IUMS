@@ -376,9 +376,11 @@ class ConsumerLedgerController extends Controller
                 'sequence' => $consumer->sequence,
                 'bill_disc_percent' => $consumer->bill_disc_percent,
                 'osca_id_no' => $consumer->osca_id_no,
-                'bill_disc_updated_at' => ! empty($consumer->bill_disc_updated_at)
-                    ? Carbon::parse($consumer->bill_disc_updated_at)->format('Y-m-d')
-                    : null,
+                'bill_disc_updated_at' => $consumer->bill_disc_updated_at instanceof \DateTimeInterface
+                    ? $consumer->bill_disc_updated_at->format('Y-m-d')
+                    : (! empty($consumer->bill_disc_updated_at)
+                        ? Carbon::parse((string) $consumer->bill_disc_updated_at)->format('Y-m-d')
+                        : null),
             ],
             'ledgers' => $ledgersWithBalance->values(),
             'summary' => [
