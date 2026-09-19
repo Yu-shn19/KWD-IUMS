@@ -26,7 +26,7 @@ import { isSupported as btSupported, printReceiptEscPos } from './services/bluet
 import { networkStatus, syncManager } from './services/offlineQueue';
 import * as readingsLocalService from './services/readingsLocalService';
 import PrinterSelector from './components/PrinterSelector';
-import { getReadingDateFromMeterSchedule, countCalendarDaysBetween } from './utils/dateUtils';
+import { getReadingDateFromMeterSchedule, countCalendarDaysBetween, formatManilaDateTime, getManilaNowStored } from './utils/dateUtils';
 import { calculateWaterBill, calculateBill, resolveClassification, METER_RENTAL, applyAdvanceToReceiptBilling, isSeniorCitizenDiscountEligible, calculateSeniorCitizenDiscount } from './utils/waterBilling';
 import { loadPricingTiers } from './services/pricingTiersService';
 
@@ -1576,7 +1576,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     setShowReadingModal(true);
   };
 
-  const generateReceipt = (customer, reading, userData = null) => {
+  const generateReceipt = (customer, reading, userData = null, readAtIso = null) => {
     const formatScheduleDate = (value) => {
       if (!value) return '—';
       const parsed = new Date(value);
@@ -1587,6 +1587,13 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         day: 'numeric'
       });
     };
+
+    const readAt =
+      readAtIso ||
+      customer.read_at ||
+      customer.readAt ||
+      getManilaNowStored();
+    const readAtManila = formatManilaDateTime(readAt) || '—';
 
     // Use schedule dates directly; fall back to reading_date variants when bill_date is missing.
     const readingDateRaw =
@@ -1724,7 +1731,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         surcharge: surcharge.toFixed(2),
         totalWithSurcharge: totalWithSurcharge.toFixed(2)
       },
-      meterReader: readerName
+      meterReader: readerName,
+      read_at: readAt,
+      readAt,
+      readAtManila,
     };
   };
 
@@ -1848,6 +1858,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       <div class="sep"></div>
 
       <div class="row">Meter Reader : ${receiptData.meterReader}</div>
+      <div class="row">${receiptData.readAtManila || ''}</div>
       <div class="account">${receiptData.accountNumber}</div>
 
       <div class="barcode" style="margin-top:12px;">
@@ -2050,6 +2061,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
           account_number: getAccountFromReadingData(readingData) || undefined,
           current_reading: readingData.current_reading,
           reading_date: readingData.reading_date,
+          read_at:
+            readingData.read_at ||
+            readingData.customer?.read_at ||
+            readingData.customer?.readAt ||
+            undefined,
           reader_notes: readingData.reader_notes || '',
           reader_id: readingData.reader_id,
           current_meter_rental: readingData.current_meter_rental ?? undefined,
@@ -2196,10 +2212,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         setIsProcessing(false);
         return;
       }
+      const readAtIso = getManilaNowStored();
       const readingData = {
         schedule_id: scheduleId,
         current_reading: reading,
         reading_date: getReadingDateFromMeterSchedule(selectedCustomer),
+        read_at: readAtIso,
         reader_notes: '',
         reader_id: userData?.id,
         consumption: consumption,
@@ -2211,7 +2229,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
           );
           return bill > 0 ? METER_RENTAL : 0;
         })(),
-        customer: selectedCustomer
+        customer: {
+          ...selectedCustomer,
+          read_at: readAtIso,
+          readAt: readAtIso,
+        },
       };
     
       const existingPendingId = await readingsLocalService.getPendingIdByScheduleId(scheduleId);
@@ -2236,6 +2258,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               currentReading: reading,
               current_reading: reading,
               consumption: consumption,
+              read_at: readingData.read_at,
+              readAt: readingData.read_at,
             }
           : c
       );
@@ -2243,7 +2267,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       await routesStorage.saveRoutes(optimisticCustomers);
 
       // Print-first flow for faster UX: print immediately after local save, then sync/upload.
-      const receiptData = generateReceipt(selectedCustomer, reading, userData);
+      const receiptData = generateReceipt(
+        { ...selectedCustomer, read_at: readingData.read_at },
+        reading,
+        userData,
+        readingData.read_at
+      );
       // Save for View Receipt screen
       await receiptStorage.saveLastReceipt(receiptData);
 

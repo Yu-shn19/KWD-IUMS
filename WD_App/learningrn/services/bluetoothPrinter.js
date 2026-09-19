@@ -7,7 +7,7 @@ import { Alert, Platform, PermissionsAndroid, NativeModules, Linking } from 'rea
 import { receiptLogoStorage, receiptFormatStorage } from './storage';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
-import { countCalendarDaysBetween } from '../utils/dateUtils';
+import { countCalendarDaysBetween, formatManilaDateTime } from '../utils/dateUtils';
 
 let BLEPrinter;
 let BLEPrinterModule = null;
@@ -684,6 +684,13 @@ function buildEscPosReceipt(receipt, options = {}) {
 	push('3) If service is discontinued, total amount due plus P300.00 reconnection fee.');
 	sep();
 	push(formatField('Reader', receipt.meterReader));
+	const readAtLine =
+		receipt.readAtManila ||
+		formatManilaDateTime(receipt.read_at || receipt.readAt) ||
+		null;
+	if (readAtLine) {
+		push(readAtLine);
+	}
 	push(''); // Add spacing before QR code
 	
 	// Add QR code ESC/POS commands (centered)

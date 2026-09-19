@@ -17,6 +17,7 @@ class DownloadedReading extends Model
         'current_billing',
         'current_meter_rental',
         'reading_date',
+        'read_at',
         'status',
         'reader_notes',
         'prepared_by',
@@ -29,6 +30,7 @@ class DownloadedReading extends Model
         'current_billing' => 'decimal:2',
         'current_meter_rental' => 'decimal:2',
         'paid_at' => 'datetime',
+        // read_at is Manila wall-clock string — do not cast to datetime (avoids UTC shift)
     ];
 
     protected $appends = [

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\ConsumerZone; // MAO NI AKOANG GI ADD
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 if (!function_exists(__NAMESPACE__ . '\mr_col')) {
     /**
@@ -119,10 +120,27 @@ class ReaderController extends Controller
             $czZoneCode = mr_col('cz.zone_code');
             $mrsSedrNumber = mr_col('mrs.sedr_number');
 
+            $drSelect = [];
+            if (Schema::hasTable('downloaded_readings')) {
+                $drSelect[] = 'dr.completed_at';
+                if (Schema::hasColumn('downloaded_readings', 'read_at')) {
+                    $drSelect[] = 'dr.read_at';
+                }
+            }
+
             $query = DB::table($mrsTable)
                 ->join($czTable, $mrsConsumerZoneId, '=', $czId)
-                ->where($mrsAssignedReaderId, $readerId)
-                ->select(
+                ->where($mrsAssignedReaderId, $readerId);
+
+            if (!empty($drSelect)) {
+                $query->leftJoin(mr_col('downloaded_readings as dr'), function ($join) use ($readerId) {
+                    $join->on(mr_col('dr.schedule_id'), '=', mr_col('mrs.id'))
+                        ->where(mr_col('dr.reader_id'), '=', $readerId);
+                });
+            }
+
+            $query->select(array_merge(
+                [
                     'mrs.id',
                     'mrs.sedr_number',
                     'mrs.reading_date',
@@ -142,8 +160,12 @@ class ReaderController extends Controller
                     'cz.account_name',
                     'cz.address',
                     'cz.meter_number',
-                    'cz.category_code as category'
-                );
+                    'cz.category_code as category',
+                    'cz.bill_disc_percent',
+                    'cz.osca_id_no',
+                ],
+                $drSelect
+            ));
 
             if ($zone !== null && $zone !== '') {
                 $query->where($czZoneCode, $zone);
@@ -195,6 +217,18 @@ class ReaderController extends Controller
                     'penalty' => $r['penalty'] ?? null,
                     'meter_rental_arrears' => $r['meter_rental_arrears'] ?? null,
                     'status' => $r['status'] ?? null,
+                    'bill_disc_percent' => $r['bill_disc_percent'] ?? null,
+                    'osca_id_no' => $r['osca_id_no'] ?? null,
+                    'read_at' => isset($r['read_at'])
+                        ? ($r['read_at'] instanceof \DateTimeInterface
+                            ? $r['read_at']->format('Y-m-d H:i:s')
+                            : (string) $r['read_at'])
+                        : null,
+                    'completed_at' => isset($r['completed_at'])
+                        ? ($r['completed_at'] instanceof \DateTimeInterface
+                            ? $r['completed_at']->format('Y-m-d H:i:s')
+                            : (string) $r['completed_at'])
+                        : null,
                 ];
             })->toArray();
 
