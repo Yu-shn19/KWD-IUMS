@@ -126,6 +126,9 @@ class ReaderController extends Controller
                 if (Schema::hasColumn('downloaded_readings', 'read_at')) {
                     $drSelect[] = 'dr.read_at';
                 }
+                if (Schema::hasColumn('downloaded_readings', 'senior_citizen_discount')) {
+                    $drSelect[] = 'dr.senior_citizen_discount';
+                }
             }
 
             $query = DB::table($mrsTable)
@@ -228,6 +231,9 @@ class ReaderController extends Controller
                         ? ($r['completed_at'] instanceof \DateTimeInterface
                             ? $r['completed_at']->format('Y-m-d H:i:s')
                             : (string) $r['completed_at'])
+                        : null,
+                    'senior_citizen_discount' => isset($r['senior_citizen_discount'])
+                        ? (float) $r['senior_citizen_discount']
                         : null,
                 ];
             })->toArray();

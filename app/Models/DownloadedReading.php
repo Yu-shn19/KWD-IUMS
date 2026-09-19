@@ -16,6 +16,7 @@ class DownloadedReading extends Model
         'consumption',
         'current_billing',
         'current_meter_rental',
+        'senior_citizen_discount',
         'reading_date',
         'read_at',
         'status',
@@ -29,6 +30,7 @@ class DownloadedReading extends Model
         'reading_date' => 'date',
         'current_billing' => 'decimal:2',
         'current_meter_rental' => 'decimal:2',
+        'senior_citizen_discount' => 'decimal:2',
         'paid_at' => 'datetime',
         // read_at is Manila wall-clock string — do not cast to datetime (avoids UTC shift)
     ];

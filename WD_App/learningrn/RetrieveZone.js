@@ -414,14 +414,23 @@ export default function RetrieveZone({ onBack, userData }) {
     const surchargeNum = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
     const billDiscPercent = item.bill_disc_percent ?? item.billDiscPercent ?? null;
     const oscaIdNo = item.osca_id_no ?? item.oscaIdNo ?? null;
-    const seniorDiscountEligible = isSeniorCitizenDiscountEligible(billDiscPercent, oscaIdNo);
-    const seniorCitizenDiscount = seniorDiscountEligible
-      ? calculateSeniorCitizenDiscount(
-          consumption,
-          item.category,
-          item.rate_code ?? item.rateCode ?? null
-        )
-      : 0;
+    const savedSc =
+      item.senior_citizen_discount != null && item.senior_citizen_discount !== ''
+        ? Number(item.senior_citizen_discount)
+        : null;
+    const seniorDiscountEligible =
+      (savedSc != null && Number.isFinite(savedSc) && savedSc > 0) ||
+      isSeniorCitizenDiscountEligible(billDiscPercent, oscaIdNo);
+    const seniorCitizenDiscount =
+      savedSc != null && Number.isFinite(savedSc)
+        ? Math.max(0, savedSc)
+        : seniorDiscountEligible
+          ? calculateSeniorCitizenDiscount(
+              consumption,
+              item.category,
+              item.rate_code ?? item.rateCode ?? null
+            )
+          : 0;
     const totalBillAfterSc = Math.max(0, receiptBilling.totalBill - seniorCitizenDiscount);
     const totalWithSurchargeNum = totalBillAfterSc + surchargeNum;
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';

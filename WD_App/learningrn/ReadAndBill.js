@@ -2066,6 +2066,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             readingData.customer?.read_at ||
             readingData.customer?.readAt ||
             undefined,
+          senior_citizen_discount:
+            readingData.senior_citizen_discount ??
+            readingData.customer?.senior_citizen_discount ??
+            undefined,
           reader_notes: readingData.reader_notes || '',
           reader_id: readingData.reader_id,
           current_meter_rental: readingData.current_meter_rental ?? undefined,
@@ -2213,11 +2217,21 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         return;
       }
       const readAtIso = getManilaNowStored();
+      const billDiscPercent =
+        selectedCustomer.billDiscPercent ?? selectedCustomer.bill_disc_percent ?? null;
+      const seniorCitizenDiscountAmount = isSeniorCitizenDiscountEligible(billDiscPercent)
+        ? calculateSeniorCitizenDiscount(
+            consumption,
+            selectedCustomer.category,
+            selectedCustomer.rateCode ?? selectedCustomer.rate_code ?? null
+          )
+        : 0;
       const readingData = {
         schedule_id: scheduleId,
         current_reading: reading,
         reading_date: getReadingDateFromMeterSchedule(selectedCustomer),
         read_at: readAtIso,
+        senior_citizen_discount: seniorCitizenDiscountAmount,
         reader_notes: '',
         reader_id: userData?.id,
         consumption: consumption,
@@ -2233,6 +2247,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
           ...selectedCustomer,
           read_at: readAtIso,
           readAt: readAtIso,
+          senior_citizen_discount: seniorCitizenDiscountAmount,
         },
       };
     
