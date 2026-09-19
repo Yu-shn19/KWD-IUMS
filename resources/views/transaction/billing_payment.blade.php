@@ -1019,8 +1019,12 @@
             };
 
             const getSeniorDiscountByConsumption = (consumption, categoryCodeRaw) => {
-                const cappedConsumption = Math.min(Math.max(parseFloat(consumption) || 0, 0), SENIOR_DISCOUNT_LIMIT_CONSUMPTION);
-                const waterBill = calculateWaterBillByVolume(cappedConsumption, categoryCodeRaw);
+                const cu = Math.max(parseFloat(consumption) || 0, 0);
+                // SC discount only when consumption is 0–30; 31+ has no discount
+                if (cu > SENIOR_DISCOUNT_LIMIT_CONSUMPTION) {
+                    return 0;
+                }
+                const waterBill = calculateWaterBillByVolume(cu, categoryCodeRaw);
                 return Math.max(roundMoney(waterBill * SENIOR_DISCOUNT_PERCENT), 0);
             };
 
