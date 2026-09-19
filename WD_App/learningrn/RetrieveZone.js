@@ -21,7 +21,7 @@ import { tokenStorage, userStorage, routesStorage, printerStorage, receiptLogoSt
 import { isSupported as btSupported, printReceiptEscPos } from './services/bluetoothPrinter';
 import PrinterSelector from './components/PrinterSelector';
 import { applyAdvanceToReceiptBilling, isSeniorCitizenDiscountEligible, calculateSeniorCitizenDiscount } from './utils/waterBilling';
-import { countCalendarDaysBetween } from './utils/dateUtils';
+import { countCalendarDaysBetween, formatManilaDateTime, getManilaNowStored } from './utils/dateUtils';
 
 export default function RetrieveZone({ onBack, userData }) {
   const readerId = userData?.id ?? userData?.reader_id ?? null;
@@ -425,6 +425,15 @@ export default function RetrieveZone({ onBack, userData }) {
     const totalBillAfterSc = Math.max(0, receiptBilling.totalBill - seniorCitizenDiscount);
     const totalWithSurchargeNum = totalBillAfterSc + surchargeNum;
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';
+    const readAt =
+      item.read_at ??
+      item.readAt ??
+      item.completed_at ??
+      item.completedAt ??
+      item.updated_at ??
+      item.created_at ??
+      getManilaNowStored();
+    const readAtManila = formatManilaDateTime(readAt) || '—';
     const periodStartRaw =
       item.previous_reading_date ?? item.previousReadingDate ?? null;
     const periodEndRaw =
@@ -488,6 +497,9 @@ export default function RetrieveZone({ onBack, userData }) {
         totalWithSurcharge: totalWithSurchargeNum.toFixed(2),
       },
       meterReader: readerName,
+      read_at: readAt,
+      readAt,
+      readAtManila,
     };
   };
 
@@ -636,6 +648,7 @@ export default function RetrieveZone({ onBack, userData }) {
       <div class="sep"></div>
 
       <div class="row">Meter Reader : ${rd.meterReader}</div>
+      <div class="row">${rd.readAtManila || ''}</div>
       <div class="account">${rd.accountNumber}</div>
     </div>
   </body>

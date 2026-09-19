@@ -210,7 +210,8 @@ export default function Receipt({ onBack, data }) {
       surcharge: '19.50',
       totalWithSurcharge: '234.50'
     },
-    meterReader: 'Sample Reader'
+    meterReader: 'Sample Reader',
+    readAtManila: 'Sep 19, 2026, 11:54 AM',
   };
 
   // Use dummy data if no real data is available
@@ -522,6 +523,9 @@ export default function Receipt({ onBack, data }) {
         )}
 
         <Text style={[styles.meta, { marginTop: 10 }]}>Reader: {receiptData.meterReader}</Text>
+        {!!receiptData.readAtManila && (
+          <Text style={[styles.meta, { textAlign: 'center', marginTop: 2 }]}>{receiptData.readAtManila}</Text>
+        )}
         <Text style={[styles.meta, { textAlign: 'center', marginTop: 6 }]}>{receiptData.accountNumber}</Text>
       </View>
 

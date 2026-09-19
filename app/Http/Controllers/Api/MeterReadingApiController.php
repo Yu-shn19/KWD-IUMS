@@ -365,6 +365,7 @@ class MeterReadingApiController extends Controller
             'account_number' => 'nullable|string|max:50',
             'current_reading' => 'required|integer|min:0',
             'reading_date' => 'nullable|date',
+            'read_at' => 'nullable|string|max:32',
             'reader_notes' => 'nullable|string',
             'current_meter_rental' => 'nullable|numeric|min:0',
             'reader_id' => 'required|exists:users,id'
@@ -455,7 +456,10 @@ class MeterReadingApiController extends Controller
                     $downloadedPayload['current_meter_rental'] = $currentMeterRental;
                 }
                 if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
-                    $downloadedPayload['completed_at'] = now();
+                    $downloadedPayload['completed_at'] = now('Asia/Manila');
+                }
+                if (Schema::hasColumn('downloaded_readings', 'read_at')) {
+                    $downloadedPayload['read_at'] = $this->resolveManilaReadAt($request);
                 }
 
                 $downloaded = DownloadedReading::updateOrCreate(
@@ -583,6 +587,7 @@ class MeterReadingApiController extends Controller
                         'consumption' => $downloaded->consumption,
                         'current_billing' => $downloaded->current_billing,
                         'current_meter_rental' => $downloaded->current_meter_rental,
+                        'read_at' => $downloaded->read_at,
                         'status' => $downloaded->status,
                     ]
                 ]);
@@ -601,6 +606,22 @@ class MeterReadingApiController extends Controller
                 'message' => 'Error submitting reading: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Manila wall-clock for downloaded_readings.read_at (never store as UTC Z).
+     * Prefers mobile read_at when provided; otherwise Asia/Manila now.
+     */
+    private function resolveManilaReadAt(Request $request): string
+    {
+        $raw = trim((string) $request->input('read_at', ''));
+        if ($raw !== '' && preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?/', $raw, $m)) {
+            $seconds = isset($m[3]) && $m[3] !== '' ? $m[3] : '00';
+
+            return $m[1] . ' ' . $m[2] . ':' . $seconds;
+        }
+
+        return now('Asia/Manila')->format('Y-m-d H:i:s');
     }
 
     /**
