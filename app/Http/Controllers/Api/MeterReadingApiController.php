@@ -366,6 +366,7 @@ class MeterReadingApiController extends Controller
             'current_reading' => 'required|integer|min:0',
             'reading_date' => 'nullable|date',
             'read_at' => 'nullable|string|max:32',
+            'senior_citizen_discount' => 'nullable|numeric|min:0',
             'reader_notes' => 'nullable|string',
             'current_meter_rental' => 'nullable|numeric|min:0',
             'reader_id' => 'required|exists:users,id'
@@ -428,6 +429,14 @@ class MeterReadingApiController extends Controller
                     ? round((float) $request->input('current_meter_rental'), 2)
                     : ($currentBill > 0 ? WaterBillingService::METER_RENTAL : 0.0);
 
+                $seniorCitizenDiscount = $this->resolveSeniorCitizenDiscount(
+                    $request,
+                    $consumption,
+                    $schedule->category,
+                    $rateCode,
+                    $consumer
+                );
+
                 // STEP 1: meter_reading_schedules
                 $schedule->update(MeterReadingSchedule::filterTableAttributes([
                     'current_reading' => $currentReading,
@@ -440,6 +449,7 @@ class MeterReadingApiController extends Controller
 
                 // STEP 2: downloaded_readings
                 $reader = User::find($request->reader_id);
+                $readAtManila = $this->resolveManilaReadAt($request);
 
                 $downloadedPayload = [
                     'consumer_zone_id' => $schedule->consumer_zone_id,
@@ -455,11 +465,14 @@ class MeterReadingApiController extends Controller
                 if (Schema::hasColumn('downloaded_readings', 'current_meter_rental')) {
                     $downloadedPayload['current_meter_rental'] = $currentMeterRental;
                 }
+                if (Schema::hasColumn('downloaded_readings', 'senior_citizen_discount')) {
+                    $downloadedPayload['senior_citizen_discount'] = $seniorCitizenDiscount;
+                }
                 if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
-                    $downloadedPayload['completed_at'] = now('Asia/Manila');
+                    $downloadedPayload['completed_at'] = $readAtManila;
                 }
                 if (Schema::hasColumn('downloaded_readings', 'read_at')) {
-                    $downloadedPayload['read_at'] = $this->resolveManilaReadAt($request);
+                    $downloadedPayload['read_at'] = $readAtManila;
                 }
 
                 $downloaded = DownloadedReading::updateOrCreate(
@@ -506,7 +519,8 @@ class MeterReadingApiController extends Controller
                         'credit' => $ledgerEntry ? (float) ($ledgerEntry->credit ?? 0) : 0,
                         'balance' => $newBalance,
                         'username' => $readerName,
-                        'txtime' => now(),
+                        // Same Manila wall-clock as downloaded_readings.read_at / receipt
+                        'txtime' => $readAtManila,
                     ];
 
                     if (Schema::hasColumn('consumer_ledgers', 'downloaded_reading_id')) {
@@ -587,6 +601,7 @@ class MeterReadingApiController extends Controller
                         'consumption' => $downloaded->consumption,
                         'current_billing' => $downloaded->current_billing,
                         'current_meter_rental' => $downloaded->current_meter_rental,
+                        'senior_citizen_discount' => $downloaded->senior_citizen_discount ?? null,
                         'read_at' => $downloaded->read_at,
                         'status' => $downloaded->status,
                     ]
@@ -622,6 +637,37 @@ class MeterReadingApiController extends Controller
         }
 
         return now('Asia/Manila')->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * SC discount saved on downloaded_readings — same rule as mobile receipt.
+     * Prefer amount from the app; otherwise compute from consumer_zone.bill_disc_percent.
+     */
+    private function resolveSeniorCitizenDiscount(
+        Request $request,
+        float $consumption,
+        ?string $category,
+        ?string $rateCode,
+        $consumer
+    ): float {
+        if ($request->filled('senior_citizen_discount')) {
+            return round(max(0, (float) $request->input('senior_citizen_discount')), 2);
+        }
+
+        $billDiscRaw = $consumer->bill_disc_percent ?? null;
+        $billDiscNorm = is_string($billDiscRaw) ? strtoupper(trim($billDiscRaw)) : null;
+        if (is_numeric($billDiscRaw) && abs(((float) $billDiscRaw) - 5.0) < 0.001) {
+            $billDiscNorm = 'SC DISCOUNT';
+        }
+        if ($billDiscNorm !== 'SC DISCOUNT') {
+            return 0.0;
+        }
+
+        return app(WaterBillingService::class)->seniorCitizenDiscount(
+            $consumption,
+            $category,
+            $rateCode
+        );
     }
 
     /**
