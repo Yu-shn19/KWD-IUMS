@@ -179,6 +179,7 @@ export default function Receipt({ onBack, data }) {
     readingDate: '2025-01-15',
     dueDate: '2025-02-15',
     periodCovered: '2025-01-15 / 2025-02-15',
+    numberOfDays: 31,
     zone: '2A',
     consumerType: 'Residential',
     sequence: '2982',
@@ -204,6 +205,8 @@ export default function Receipt({ onBack, data }) {
       mrArrears: '0.00',
       others: '0.00',
       totalBill: '215.00',
+      seniorCitizenDiscount: '12.65',
+      showSeniorCitizenDiscount: true,
       surcharge: '19.50',
       totalWithSurcharge: '234.50'
     },
@@ -436,6 +439,9 @@ export default function Receipt({ onBack, data }) {
         )}
 
         <View style={styles.row}><Text>Period Covered: {receiptData.periodCovered}</Text></View>
+        {receiptData.numberOfDays != null && (
+          <View style={styles.row}><Text>Number of Days: {receiptData.numberOfDays}</Text></View>
+        )}
         <View style={styles.row}><Text>Zone: {receiptData.zone}    Consumer type: {receiptData.consumerType}</Text></View>
         <View style={styles.row}><Text>Sequence: {receiptData.sequence}</Text></View>
         <View style={styles.row}><Text>Acct No.: {receiptData.accountNumber}</Text></View>
@@ -508,6 +514,12 @@ export default function Receipt({ onBack, data }) {
         </View>
         <View style={styles.row}><Text>Surcharge: {receiptData.billing?.surcharge}</Text></View>
         <View style={styles.totalRow}><Text style={styles.total}>TOTAL W/ SUR: {receiptData.billing?.totalWithSurcharge}</Text></View>
+
+        {(receiptData.billing?.showSeniorCitizenDiscount || parseFloat(receiptData.billing?.seniorCitizenDiscount) > 0) && (
+          <View style={styles.scDiscountRow}>
+            <Text style={styles.scDiscountText}>SC Discount: {receiptData.billing?.seniorCitizenDiscount}</Text>
+          </View>
+        )}
 
         <Text style={[styles.meta, { marginTop: 10 }]}>Reader: {receiptData.meterReader}</Text>
         <Text style={[styles.meta, { textAlign: 'center', marginTop: 6 }]}>{receiptData.accountNumber}</Text>
@@ -920,6 +932,8 @@ const styles = StyleSheet.create({
   row: { marginVertical: 2 },
   totalRow: { marginTop: 8 },
   total: { fontSize: 25, fontWeight: '800', color: '#2c3e50' },
+  scDiscountRow: { marginTop: 10, marginBottom: 4 },
+  scDiscountText: { fontSize: 18, fontWeight: '800', color: '#111' },
   customerName: { fontSize: 25, fontWeight: '800', color: '#111' },
   billingLine: {
     marginVertical: 1,

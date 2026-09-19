@@ -242,13 +242,13 @@ class MeterReadingApiController extends Controller
             }
         }
 
-        // Get rate codes from consumer_zone table for all schedules
+        // Get rate codes / SC discount flags from consumer_zone for all schedules
         $rateCodes = collect();
         if ($schedules->isNotEmpty()) {
             $consumerZoneIds = $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->toArray();
             $rateCodes = DB::table(mr_col('consumer_zone'))
                 ->whereIn(mr_col('id'), $consumerZoneIds)
-                ->select('id', 'account_no', 'rate_code')
+                ->select('id', 'account_no', 'rate_code', 'bill_disc_percent', 'osca_id_no')
                 ->get()
                 ->keyBy(mr_col('id'));
         }
@@ -278,7 +278,8 @@ class MeterReadingApiController extends Controller
                     $downloaded = $downloadedByAccount->get($accountKey);
                 }
 
-                $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
+                $czRow = $rateCodes->get($schedule->consumer_zone_id);
+                $rateCode = $czRow?->rate_code ?? null;
 
                 // Same truth as Download Reading page (meter_reading_schedules + downloaded_readings):
                 // Completed if download exists OR schedule is Completed OR schedule already has a current reading.
@@ -310,6 +311,8 @@ class MeterReadingApiController extends Controller
                     'zone' => $schedule->zone,
                     'category' => $schedule->category,
                     'rate_code' => $rateCode,
+                    'bill_disc_percent' => $czRow->bill_disc_percent ?? null,
+                    'osca_id_no' => $czRow->osca_id_no ?? null,
                     'meter_number' => $schedule->meter_number,
                     'previous_reading' => $schedule->previous_reading,
                     'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),

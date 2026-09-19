@@ -20,7 +20,8 @@ import { readerDownloadedReadingsAPI, routesAPI } from './services/api';
 import { tokenStorage, userStorage, routesStorage, printerStorage, receiptLogoStorage, receiptFormatStorage } from './services/storage';
 import { isSupported as btSupported, printReceiptEscPos } from './services/bluetoothPrinter';
 import PrinterSelector from './components/PrinterSelector';
-import { applyAdvanceToReceiptBilling } from './utils/waterBilling';
+import { applyAdvanceToReceiptBilling, isSeniorCitizenDiscountEligible, calculateSeniorCitizenDiscount } from './utils/waterBilling';
+import { countCalendarDaysBetween } from './utils/dateUtils';
 
 export default function RetrieveZone({ onBack, userData }) {
   const readerId = userData?.id ?? userData?.reader_id ?? null;
@@ -411,10 +412,38 @@ export default function RetrieveZone({ onBack, userData }) {
       item
     );
     const surchargeNum = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
-    const totalWithSurchargeNum = receiptBilling.totalBill + surchargeNum;
+    const billDiscPercent = item.bill_disc_percent ?? item.billDiscPercent ?? null;
+    const oscaIdNo = item.osca_id_no ?? item.oscaIdNo ?? null;
+    const seniorDiscountEligible = isSeniorCitizenDiscountEligible(billDiscPercent, oscaIdNo);
+    const seniorCitizenDiscount = seniorDiscountEligible
+      ? calculateSeniorCitizenDiscount(
+          consumption,
+          item.category,
+          item.rate_code ?? item.rateCode ?? null
+        )
+      : 0;
+    const totalBillAfterSc = Math.max(0, receiptBilling.totalBill - seniorCitizenDiscount);
+    const totalWithSurchargeNum = totalBillAfterSc + surchargeNum;
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';
+    const periodStartRaw =
+      item.previous_reading_date ?? item.previousReadingDate ?? null;
+    const periodEndRaw =
+      item.reading_date ??
+      item.readingDate ??
+      item.bill_date ??
+      item.billDate ??
+      readingDateRaw ??
+      null;
+    const numberOfDays = countCalendarDaysBetween(periodStartRaw, periodEndRaw);
     return {
-      periodCovered: `${readingDate} / ${dueDateFormatted}`,
+      periodCovered: periodStartRaw
+        ? `${formatDateLocale(parseDate(periodStartRaw))} - ${formatDateLocale(parseDate(periodEndRaw) || readingDateParsed)}`
+        : `${readingDate} / ${dueDateFormatted}`,
+      numberOfDays,
+      previous_reading_date: periodStartRaw,
+      previousReadingDate: periodStartRaw,
+      reading_date: periodEndRaw,
+      scheduleReadingDate: periodEndRaw,
       zone: String(zone),
       consumerType: item.category || 'Residential',
       sequence: (() => {
@@ -428,6 +457,8 @@ export default function RetrieveZone({ onBack, userData }) {
         return '—';
       })(),
       accountNumber: String(account),
+      billDiscPercent,
+      oscaIdNo,
       customer: {
         name: name || 'Unknown Customer',
         address: item.address || 'No Address',
@@ -450,7 +481,9 @@ export default function RetrieveZone({ onBack, userData }) {
         currentPenalty: receiptBilling.currentPenalty.toFixed(2),
         mrArrears: receiptBilling.mrArrears.toFixed(2),
         others: others.toFixed(2),
-        totalBill: receiptBilling.totalBill.toFixed(2),
+        seniorCitizenDiscount: seniorCitizenDiscount.toFixed(2),
+        showSeniorCitizenDiscount: seniorDiscountEligible && seniorCitizenDiscount > 0,
+        totalBill: totalBillAfterSc.toFixed(2),
         surcharge: surchargeNum.toFixed(2),
         totalWithSurcharge: totalWithSurchargeNum.toFixed(2),
       },
@@ -547,6 +580,7 @@ export default function RetrieveZone({ onBack, userData }) {
       <div class="sep"></div>
 
       <div class="row">Period Covered: ${rd.periodCovered}</div>
+      <div class="row">Number of Days: ${rd.numberOfDays != null ? rd.numberOfDays : '—'}</div>
       <div class="row">Zone : ${rd.zone} &nbsp;&nbsp;&nbsp;&nbsp; Consumer type: ${rd.consumerType}</div>
       <div class="row">Sequence : ${rd.sequence}</div>
       <div class="row">Acct No. : ${rd.accountNumber}</div>
@@ -588,6 +622,11 @@ export default function RetrieveZone({ onBack, userData }) {
       <div class="total">TOTAL WITH SURCHARGE : ${rd.billing.totalWithSurcharge}</div>
 
       <div class="sep"></div>
+
+      ${rd.billing.showSeniorCitizenDiscount ? `
+      <div class="row" style="font-weight:700;font-size:15px;">SC Discount : ${rd.billing.seniorCitizenDiscount}</div>
+      <div class="sep"></div>
+      ` : ''}
 
       <div class="row">Notice:</div>
       <div class="row">1. Failure to pay on the specified date of Disconnection Date, we will be constrained to cut off your services connection, disconnection of your water service.</div>

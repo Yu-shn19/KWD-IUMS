@@ -9,6 +9,10 @@
 
 export const METER_RENTAL = 20.0;
 export const MINIMUM_CHARGE = 253.0;
+/** Matches App\Services\WaterBillingService::SENIOR_DISCOUNT_PERCENT */
+export const SENIOR_DISCOUNT_PERCENT = 0.05;
+/** Matches App\Services\WaterBillingService::SENIOR_DISCOUNT_VOLUME_CAP */
+export const SENIOR_DISCOUNT_VOLUME_CAP = 30;
 
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -264,6 +268,40 @@ export function calculateBill(consumption, categoryRaw, rateCode = null, pricing
 }
 
 /**
+ * consumer_zone.bill_disc_percent is "SC DISCOUNT" (or legacy numeric 5).
+ */
+export function isScDiscountPercent(billDiscPercent) {
+  if (billDiscPercent == null || billDiscPercent === '') return false;
+  const raw = String(billDiscPercent).trim();
+  if (!raw) return false;
+  if (raw.toUpperCase() === 'SC DISCOUNT') return true;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) && Math.abs(n - 5) < 0.001;
+}
+
+/**
+ * Eligible when consumer_zone.bill_disc_percent is SC DISCOUNT (or legacy 5).
+ */
+export function isSeniorCitizenDiscountEligible(billDiscPercent, _oscaId = null) {
+  return isScDiscountPercent(billDiscPercent);
+}
+
+/**
+ * 5% of water bill for first 30 cu.m (all categories). Matches WaterBillingService::seniorCitizenDiscount.
+ */
+export function calculateSeniorCitizenDiscount(
+  consumption,
+  category = null,
+  rateCode = null,
+  pricingTiers = null
+) {
+  const cu = Math.max(0, parseFloat(consumption) || 0);
+  const eligibleVolume = Math.min(cu, SENIOR_DISCOUNT_VOLUME_CAP);
+  const { bill } = calculateWaterBill(eligibleVolume, category, rateCode, pricingTiers);
+  return round2(Math.max(0, bill) * SENIOR_DISCOUNT_PERCENT);
+}
+
+/**
  * Receipt breakdown when ledger arrears is negative (advance/credit).
  * Matches web PRE-DUE rule: show advance in Arrears (negative), subtract from Current Bill only.
  * scheduleCharges: prior_years, penalty, meter_rental_arrears from meter_reading_schedules.
@@ -329,6 +367,9 @@ export default {
   calculateBillFromPricingTier,
   calculateWaterBill,
   calculateBill,
+  isScDiscountPercent,
+  isSeniorCitizenDiscountEligible,
+  calculateSeniorCitizenDiscount,
   applyAdvanceToReceiptBilling,
   getScheduleReceiptCharges,
 };
