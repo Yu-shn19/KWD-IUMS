@@ -1445,8 +1445,8 @@ class BillMonthDetailsService
                 // - OSCA ID is optional and not required for eligibility.
                 // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition),
                 //   plus fallback paid detection from PAYMENT rows in same cycle.
-                // - Per unpaid month: SC discount only when volume is 0–30 cu.m (none at 31+);
-                //   5% of WaterBillingService::calculate(volume, category) so RES / COM-A/B/C / GOVT / INDUSTRIAL use the same rule.
+                // - Per unpaid month: 5% of WaterBillingService::calculate(min(volume, 30), category)
+                //   so RES / COM-A/B/C / GOVT / INDUSTRIAL all use the same volume formula (31+ still uses 30 cu.m discount).
                 if (!($s->orNumberInput !== '' && $s->orPayment) && $s->paymentStatus !== 'paid') {
                     $billDiscPercentRaw = $s->consumer->bill_disc_percent ?? null;
                     $billDiscPercentNorm = is_string($billDiscPercentRaw) ? strtoupper(trim($billDiscPercentRaw)) : null;

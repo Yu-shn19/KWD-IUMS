@@ -36,19 +36,14 @@ class WaterBillingService
     }
 
     /**
-     * Senior Citizen discount: only when consumption is 0–30 cu.m.
-     * At 31+ cu.m there is no senior discount.
-     * Amount = 5% of the volume-based water bill (all categories).
+     * Senior Citizen discount: 5% of the volume-based water bill for up to 30 cu.m, all categories.
+     * When consumption is 31+, still use the 30 cu.m discount amount.
      * Category (RES, COM-A/B/C, GOVT, INDUSTRIAL, …) still selects the water rate; SC is not a lookup table.
      */
     public function seniorCitizenDiscount(float $consumption, ?string $category = null, ?string $rateCode = null): float
     {
-        $cu = max(0.0, $consumption);
-        if ($cu > self::SENIOR_DISCOUNT_VOLUME_CAP) {
-            return 0.0;
-        }
-
-        $waterBill = $this->calculate($cu, $category, $rateCode);
+        $eligibleVolume = min(max(0.0, $consumption), self::SENIOR_DISCOUNT_VOLUME_CAP);
+        $waterBill = $this->calculate($eligibleVolume, $category, $rateCode);
 
         return round($waterBill * self::SENIOR_DISCOUNT_PERCENT, 2);
     }

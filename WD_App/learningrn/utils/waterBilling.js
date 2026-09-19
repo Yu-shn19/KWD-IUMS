@@ -287,9 +287,8 @@ export function isSeniorCitizenDiscountEligible(billDiscPercent, _oscaId = null)
 }
 
 /**
- * SC discount only when consumption is 0–30 cu.m.
- * At 31+ cu.m there is no senior discount.
- * Amount = 5% of the full water bill for that volume (all categories).
+ * SC discount: 5% of water bill for up to 30 cu.m (all categories).
+ * When consumption is 31+, still use the 30 cu.m discount amount.
  */
 export function calculateSeniorCitizenDiscount(
   consumption,
@@ -298,8 +297,8 @@ export function calculateSeniorCitizenDiscount(
   pricingTiers = null
 ) {
   const cu = Math.max(0, parseFloat(consumption) || 0);
-  if (cu > SENIOR_DISCOUNT_VOLUME_CAP) return 0;
-  const { bill } = calculateWaterBill(cu, category, rateCode, pricingTiers);
+  const eligibleVolume = Math.min(cu, SENIOR_DISCOUNT_VOLUME_CAP);
+  const { bill } = calculateWaterBill(eligibleVolume, category, rateCode, pricingTiers);
   return round2(Math.max(0, bill) * SENIOR_DISCOUNT_PERCENT);
 }
 
