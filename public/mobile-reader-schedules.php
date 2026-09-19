@@ -186,7 +186,7 @@ try {
     if (!empty($consumerZoneIds)) {
         $rateCodes = DB::table('consumer_zone')
             ->whereIn('id', $consumerZoneIds)
-            ->select('id', 'rate_code')
+            ->select('id', 'rate_code', 'bill_disc_percent', 'osca_id_no')
             ->get()
             ->keyBy('id');
     }
@@ -254,6 +254,8 @@ try {
                 'zone' => $schedule->zone,
                 'category' => $schedule->category,
                 'rate_code' => $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null,
+                'bill_disc_percent' => $rateCodes->get($schedule->consumer_zone_id)?->bill_disc_percent ?? null,
+                'osca_id_no' => $rateCodes->get($schedule->consumer_zone_id)?->osca_id_no ?? null,
                 'meter_number' => $schedule->meter_number,
                 'previous_reading' => $schedule->previous_reading,
                 'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),

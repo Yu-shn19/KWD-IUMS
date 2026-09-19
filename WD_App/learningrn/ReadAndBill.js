@@ -26,8 +26,8 @@ import { isSupported as btSupported, printReceiptEscPos } from './services/bluet
 import { networkStatus, syncManager } from './services/offlineQueue';
 import * as readingsLocalService from './services/readingsLocalService';
 import PrinterSelector from './components/PrinterSelector';
-import { getReadingDateFromMeterSchedule } from './utils/dateUtils';
-import { calculateWaterBill, resolveClassification, METER_RENTAL, applyAdvanceToReceiptBilling } from './utils/waterBilling';
+import { getReadingDateFromMeterSchedule, countCalendarDaysBetween } from './utils/dateUtils';
+import { calculateWaterBill, calculateBill, resolveClassification, METER_RENTAL, applyAdvanceToReceiptBilling, isSeniorCitizenDiscountEligible, calculateSeniorCitizenDiscount } from './utils/waterBilling';
 import { loadPricingTiers } from './services/pricingTiersService';
 
 const KEYPAD_KEYS = ['1','2','3','4','5','6','7','8','9','.','0','⌫'];
@@ -118,6 +118,57 @@ const sortCustomersPendingFirst = (list) =>
     if (rankDiff !== 0) return rankDiff;
     return compareCustomersByName(a, b);
   });
+
+const getAssignmentGroupKey = (row) => {
+  const zoneRaw = row?.zone ?? row?.zone_code ?? row?.zoneCode ?? '';
+  const zone = String(zoneRaw).trim().toLowerCase() || 'unknown-zone';
+  const bmRaw = row?.bill_month ?? row?.billMonth ?? '';
+  const ym = bmRaw ? String(bmRaw).trim().slice(0, 7) : '';
+  return ym ? `${zone}|${ym}` : zone;
+};
+
+const isActiveAssignmentRow = (row) => {
+  const status = normalizeCustomerStatus(
+    row?.status ?? row?.schedule_status ?? row?.scheduleStatus,
+    row?.currentReading ?? row?.current_reading ?? row?.schedule_current_reading,
+    {
+      has_downloaded_reading: row?.has_downloaded_reading ?? row?.hasDownloadedReading,
+      downloaded_reading_id: row?.downloaded_reading_id,
+    }
+  );
+  if (isSavedOfflineCustomerStatus(status)) return true;
+  if (isCompletedCustomerStatus(status)) return false;
+  return true;
+};
+
+/**
+ * When a previous zone is fully completed and a new zone is assigned,
+ * Read and Bill should show only the active (new) assignment.
+ * Completed accounts inside an active zone stay visible.
+ * If every zone is completed (no new assignment yet), keep the full list.
+ */
+const filterToActiveAssignmentZones = (list) => {
+  if (!Array.isArray(list) || list.length === 0) return list || [];
+  const byGroup = new Map();
+  list.forEach((row) => {
+    const key = getAssignmentGroupKey(row);
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key).push(row);
+  });
+  const activeKeys = [];
+  byGroup.forEach((rows, key) => {
+    if (rows.some(isActiveAssignmentRow)) activeKeys.push(key);
+  });
+  if (activeKeys.length === 0) return list;
+  const keep = new Set(activeKeys);
+  const filtered = list.filter((row) => keep.has(getAssignmentGroupKey(row)));
+  if (filtered.length !== list.length) {
+    console.log(
+      `📍 Read and Bill: showing ${filtered.length} account(s) from ${activeKeys.length} active zone(s); hid ${list.length - filtered.length} from completed assignment(s).`
+    );
+  }
+  return filtered;
+};
 
 /** Higher = more final. Used so Completed / Saved offline never downgrade to Pending. */
 const statusProgressRank = (status) => {
@@ -545,6 +596,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         accountNumber: c.account_number ?? c.accountNumber ?? '-',
         category: c.category ?? '-',
         rateCode: c.rate_code ?? c.rateCode ?? null,
+        billDiscPercent: c.bill_disc_percent ?? c.billDiscPercent ?? null,
+        oscaIdNo: c.osca_id_no ?? c.oscaIdNo ?? null,
         zone: c.zone ?? '-',
         address: c.address ?? '-',
         meterNumber: c.meter_number ?? c.meterNumber ?? '-',
@@ -672,8 +725,9 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         console.warn('Durable completed overlay for cache:', e?.message || e);
       }
 
-      console.log('✅ Mapped customers from cache:', mapped.length);
-      return mapped;
+      const activeOnly = filterToActiveAssignmentZones(mapped);
+      console.log('✅ Mapped customers from cache:', activeOnly.length);
+      return activeOnly;
     } catch (error) {
       console.error('❌ Error loading routes from cache:', error);
       return [];
@@ -923,9 +977,10 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               };
             });
 
-            await routesStorage.saveRoutes(routesWithReaderId);
+            const activeRoutes = filterToActiveAssignmentZones(routesWithReaderId);
+            await routesStorage.saveRoutes(activeRoutes);
 
-            const mapped = routesWithReaderId.map((c, idx) => {
+            const mapped = activeRoutes.map((c, idx) => {
               const accountKey = getAccountKeyFromRecord(c);
               const local =
                 localByScheduleId[getScheduleIdFromRecord(c)] ??
@@ -968,6 +1023,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               accountNumber: c.account_number ?? c.accountNumber ?? '-',
               category: c.category ?? '-',
               rateCode: c.rate_code ?? c.rateCode ?? null,
+              billDiscPercent: c.bill_disc_percent ?? c.billDiscPercent ?? null,
+              oscaIdNo: c.osca_id_no ?? c.oscaIdNo ?? null,
               zone: c.zone ?? '-',
               address: c.address ?? '-',
               meterNumber: c.meter_number ?? c.meterNumber ?? '-',
@@ -1555,6 +1612,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     // Period must be based on meter_reading_schedules columns:
     // previous_reading_date - reading_date
     const periodCovered = `${formatScheduleDate(periodStartRaw)} - ${formatScheduleDate(periodEndRaw)}`;
+    const numberOfDays = countCalendarDaysBetween(periodStartRaw, periodEndRaw);
 
     // Ensure values are numbers
     const currentReading = parseFloat(reading) || 0;
@@ -1607,8 +1665,20 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       others,
       customer
     );
+
+    const billDiscPercent = customer.billDiscPercent ?? customer.bill_disc_percent ?? null;
+    const oscaIdNo = customer.oscaIdNo ?? customer.osca_id_no ?? null;
+    const seniorDiscountEligible = isSeniorCitizenDiscountEligible(billDiscPercent, oscaIdNo);
+    const seniorCitizenDiscount = seniorDiscountEligible
+      ? calculateSeniorCitizenDiscount(
+          consumption,
+          customer.category,
+          customer.rateCode ?? customer.rate_code ?? null
+        )
+      : 0;
+    const totalBillAfterSc = Math.max(0, receiptBilling.totalBill - seniorCitizenDiscount);
     const surcharge = parseFloat((receiptBilling.surchargeBase * 0.10).toFixed(2));
-    const totalWithSurcharge = receiptBilling.totalBill + surcharge;
+    const totalWithSurcharge = totalBillAfterSc + surcharge;
 
     // Get reader name from userData
     const readerName = userData?.name || userData?.full_name || userData?.username || 'Unknown Reader';
@@ -1617,6 +1687,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       readingDate,
       dueDate: dueDateFormatted,
       periodCovered,
+      numberOfDays,
       reading_date: periodEndRaw,
       previous_reading_date: periodStartRaw,
       previousReadingDate: periodStartRaw,
@@ -1625,6 +1696,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       consumerType: customer.category || (customerType === 'commercial' ? 'Commercial' : 'Residential'),
       sequence: getConsumerSeriesForReceipt(customer),
       accountNumber: customer.accountNumber ?? customer.account_number ?? customer.account_no ?? '—',
+      billDiscPercent,
+      oscaIdNo,
       customer: {
         name: customer.name || 'Unknown Customer',
         address: customer.address || 'No Address',
@@ -1645,7 +1718,9 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         currentPenalty: receiptBilling.currentPenalty.toFixed(2),
         mrArrears: receiptBilling.mrArrears.toFixed(2),
         others: others.toFixed(2),
-        totalBill: receiptBilling.totalBill.toFixed(2),
+        seniorCitizenDiscount: seniorCitizenDiscount.toFixed(2),
+        showSeniorCitizenDiscount: seniorDiscountEligible && seniorCitizenDiscount > 0,
+        totalBill: totalBillAfterSc.toFixed(2),
         surcharge: surcharge.toFixed(2),
         totalWithSurcharge: totalWithSurcharge.toFixed(2)
       },
@@ -1717,6 +1792,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       <div class="sep"></div>
 
       <div class="row">Period Covered: ${receiptData.periodCovered}</div>
+      <div class="row">Number of Days: ${receiptData.numberOfDays != null ? receiptData.numberOfDays : '—'}</div>
       <div class="row">Zone : ${receiptData.zone} &nbsp;&nbsp;&nbsp;&nbsp; Consumer type: ${receiptData.consumerType}</div>
       <div class="row">Sequence : ${receiptData.sequence}</div>
       <div class="row">Acct No. : ${receiptData.accountNumber}</div>
@@ -1758,6 +1834,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       <div class="total">TOTAL WITH SURCHARGE : ${receiptData.billing.totalWithSurcharge}</div>
 
       <div class="sep"></div>
+
+      ${receiptData.billing.showSeniorCitizenDiscount ? `
+      <div class="row" style="font-weight:700;font-size:15px;">SC Discount : ${receiptData.billing.seniorCitizenDiscount}</div>
+      <div class="sep"></div>
+      ` : ''}
 
       <div class="row">Notice:</div>
       <div class="row">1. Failure to pay on the specified date of Disconnection Date, we will be constrained to cut off your services connection, disconnection of your water service.</div>
@@ -1866,39 +1947,41 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             });
 
             await routesStorage.saveRoutes(
-              list.map((route) => {
-                const sid = getScheduleIdFromRecord(route);
-                const acct = getAccountKeyFromRecord(route);
-                const local =
-                  progressById[sid] ??
-                  progressById[Number(sid)] ??
-                  (acct ? progressByAcct[acct] : null);
-                const apiStatus = normalizeCustomerStatus(
-                  route.status,
-                  route.current_reading ?? route.currentReading,
-                  {
-                    has_downloaded_reading: route.has_downloaded_reading ?? route.hasDownloadedReading,
-                  }
-                );
-                const overlay = pickNonDowngradedProgress(
-                  apiStatus,
-                  route.current_reading ?? route.currentReading,
-                  local
-                );
-                return {
-                  ...route,
-                  reader_id: readerId,
-                  readerId: readerId,
-                  ...(overlay
-                    ? {
-                        status: overlay.status,
-                        current_reading: overlay.current_reading,
-                        currentReading: overlay.current_reading,
-                        consumption: overlay.consumption,
-                      }
-                    : {}),
-                };
-              })
+              filterToActiveAssignmentZones(
+                list.map((route) => {
+                  const sid = getScheduleIdFromRecord(route);
+                  const acct = getAccountKeyFromRecord(route);
+                  const local =
+                    progressById[sid] ??
+                    progressById[Number(sid)] ??
+                    (acct ? progressByAcct[acct] : null);
+                  const apiStatus = normalizeCustomerStatus(
+                    route.status,
+                    route.current_reading ?? route.currentReading,
+                    {
+                      has_downloaded_reading: route.has_downloaded_reading ?? route.hasDownloadedReading,
+                    }
+                  );
+                  const overlay = pickNonDowngradedProgress(
+                    apiStatus,
+                    route.current_reading ?? route.currentReading,
+                    local
+                  );
+                  return {
+                    ...route,
+                    reader_id: readerId,
+                    readerId: readerId,
+                    ...(overlay
+                      ? {
+                          status: overlay.status,
+                          current_reading: overlay.current_reading,
+                          currentReading: overlay.current_reading,
+                          consumption: overlay.consumption,
+                        }
+                      : {}),
+                  };
+                })
+              )
             );
           } catch (_) {}
           return fromApi;
@@ -2011,44 +2094,48 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             billMonth: readingData.customer?.billMonth || readingData.customer?.bill_month || null,
           });
           const stored = (await routesStorage.getRoutes()) || [];
-          const updatedStored = stored.map((r) => {
-            const sameId = matchesScheduleId(r, scheduleId);
-            const sameAcct =
-              accountKey && getAccountKeyFromRecord(r) === accountKey;
-            if (!sameId && !sameAcct) return r;
-            return {
-              ...r,
-              status: 'completed',
-              current_reading: readingData.current_reading,
-              currentReading: readingData.current_reading,
-              consumption:
-                readingData.consumption != null
-                  ? readingData.consumption
-                  : r.consumption,
-            };
-          });
+          const updatedStored = filterToActiveAssignmentZones(
+            stored.map((r) => {
+              const sameId = matchesScheduleId(r, scheduleId);
+              const sameAcct =
+                accountKey && getAccountKeyFromRecord(r) === accountKey;
+              if (!sameId && !sameAcct) return r;
+              return {
+                ...r,
+                status: 'completed',
+                current_reading: readingData.current_reading,
+                currentReading: readingData.current_reading,
+                consumption:
+                  readingData.consumption != null
+                    ? readingData.consumption
+                    : r.consumption,
+              };
+            })
+          );
           await routesStorage.saveRoutes(updatedStored);
         } catch (e) {
           console.warn('Could not update routes cache after sync:', e?.message);
         }
         setCustomers((prev) =>
-          prev.map((c) => {
-            const accountKey = (() => {
-              const a = getAccountFromReadingData(readingData);
-              return a ? String(a).trim().toLowerCase() : null;
-            })();
-            const sameId = matchesScheduleId(c, scheduleId);
-            const sameAcct =
-              accountKey && getAccountKeyFromRecord(c) === accountKey;
-            if (!sameId && !sameAcct) return c;
-            return {
-              ...c,
-              status: 'completed',
-              currentReading: readingData.current_reading,
-              current_reading: readingData.current_reading,
-              consumption: readingData.consumption,
-            };
-          })
+          filterToActiveAssignmentZones(
+            prev.map((c) => {
+              const accountKey = (() => {
+                const a = getAccountFromReadingData(readingData);
+                return a ? String(a).trim().toLowerCase() : null;
+              })();
+              const sameId = matchesScheduleId(c, scheduleId);
+              const sameAcct =
+                accountKey && getAccountKeyFromRecord(c) === accountKey;
+              if (!sameId && !sameAcct) return c;
+              return {
+                ...c,
+                status: 'completed',
+                currentReading: readingData.current_reading,
+                current_reading: readingData.current_reading,
+                consumption: readingData.consumption,
+              };
+            })
+          )
         );
       }
 

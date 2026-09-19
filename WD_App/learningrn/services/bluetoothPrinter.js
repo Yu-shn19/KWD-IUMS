@@ -7,6 +7,7 @@ import { Alert, Platform, PermissionsAndroid, NativeModules, Linking } from 'rea
 import { receiptLogoStorage, receiptFormatStorage } from './storage';
 import * as FileSystem from 'expo-file-system';
 import { Asset } from 'expo-asset';
+import { countCalendarDaysBetween } from '../utils/dateUtils';
 
 let BLEPrinter;
 let BLEPrinterModule = null;
@@ -607,6 +608,16 @@ function buildEscPosReceipt(receipt, options = {}) {
 		null;
 	const periodCoveredLine = `${formatPeriodDateEscPos(periodStartRaw)} - ${formatPeriodDateEscPos(periodEndRaw)}`;
 	push(formatField('Period', periodCoveredLine));
+	const numberOfDays =
+		receipt.numberOfDays != null && receipt.numberOfDays !== ''
+			? Number(receipt.numberOfDays)
+			: countCalendarDaysBetween(periodStartRaw, periodEndRaw);
+	push(
+		formatField(
+			'Number of Days',
+			numberOfDays != null && !Number.isNaN(numberOfDays) ? numberOfDays : '-'
+		)
+	);
 	push(formatField('Zone', receipt.zone) + `  Type: ${receipt.consumerType}`);
 	push(formatField('Sequence', receipt.sequence));
 	push(formatField('Account Number', receipt.accountNumber));
@@ -656,15 +667,21 @@ function buildEscPosReceipt(receipt, options = {}) {
 	sep();
 	push(LARGE_FONT_ON + BOLD_ON + formatAmountLine('TOTAL BILL:', receipt.billing.totalBill) + BOLD_OFF + LARGE_FONT_OFF);
 	push('');
-	center('IF UNPAID AT HWD OFFICE');
+	center('IF UNPAID AT KWD OFFICE');
 	push('\x1B\x61\x01' + `After: ${LARGE_FONT_ON}${BOLD_ON}${receipt.dueDate}${BOLD_OFF}${LARGE_FONT_OFF}` + '\x1B\x61\x00');
 	push(formatField('Surcharge', receipt.billing.surcharge));
 	center(`TOTAL W/ SUR: ${receipt.billing.totalWithSurcharge}`);
 	sep();
+	if (receipt.billing?.showSeniorCitizenDiscount || (parseFloat(receipt.billing?.seniorCitizenDiscount) > 0)) {
+		const scAmount = receipt.billing.seniorCitizenDiscount ?? '0.00';
+		const scLine = formatAmountLine('SC Discount:', scAmount);
+		push(MEDIUM_FONT_ON + BOLD_ON + scLine + BOLD_OFF + LARGE_FONT_OFF);
+		sep();
+	}
 	push('Notice:');
 	push('1) Failure to pay may lead to cut-off.');
 	push('2) Disregard if already paid.');
-	push('3) If service is discontinued, total amount due plus P200.00 reconnection fee.');
+	push('3) If service is discontinued, total amount due plus P300.00 reconnection fee.');
 	sep();
 	push(formatField('Reader', receipt.meterReader));
 	push(''); // Add spacing before QR code

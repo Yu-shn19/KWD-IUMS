@@ -20,7 +20,7 @@ export function getLocalDateYYYYMMDD(input = new Date()) {
 /**
  * Extract YYYY-MM-DD from a string or value without treating plain dates as UTC.
  */
-function parseToYYYYMMDD(raw) {
+export function parseToYYYYMMDD(raw) {
   if (raw == null || raw === '') return null;
   const s = String(raw).trim();
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -28,6 +28,22 @@ function parseToYYYYMMDD(raw) {
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return getLocalDateYYYYMMDD(d);
+}
+
+/**
+ * Whole calendar days from previous reading date to current reading date.
+ * Uses local YYYY-MM-DD so timezone does not shift the count.
+ * Returns null when either date is missing/invalid.
+ */
+export function countCalendarDaysBetween(startRaw, endRaw) {
+  const startYmd = parseToYYYYMMDD(startRaw);
+  const endYmd = parseToYYYYMMDD(endRaw);
+  if (!startYmd || !endYmd) return null;
+  const start = new Date(`${startYmd}T12:00:00`);
+  const end = new Date(`${endYmd}T12:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const dayMs = 24 * 60 * 60 * 1000;
+  return Math.max(0, Math.round((end.getTime() - start.getTime()) / dayMs));
 }
 
 /**
