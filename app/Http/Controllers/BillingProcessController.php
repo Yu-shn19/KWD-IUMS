@@ -2866,6 +2866,9 @@ class BillingProcessController extends Controller
             /**
      * Get surcharge candidate for a specific consumer account on selected bill date.
      * Used by Generate Penalty (Single Consumer).
+     *
+     * Unlike bulk Generate Surcharge, a payment does not disqualify the account:
+     * penalty is 10% of this bill's current amount even if the bill is already paid.
      */
     public function getSingleConsumerPenaltyCandidate(Request $request)
     {
@@ -2880,7 +2883,7 @@ class BillingProcessController extends Controller
             $billDate = Carbon::parse($request->input('bill_date'))->startOfDay();
             $today = Carbon::now()->startOfDay();
 
-            // Past-due schedules only; partial PAYMENT rows allowed â€” filter by reconciled balance below.
+            // Past-due schedules only. Payments are allowed — surcharge still applies to this current bill.
             $rows = MeterReadingSchedule::query()
                 ->leftJoin(mr_col('downloaded_readings as dr'), mr_col('dr.schedule_id'), '=', mr_col('meter_reading_schedules.id'))
                 ->joinConsumerZone()
@@ -2905,6 +2908,7 @@ class BillingProcessController extends Controller
                     'meter_reading_schedules.bill_date',
                     'meter_reading_schedules.due_date',
                     'meter_reading_schedules.consumer_zone_id',
+                    'meter_reading_schedules.current_billing as mrs_current_billing',
                     'dr.id as downloaded_id',
                     'dr.current_reading as pres_read',
                     'dr.consumption as volume',
@@ -2926,12 +2930,7 @@ class BillingProcessController extends Controller
                 }
 
                 $arrearsBeforeBill = 0.00;
-                $currentBill = (float) ($row->dr_current_billing ?? 0);
-                if ($currentBill <= 0 && $consumer) {
-                    $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
-                    $currentBill = (float) ($breakdown['current_billing'] ?? 0);
-                }
-
+                $billingLedger = null;
                 if ($consumer && !empty($row->schedule_id)) {
                     $billingLedger = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
                         ->where(mr_col('schedule_id'), $row->schedule_id)
@@ -2947,19 +2946,35 @@ class BillingProcessController extends Controller
                     }
                 }
 
-                $surchargeDetails = $this->resolveSurchargePenaltyDetails((float) $currentBill, (float) $arrearsBeforeBill, $consumer);
-                $penaltyBase = $surchargeDetails['penalty_base'];
-                $reconciledOwed = $surchargeDetails['reconciled_owed'];
-                $ledgerRemaining = $surchargeDetails['ledger_remaining'];
+                // Original current bill (not reduced by payments).
+                $currentBill = (float) ($row->dr_current_billing ?? 0);
+                if ($currentBill <= 0) {
+                    $currentBill = (float) ($row->mrs_current_billing ?? 0);
+                }
+                if ($currentBill <= 0 && $billingLedger) {
+                    $currentBill = (float) ($billingLedger->billamount ?? 0);
+                }
 
-                $wmc = ($currentBill > 0) ? (float) self::WMC_PER_MONTH : 0.00;
-                // Strict 10% of penalty base (no fixed minimum)
+                $surchargeDetails = $this->resolveSurchargePenaltyDetails((float) $currentBill, (float) $arrearsBeforeBill, $consumer);
+                $ledgerRemaining = $surchargeDetails['ledger_remaining'];
+                // Single consumer: 10% of this current bill, even if already paid / ledger remaining is 0.
+                $penaltyBase = max(0.0, (float) $currentBill);
+
                 $calculatedPenalty = round($penaltyBase * (float) self::PENALTY_RATE, 2);
                 $arrearsColumn = round(max(0.0, (float) $ledgerRemaining), 2);
                 $total = round($arrearsColumn + $calculatedPenalty, 2);
 
-                if ($reconciledOwed <= 0) {
+                if ($penaltyBase <= 0 || $calculatedPenalty <= 0) {
                     continue;
+                }
+
+                $hasPayment = false;
+                if ($consumer) {
+                    $hasPayment = $this->isScheduleCoveredByConsumerPayment(
+                        (int) $consumer->id,
+                        !empty($row->downloaded_id) ? (int) $row->downloaded_id : null,
+                        !empty($row->schedule_id) ? (int) $row->schedule_id : null
+                    );
                 }
 
                 $data[] = [
@@ -2984,7 +2999,9 @@ class BillingProcessController extends Controller
                     'ledger_remaining' => round($ledgerRemaining, 2),
                     'total' => $total,
                     'due_date' => $row->due_date ? Carbon::parse($row->due_date)->format('Y-m-d') : null,
-                    'status' => 'Past Due',
+                    'status' => $hasPayment ? 'Past Due (Paid)' : 'Past Due',
+                    'has_payment' => $hasPayment,
+                    'penalty_on_current_bill' => true,
                     'include' => true,
                 ];
             }
@@ -2996,11 +3013,17 @@ class BillingProcessController extends Controller
                 'bill_date' => $billDate->format('Y-m-d'),
             ];
 
+            if (count($data) > 0) {
+                $message = count($data) . ' consumer record(s) eligible for penalty on the current bill (payment does not block).';
+            } elseif ($rows->isEmpty()) {
+                $message = 'No past-due billing found for this account and bill date.';
+            } else {
+                $message = 'No current bill amount found to surcharge for this account and bill date.';
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => count($data) > 0
-                    ? count($data) . ' consumer record(s) eligible for penalty.'
-                    : 'No eligible past-due billing found for this account and bill date.',
+                'message' => $message,
                 'data' => $data,
                 'summary' => $summary,
             ]);
@@ -3017,7 +3040,8 @@ class BillingProcessController extends Controller
          
      /**
      * Apply surcharge (penalty) to selected past-due consumers.
-     * Creates Penalty records for each selected item from Generate Surcharge.
+     * Creates Penalty records for each selected item from Generate Surcharge
+     * or Generate Penalty (Single Consumer). Payment on the bill does not block apply.
      */
     public function applySurcharge(Request $request)
     {
