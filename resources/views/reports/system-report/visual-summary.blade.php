@@ -235,6 +235,95 @@
                         .vs-charts-row > [class*="col-"] > .card {
                             height: 100%;
                         }
+                        .vs-rank-card {
+                            border: none;
+                            border-radius: 0.65rem;
+                            box-shadow: 0 0.15rem 1.75rem rgba(58, 59, 69, 0.1);
+                            height: 100%;
+                            overflow: hidden;
+                        }
+                        .vs-rank-card .card-header {
+                            background: #fff;
+                            border-bottom: 1px solid #eaecf4;
+                            padding: 0.9rem 1.15rem 0.75rem;
+                            align-items: flex-start !important;
+                        }
+                        .vs-rank-card .vs-rank-title {
+                            font-size: 0.92rem;
+                            font-weight: 700;
+                            line-height: 1.3;
+                            margin: 0;
+                        }
+                        .vs-rank-card .vs-rank-subtitle {
+                            display: block;
+                            font-size: 0.75rem;
+                            font-weight: 500;
+                            color: #858796;
+                            margin-top: 0.2rem;
+                        }
+                        .vs-rank-table {
+                            font-size: 0.78rem;
+                            table-layout: fixed;
+                            width: 100%;
+                            margin: 0;
+                        }
+                        .vs-rank-table thead th {
+                            position: sticky;
+                            top: 0;
+                            z-index: 1;
+                            background: #f8f9fc;
+                            font-size: 0.7rem;
+                            font-weight: 700;
+                            letter-spacing: 0.02em;
+                            text-transform: uppercase;
+                            color: #858796;
+                            border-top: 0;
+                            white-space: nowrap;
+                            vertical-align: middle;
+                        }
+                        .vs-rank-table tbody td {
+                            vertical-align: middle;
+                            border-color: #f1f3f8;
+                        }
+                        .vs-rank-table th.vs-col-rank,
+                        .vs-rank-table td.vs-col-rank {
+                            width: 3.25rem;
+                            text-align: center;
+                            color: #858796;
+                            font-weight: 700;
+                        }
+                        .vs-rank-table th.vs-col-zone,
+                        .vs-rank-table td.vs-col-zone {
+                            width: 4.25rem;
+                            text-align: center;
+                            white-space: nowrap;
+                        }
+                        .vs-rank-table th.vs-col-m3,
+                        .vs-rank-table td.vs-col-m3 {
+                            width: 5.5rem;
+                            text-align: right;
+                            white-space: nowrap;
+                            font-variant-numeric: tabular-nums;
+                        }
+                        .vs-rank-table th.vs-col-amt,
+                        .vs-rank-table td.vs-col-amt {
+                            width: 7.25rem;
+                            text-align: right;
+                            white-space: nowrap;
+                            font-variant-numeric: tabular-nums;
+                            font-weight: 600;
+                        }
+                        .vs-rank-table td.vs-col-name {
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            white-space: nowrap;
+                            color: #3a3b45;
+                            font-weight: 600;
+                        }
+                        .vs-rank-table .vs-peso {
+                            font-weight: 500;
+                            margin-right: 0.15rem;
+                        }
                     </style>
 
                     <form method="get" action="{{ route('visual-summary') }}" class="visual-summary-filters">
@@ -503,31 +592,35 @@
                     <!-- Statistics Tables Row -->
                     <div class="row mb-4">
                         <!-- Top Consumers by Consumption -->
-                        <div class="col-lg-6">
-                            <div class="card shadow mb-4">
-                                <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                                    <h6 class="m-0 font-weight-bold text-primary">Top 10 Consumption Rankings (Fully Paid) <span class="text-muted font-weight-normal">(active · {{ $topTablesMonthLabel }})</span></h6>
+                        <div class="col-lg-6 mb-4 mb-lg-0">
+                            <div class="card vs-rank-card">
+                                <div class="card-header">
+                                    <h6 class="vs-rank-title text-primary">
+                                        Top 10 Consumption Rankings (Fully Paid)
+                                        <span class="vs-rank-subtitle">Active · {{ $topTablesMonthLabel }}</span>
+                                    </h6>
                                 </div>
                                 <div class="card-body p-0">
-                                    <div class="table-responsive" style="max-height: 400px; overflow: auto;">
-                                        <table class="table table-sm table-hover mb-0" style="font-size: 12px;">
-                                            <thead class="thead-light" style="position: sticky; top: 0;">
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover vs-rank-table">
+                                            <thead>
                                                 <tr>
-                                                    <th class="text-center py-2 px-3">Rank</th>
-                                                    <th class="py-2 px-3">Consumer Name</th>
-                                                    <th class="text-center py-2 px-3">Zone</th>
-                                                    <th class="text-center py-2 px-3">Total Consumption (m³)</th>
-                                                    <th class="text-center py-2 px-3">Amount</th>
+                                                    <th class="vs-col-rank py-2 px-2">#</th>
+                                                    <th class="py-2 px-2">Consumer</th>
+                                                    <th class="vs-col-zone py-2 px-2">Zone</th>
+                                                    <th class="vs-col-m3 py-2 px-2">m³</th>
+                                                    <th class="vs-col-amt py-2 px-3">Amount</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 @forelse ($topConsumption as $idx => $row)
+                                                    @php $name = (string) ($row->account_name ?? '—'); @endphp
                                                     <tr>
-                                                        <td class="text-center py-2 px-3">{{ $idx + 1 }}</td>
-                                                        <td class="py-2 px-3">{{ $row->account_name ?? '—' }}</td>
-                                                        <td class="text-center py-2 px-3">{{ $row->zone ?? '—' }}</td>
-                                                        <td class="text-center py-2 px-3">{{ number_format((float) ($row->total_consumption ?? 0)) }}</td>
-                                                        <td class="text-center py-2 px-3">₱ {{ number_format((float) ($row->total_amount ?? 0), 2) }}</td>
+                                                        <td class="vs-col-rank py-2 px-2">{{ $idx + 1 }}</td>
+                                                        <td class="vs-col-name py-2 px-2" title="{{ $name }}">{{ $name }}</td>
+                                                        <td class="vs-col-zone py-2 px-2">{{ $row->zone ?? '—' }}</td>
+                                                        <td class="vs-col-m3 py-2 px-2">{{ number_format((float) ($row->total_consumption ?? 0)) }}</td>
+                                                        <td class="vs-col-amt py-2 px-3"><span class="vs-peso">₱</span>{{ number_format((float) ($row->total_amount ?? 0), 2) }}</td>
                                                     </tr>
                                                 @empty
                                                     <tr>
@@ -543,28 +636,32 @@
 
                         <!-- Outstanding Accounts -->
                         <div class="col-lg-6">
-                            <div class="card shadow mb-4">
-                                <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
-                                    <h6 class="m-0 font-weight-bold text-danger">Top 10 Outstanding Accounts <span class="text-muted font-weight-normal">(active · {{ $topTablesMonthLabel }})</span></h6>
+                            <div class="card vs-rank-card">
+                                <div class="card-header">
+                                    <h6 class="vs-rank-title text-danger">
+                                        Top 10 Outstanding Accounts
+                                        <span class="vs-rank-subtitle">Active · {{ $topTablesMonthLabel }}</span>
+                                    </h6>
                                 </div>
                                 <div class="card-body p-0">
-                                    <div class="table-responsive" style="max-height: 400px; overflow: auto;">
-                                        <table class="table table-sm table-hover mb-0" style="font-size: 12px;">
-                                            <thead class="thead-light" style="position: sticky; top: 0;">
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-hover vs-rank-table">
+                                            <thead>
                                                 <tr>
-                                                    <th class="text-center py-2 px-3">Rank</th>
-                                                    <th class="py-2 px-3">Consumer Name</th>
-                                                    <th class="text-center py-2 px-3">Zone</th>
-                                                    <th class="text-center py-2 px-3">Amount</th>
+                                                    <th class="vs-col-rank py-2 px-2">#</th>
+                                                    <th class="py-2 px-2">Consumer</th>
+                                                    <th class="vs-col-zone py-2 px-2">Zone</th>
+                                                    <th class="vs-col-amt py-2 px-3">Amount</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 @forelse ($topOutstanding as $idx => $row)
+                                                    @php $name = (string) ($row->account_name ?? '—'); @endphp
                                                     <tr>
-                                                        <td class="text-center py-2 px-3">{{ $idx + 1 }}</td>
-                                                        <td class="py-2 px-3">{{ $row->account_name ?? '—' }}</td>
-                                                        <td class="text-center py-2 px-3">{{ $row->zone_code ?? '—' }}</td>
-                                                        <td class="text-center py-2 px-3 text-danger">₱ {{ number_format((float) $row->balance, 2) }}</td>
+                                                        <td class="vs-col-rank py-2 px-2">{{ $idx + 1 }}</td>
+                                                        <td class="vs-col-name py-2 px-2" title="{{ $name }}">{{ $name }}</td>
+                                                        <td class="vs-col-zone py-2 px-2">{{ $row->zone_code ?? '—' }}</td>
+                                                        <td class="vs-col-amt py-2 px-3 text-danger"><span class="vs-peso">₱</span>{{ number_format((float) $row->balance, 2) }}</td>
                                                     </tr>
                                                 @empty
                                                     <tr>
