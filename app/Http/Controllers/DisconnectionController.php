@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\View\View;
 use Illuminate\Support\Facades\Log;
 use Maatwebsite\Excel\Concerns\FromCollection;
@@ -1817,40 +1818,49 @@ class DisconnectionController extends Controller
     ): ?DisconnectionOrder {
         $doDisconnectionDate = mr_col('disconnection_date');
         $doStatus = mr_col('status');
-        $doListBillingMonth = mr_col('list_billing_month');
-        $doListBillingDate = mr_col('list_billing_date');
-        $doListFilterType = mr_col('list_filter_type');
+        $table = (new DisconnectionOrder)->getTable();
+        $hasListBillingMonth = Schema::hasColumn($table, 'list_billing_month');
+        $hasListBillingDate = Schema::hasColumn($table, 'list_billing_date');
+        $hasListFilterType = Schema::hasColumn($table, 'list_filter_type');
 
         $q = DisconnectionOrder::forConsumerZone($consumerId)
             ->whereDate($doDisconnectionDate, $disconnectionDate->format('Y-m-d'))
             ->where($doStatus, '!=', 'cancelled')
             ->lockForUpdate();
 
-        if ($listBillingMonth !== null && $listBillingMonth !== '') {
-            $q->where($doListBillingMonth, $listBillingMonth);
-        } else {
-            $q->whereNull($doListBillingMonth);
+        if ($hasListBillingMonth) {
+            $doListBillingMonth = mr_col('list_billing_month');
+            if ($listBillingMonth !== null && $listBillingMonth !== '') {
+                $q->where($doListBillingMonth, $listBillingMonth);
+            } else {
+                $q->whereNull($doListBillingMonth);
+            }
         }
 
-        if ($listBillingDateYmd !== null && $listBillingDateYmd !== '') {
-            $q->whereDate($doListBillingDate, $listBillingDateYmd);
-        } else {
-            $q->whereNull($doListBillingDate);
+        if ($hasListBillingDate) {
+            $doListBillingDate = mr_col('list_billing_date');
+            if ($listBillingDateYmd !== null && $listBillingDateYmd !== '') {
+                $q->whereDate($doListBillingDate, $listBillingDateYmd);
+            } else {
+                $q->whereNull($doListBillingDate);
+            }
         }
 
-        if ($listFilterType !== null && $listFilterType !== '') {
-            $q->where(function ($sub) use ($listFilterType, $doListFilterType) {
-                $sub->where($doListFilterType, $listFilterType);
-                // Legacy rows: migration backfilled null → disconnection_date; older saves may still have NULL.
-                if ($listFilterType === 'disconnection_date') {
-                    $sub->orWhereNull($doListFilterType);
-                }
-            });
-        } else {
-            $q->where(function ($sub) use ($doListFilterType) {
-                $sub->whereNull($doListFilterType)
-                    ->orWhere($doListFilterType, 'disconnection_date');
-            });
+        if ($hasListFilterType) {
+            $doListFilterType = mr_col('list_filter_type');
+            if ($listFilterType !== null && $listFilterType !== '') {
+                $q->where(function ($sub) use ($listFilterType, $doListFilterType) {
+                    $sub->where($doListFilterType, $listFilterType);
+                    if ($listFilterType === 'disconnection_date') {
+                        $sub->orWhereNull($doListFilterType);
+                    }
+                });
+            } else {
+                $q->where(function ($sub) use ($doListFilterType) {
+                    $sub->whereNull($doListFilterType)
+                        ->orWhere($doListFilterType, 'disconnection_date');
+                });
+            }
         }
 
         return $q->first();
@@ -2022,7 +2032,7 @@ class DisconnectionController extends Controller
                     ]);
                 } elseif (in_array($existingOrder->status, ['assigned', 'pending', 'in-progress'], true)) {
                     // Same list context + date already exists: refresh assignment and snapshot for the mobile app.
-                    $existingOrder->update([
+                    $existingOrder->update(DisconnectionOrder::filterTableAttributes([
                         'disconnector_id' => $disconnectorId,
                         'this_month_arrears' => $thisMonthArrears,
                         'last_month_arrears' => (float) $lastMonthArrearsCY,
@@ -2034,7 +2044,7 @@ class DisconnectionController extends Controller
                         'latest_unpaid_date' => $latestUnpaid,
                         'last_reading' => (float) ($latestScheduleReadingsByAccount->get($consumer->account_no, 0) ?? 0),
                         'assigned_at' => now(),
-                    ]);
+                    ]));
                     $updatedOrders[] = $existingOrder;
 
                     Log::info('Disconnection order reassigned', [
