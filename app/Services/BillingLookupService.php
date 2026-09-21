@@ -770,6 +770,13 @@ class BillingLookupService
             2
         );
 
+        // Credit or zero ledger balance: nothing is in arrears.
+        if ($accountData['current_balance'] <= 0.009) {
+            $billingData['current_arrears'] = 0.0;
+            $billingData['arrears'] = 0.0;
+            $billingData['prio_years'] = 0.0;
+        }
+
         return response()->json([
             'success' => true,
             'message' => $state->lookupSuccessMessage ?? 'Downloaded reading record loaded successfully from downloaded_readings table.',

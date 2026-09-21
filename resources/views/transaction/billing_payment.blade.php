@@ -1508,13 +1508,19 @@
                 }
                 let currentBilling = parseNumeric(data.current_billing);
                 let currentArrears = parseNumeric(data.current_arrears ?? data.arrears);
+                let prioYears = parseNumeric(data.prio_years ?? 0);
                 if (currentArrears < 0) {
                     currentBilling = Math.max(0, currentBilling - Math.abs(currentArrears));
                     currentArrears = 0;
                 }
+                // Credit / zero ledger balance: there is no amount in arrears.
+                if ((parseFloat(currentBalanceValue) || 0) <= 0.009) {
+                    currentArrears = 0;
+                    prioYears = 0;
+                }
                 setNumberFieldValue(document.getElementById('fieldCurrentBill'), currentBilling);
                 setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), data.current_meter_rental ?? 0);
-                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), data.prio_years ?? 0);
+                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), prioYears);
                 const arrearsField = document.getElementById('fieldPenalty');
                 if (arrearsField) {
                     setNumberFieldValue(arrearsField, currentArrears);
@@ -1562,10 +1568,11 @@
                 }
                 setNumberFieldValue(document.getElementById('fieldCurrentBill'), payment.current_billing ?? 0);
                 setNumberFieldValue(document.getElementById('fieldArrearsCurrent'), payment.current_mr ?? 0);
-                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), payment.prio_years ?? 0);
+                const creditBalance = (parseFloat(currentBalanceValue) || 0) <= 0.009;
+                setNumberFieldValue(document.getElementById('fieldArrearsPrevious'), creditBalance ? 0 : (payment.prio_years ?? 0));
                 const arrearsField = document.getElementById('fieldPenalty');
                 if (arrearsField) {
-                    setNumberFieldValue(arrearsField, payment.current_arrears ?? 0);
+                    setNumberFieldValue(arrearsField, creditBalance ? 0 : (payment.current_arrears ?? 0));
                     arrearsField.dispatchEvent(new Event('input', { bubbles: true }));
                 }
                 setNumberFieldValue(document.getElementById('fieldMaintenance'), payment.current_penalty ?? 0);
@@ -1934,7 +1941,7 @@
                 }
                 const rawBalance = document.getElementById('currentBalance')?.value;
                 const balanceForPy = rawBalance != null && rawBalance !== '' ? parseFloat(String(rawBalance).replace(/[^\d.-]/g, '')) : (typeof currentBalanceValue !== 'undefined' ? currentBalanceValue : null);
-                if (balanceForPy != null && !isNaN(balanceForPy) && balanceForPy >= 0) {
+                if (balanceForPy != null && !isNaN(balanceForPy)) {
                     url += `&current_balance=${encodeURIComponent(balanceForPy)}`;
                 }
                 const orFieldForDetails = document.getElementById('officialReceipt');

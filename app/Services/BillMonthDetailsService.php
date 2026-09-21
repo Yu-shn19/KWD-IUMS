@@ -78,7 +78,7 @@ class BillMonthDetailsService
                     'bill_month_to' => ['nullable', 'string'], // MM-YYYY format (optional)
                     'from_date' => ['nullable', 'date'], // YYYY-MM-DD: start of range from consumer_ledgers date/due_date
                     'to_date' => ['nullable', 'date'], // YYYY-MM-DD: end of range
-                    'current_balance' => ['nullable', 'numeric', 'min:0'], // optional: use displayed balance for PY formula so PY matches page
+                    'current_balance' => ['nullable', 'numeric'], // displayed ledger balance; <= 0 means credit / no arrears
                     'or_number' => ['nullable', 'string'],
                 ]);
                 
@@ -1148,6 +1148,11 @@ class BillMonthDetailsService
                 $s->arrearsCy = (float) ($dbBreakdown['current_arrears'] ?? 0);
                 $s->arrearsPy = (float) ($dbBreakdown['prio_years'] ?? 0);
                 $hasDbCurrentBillForSelectedMonth = !empty($selectedBillMonthYmd) && round($s->currentBill, 2) > 0;
+
+                if (round((float) $s->currentBalance, 2) <= 0.009) {
+                    $s->arrearsCy = 0.0;
+                    $s->arrearsPy = 0.0;
+                }
         
                 // Carry credit from latest balance before selected range start
                 // (e.g. previous month PAYMENT leaves -0.10, next month bill should reduce by 0.10).
@@ -1677,6 +1682,11 @@ class BillMonthDetailsService
                     );
                     $overlay = $this->preferLedgerBreakdownWhenOverlayEmpty($overlay, $s);
                     $overlay = $this->mergeUnpaidPenaltyIntoOverlay($overlay, $s);
+                }
+
+                if (round((float) $s->currentBalance, 2) <= 0.009) {
+                    $overlay['current_arrears'] = 0.0;
+                    $overlay['prio_years'] = 0.0;
                 }
 
                 $responsePaymentStatus = $hasExplicitOrPaidBreakdown
