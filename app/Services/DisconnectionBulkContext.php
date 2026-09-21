@@ -16,5 +16,6 @@ class DisconnectionBulkContext
         public Collection $allPayments,
         public Collection $penaltyLedgersByConsumer,
         public Collection $arAgingBucketsByConsumer,
+        public Collection $meterRentalArrearsByConsumer,
     ) {}
 }

@@ -8,6 +8,7 @@ use App\Models\DisconnectionOrder;
 use App\Models\MeterReadingSchedule;
 use App\Models\User;
 use App\Services\DisconnectionBulkContext;
+use App\Services\LedgerDmComponentsService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -146,7 +147,7 @@ class DisconnectionController extends Controller
         $zone = $request->get('zone');
         $billingMonth = $request->get('billing_month'); // Format: YYYY-MM
         $billingDate = $request->get('billing_date');
-        $filterType = $request->get('filter_type', 'disconnection_date'); // disconnection_date | 2_consecutive | 3_consecutive
+        $filterType = 'meter_rental_arrears';
         $hasAnyFilter = ! empty($zone) || ! empty($billingMonth) || ! empty($billingDate);
 
         // Keep the page lightweight on first load: show filters only until user applies at least one filter.
@@ -185,92 +186,78 @@ class DisconnectionController extends Controller
             ), $this->getOrdersTabData($request)));
         }
 
-        // Use different filter based on filter_type parameter
-        if (in_array($filterType, ['2_consecutive', '3_consecutive'], true)) {
-            $requiredMonths = $filterType === '2_consecutive' ? 2 : 3;
+        // Eligibility is Meter Rental Arrears > ₱60 only (same amount as Meter Reading Preparation).
+        $billingFilter = $billingMonth ?: $billingDate;
+        $isMonthFilter = ! empty($billingMonth);
+        $consumers = $this->getConsumersForDisconnection($zone, $billingFilter, $isMonthFilter);
 
-            return $this->getConsumersWithConsecutiveUnpaidMonths($request, $requiredMonths);
-        } else {
-            // Default: use disconnection date filter
-            // Priority: billing_month > billing_date
-            $billingFilter = $billingMonth ?: $billingDate;
-            $isMonthFilter = ! empty($billingMonth);
-            $consumers = $this->getConsumersForDisconnection($zone, $billingFilter, $isMonthFilter);
+        $totalOutstandingKey = mr_col('total_outstanding');
+        $czZoneCode = mr_col('zone_code');
+        $userRole = mr_col('role');
+        $userName = mr_col('name');
+        $mrsDisconnectionDate = mr_col('disconnection_date');
 
-            $totalOutstandingKey = mr_col('total_outstanding');
-            $czZoneCode = mr_col('zone_code');
-            $userRole = mr_col('role');
-            $userName = mr_col('name');
-            $mrsDisconnectionDate = mr_col('disconnection_date');
+        $consumersByZone = $consumers->groupBy($czZoneCode);
 
-            // Group by zone
-            $consumersByZone = $consumers->groupBy($czZoneCode);
+        $zones = ConsumerZone::select($czZoneCode)
+            ->distinct()
+            ->whereNotNull($czZoneCode)
+            ->orderBy($czZoneCode)
+            ->pluck($czZoneCode);
 
-            // Get all zones for filter
-            $zones = ConsumerZone::select($czZoneCode)
-                ->distinct()
-                ->whereNotNull($czZoneCode)
-                ->orderBy($czZoneCode)
-                ->pluck($czZoneCode);
+        $disconnectors = User::query()
+            ->where($userRole, 'disconnector')
+            ->orderBy($userName)
+            ->get();
 
-            // Get disconnectors for dropdown
-            $disconnectors = User::query()
-                ->where($userRole, 'disconnector')
-                ->orderBy($userName)
-                ->get();
+        $totalConsumers = $consumers->count();
+        $totalOutstanding = $consumers->sum($totalOutstandingKey);
 
-            // Calculate totals
-            $totalConsumers = $consumers->count();
-            $totalOutstanding = $consumers->sum($totalOutstandingKey);
-
-            // Default disconnection date for the form: from schedule when billing month/date is selected
-            $defaultDisconnectionDate = null;
-            if ($billingFilter) {
-                $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter, $mrsDisconnectionDate) {
-                    $q = MeterReadingSchedule::query()->whereNotNull($mrsDisconnectionDate);
-                    if ($withZone && $zone) {
-                        $q->forZoneCode($zone);
-                    }
-                    if ($isMonthFilter) {
-                        $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
-                        $q->where(function ($query) use ($monthCarbon) {
-                            $query->whereYear('bill_month', $monthCarbon->year)
-                                ->whereMonth('bill_month', $monthCarbon->month);
-                        });
-                    } else {
-                        $billingDateCarbon = Carbon::parse($billingFilter);
-                        $q->where(function ($query) use ($billingDateCarbon) {
-                            $query->whereDate('bill_date', $billingDateCarbon)
-                                ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'));
-                        });
-                    }
-
-                    return $q->orderBy($mrsDisconnectionDate)->first();
-                };
-                $schedule = $querySchedule(true);
-                if (! $schedule && $zone) {
-                    $schedule = $querySchedule(false); // fallback: any zone for this billing month
+        $defaultDisconnectionDate = null;
+        if ($billingFilter) {
+            $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter, $mrsDisconnectionDate) {
+                $q = MeterReadingSchedule::query()->whereNotNull($mrsDisconnectionDate);
+                if ($withZone && $zone) {
+                    $q->forZoneCode($zone);
                 }
-                if ($schedule && $schedule->disconnection_date) {
-                    $defaultDisconnectionDate = Carbon::parse($schedule->disconnection_date)->format('Y-m-d');
+                if ($isMonthFilter) {
+                    $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
+                    $q->where(function ($query) use ($monthCarbon) {
+                        $query->whereYear('bill_month', $monthCarbon->year)
+                            ->whereMonth('bill_month', $monthCarbon->month);
+                    });
+                } else {
+                    $billingDateCarbon = Carbon::parse($billingFilter);
+                    $q->where(function ($query) use ($billingDateCarbon) {
+                        $query->whereDate('bill_date', $billingDateCarbon)
+                            ->orWhereDate('bill_month', $billingDateCarbon->format('Y-m-01'));
+                    });
                 }
-                // Fallback: use first consumer's disconnection date from the list (from their schedule)
-                if (! $defaultDisconnectionDate && $consumers->isNotEmpty()) {
-                    $first = $consumers->first();
-                    if (! empty($first->disconnection_date)) {
-                        $defaultDisconnectionDate = Carbon::parse($first->disconnection_date)->format('Y-m-d');
-                    }
+
+                return $q->orderBy($mrsDisconnectionDate)->first();
+            };
+            $schedule = $querySchedule(true);
+            if (! $schedule && $zone) {
+                $schedule = $querySchedule(false);
+            }
+            if ($schedule && $schedule->disconnection_date) {
+                $defaultDisconnectionDate = Carbon::parse($schedule->disconnection_date)->format('Y-m-d');
+            }
+            if (! $defaultDisconnectionDate && $consumers->isNotEmpty()) {
+                $first = $consumers->first();
+                if (! empty($first->disconnection_date)) {
+                    $defaultDisconnectionDate = Carbon::parse($first->disconnection_date)->format('Y-m-d');
                 }
             }
-            if (! $defaultDisconnectionDate) {
-                $defaultDisconnectionDate = Carbon::today()->addDays(7)->format('Y-m-d');
-            }
-
-            return view('disconnection.index', array_merge(
-                compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
-                $this->getOrdersTabData($request)
-            ));
         }
+        if (! $defaultDisconnectionDate) {
+            $defaultDisconnectionDate = Carbon::today()->addDays(7)->format('Y-m-d');
+        }
+
+        return view('disconnection.index', array_merge(
+            compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
+            $this->getOrdersTabData($request)
+        ));
     }
 
     /**
@@ -497,7 +484,20 @@ class DisconnectionController extends Controller
             allPayments: $allPayments,
             penaltyLedgersByConsumer: $penaltyLedgersByConsumer,
             arAgingBucketsByConsumer: $this->computeAraAgingBucketsBulk($consumerIds, $ledgerCutoffDate),
+            meterRentalArrearsByConsumer: $this->meterRentalArrearsByConsumer($consumerIds),
         );
+    }
+
+    /**
+     * Meter Rental Arrears per consumer — same formula as Meter Reading Preparation.
+     *
+     * @return Collection<int, float>
+     */
+    private function meterRentalArrearsByConsumer(Collection $consumerIds): Collection
+    {
+        $ids = $consumerIds->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
+
+        return collect(app(LedgerDmComponentsService::class)->meterRentalArrearsByConsumer($ids));
     }
 
     private function buildEligibleDisconnectionConsumers(Collection $accountNos, DisconnectionBulkContext $context): Collection
@@ -552,8 +552,8 @@ class DisconnectionController extends Controller
             'over_90' => 0.0,
         ]);
 
-        $hasLastMonthCyBucket = round((float) ($agingBuckets['days_60'] ?? 0) + (float) ($agingBuckets['days_90'] ?? 0), 2) > 0.01;
-        if (! $hasLastMonthCyBucket) {
+        $meterRentalArrears = round((float) $context->meterRentalArrearsByConsumer->get((int) $consumer->id, 0), 2);
+        if (! app(LedgerDmComponentsService::class)->isEligibleForDisconnectionByMeterRentalArrears($meterRentalArrears)) {
             return null;
         }
 
@@ -574,6 +574,7 @@ class DisconnectionController extends Controller
         $consumer->aging_60_days = $agingBuckets['days_60'];
         $consumer->aging_90_days = $agingBuckets['days_90'];
         $consumer->aging_over_90 = $agingBuckets['over_90'];
+        $consumer->meter_rental_arrears = $meterRentalArrears;
 
         return $consumer;
     }
@@ -1321,7 +1322,8 @@ class DisconnectionController extends Controller
      *     allPayments: Collection<int, array<int>>,
      *     penaltyLedgersByConsumer: Collection<int, Collection<int, ConsumerLedger>>,
      *     latestScheduleReadingsByAccount: Collection<string, float|int>,
-     *     latestCurrentBillsByAccount: Collection<string, float|int>
+     *     latestCurrentBillsByAccount: Collection<string, float|int>,
+     *     meterRentalArrearsByConsumer: Collection<int, float>
      * }
      */
     private function loadConsecutiveUnpaidLookupData(
@@ -1396,6 +1398,7 @@ class DisconnectionController extends Controller
                 $isMonthFilter
             ),
             'latestCurrentBillsByAccount' => $this->latestCurrentBillsByAccount($consumerIds, $consumersById),
+            'meterRentalArrearsByConsumer' => $this->meterRentalArrearsByConsumer($consumerIds),
         ];
     }
 
@@ -1406,7 +1409,8 @@ class DisconnectionController extends Controller
      *     allPayments: Collection<int, array<int>>,
      *     penaltyLedgersByConsumer: Collection<int, Collection<int, ConsumerLedger>>,
      *     latestScheduleReadingsByAccount: Collection<string, float|int>,
-     *     latestCurrentBillsByAccount: Collection<string, float|int>
+     *     latestCurrentBillsByAccount: Collection<string, float|int>,
+     *     meterRentalArrearsByConsumer: Collection<int, float>
      * }  $lookupData
      */
     private function filterConsecutiveUnpaidEligibleConsumers(
@@ -1433,7 +1437,8 @@ class DisconnectionController extends Controller
      *     allPayments: Collection<int, array<int>>,
      *     penaltyLedgersByConsumer: Collection<int, Collection<int, ConsumerLedger>>,
      *     latestScheduleReadingsByAccount: Collection<string, float|int>,
-     *     latestCurrentBillsByAccount: Collection<string, float|int>
+     *     latestCurrentBillsByAccount: Collection<string, float|int>,
+     *     meterRentalArrearsByConsumer: Collection<int, float>
      * }  $lookupData
      */
     private function tryEnrichConsecutiveUnpaidConsumer(
@@ -1448,6 +1453,11 @@ class DisconnectionController extends Controller
 
         $currentBalance = $lookupData['latestBalances']->get($consumer->id, 0);
         if ($currentBalance <= 0) {
+            return null;
+        }
+
+        $meterRentalArrears = round((float) ($lookupData['meterRentalArrearsByConsumer']->get((int) $consumer->id, 0) ?? 0), 2);
+        if (! app(LedgerDmComponentsService::class)->isEligibleForDisconnectionByMeterRentalArrears($meterRentalArrears)) {
             return null;
         }
 
@@ -1493,6 +1503,7 @@ class DisconnectionController extends Controller
         $consumer->aging_60_days = $agingBuckets['days_60'];
         $consumer->aging_90_days = $agingBuckets['days_90'];
         $consumer->aging_over_90 = $agingBuckets['over_90'];
+        $consumer->meter_rental_arrears = $meterRentalArrears;
 
         return $consumer;
     }
@@ -2068,7 +2079,7 @@ class DisconnectionController extends Controller
             'assign_to' => 'nullable|exists:users,id',
             'list_billing_month' => 'nullable|date_format:Y-m',
             'list_billing_date' => 'nullable|date',
-            'list_filter_type' => 'nullable|string|in:disconnection_date,2_consecutive,3_consecutive',
+            'list_filter_type' => 'nullable|string|in:disconnection_date,meter_rental_arrears,2_consecutive,3_consecutive',
             'financials' => 'nullable|array',
             'financials.*' => 'array',
             'financials.*.this_month_arrears' => 'nullable|numeric|min:0',

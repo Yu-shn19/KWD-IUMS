@@ -770,7 +770,7 @@
                     element: '[data-tour="disconnection-filters"]',
                     popover: {
                         title: 'Filters',
-                        description: 'Set Zone, Filter Type (disconnection date or consecutive unpaid months), Billing Month, Billing Date, or search text. Click Apply to load candidates.',
+                        description: 'Set Zone, Billing Month, or Billing Date, then Filter. Candidates are accounts with Meter Rental Arrears greater than ₱60.',
                         side: 'bottom',
                         align: 'start',
                     },

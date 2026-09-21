@@ -146,13 +146,7 @@
                         <div>
                             <h1 class="h3 mb-1 text-dark font-weight-bold">Disconnection Management</h1>
                             <p class="text-muted mb-0 small">
-                                @if(isset($filterType) && $filterType === '2_consecutive')
-                                    List of consumers with 2 consecutive months without payment
-                                @elseif(isset($filterType) && $filterType === '3_consecutive')
-                                    List of consumers with 3 consecutive months without payment
-                                @else
-                                    List of consumers with passed disconnection dates
-                                @endif
+                                List of consumers with Meter Rental Arrears greater than ₱60 (same amount as Meter Reading Preparation)
                             </p>
                         </div>
                         @if(isset($totalConsumers) && $totalConsumers > 0)
@@ -187,20 +181,6 @@
                                         </select>
                                     </div>
                                     <div class="col-md-3">
-                                        <label class="small font-weight-bold">Filter Type</label>
-                                        <select name="filter_type" class="form-control form-control-sm">
-                                            <option value="disconnection_date" {{ (!isset($filterType) || $filterType == 'disconnection_date') ? 'selected' : '' }}>
-                                                Disconnection Date
-                                            </option>
-                                            <option value="2_consecutive" {{ (isset($filterType) && $filterType == '2_consecutive') ? 'selected' : '' }}>
-                                                2 Months Consecutive
-                                            </option>
-                                            <option value="3_consecutive" {{ (isset($filterType) && $filterType == '3_consecutive') ? 'selected' : '' }}>
-                                                3 Months Consecutive
-                                            </option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-2">
                                         <label class="small font-weight-bold">
                                             Billing Month
                                             <i class="fas fa-info-circle text-info ml-1" 
@@ -268,7 +248,11 @@
                                     <div class="card-body text-center py-5">
                                         <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
                                         <h5 class="text-muted">No consumers found for disconnection</h5>
-                                        <p class="text-muted">Apply at least one filter (zone, billing month, or billing date) to load disconnection candidates.</p>
+                                        @if(!empty($zone) || !empty($billingMonth) || !empty($billingDate))
+                                            <p class="text-muted">No accounts in this filter have Meter Rental Arrears greater than ₱60.</p>
+                                        @else
+                                            <p class="text-muted">Apply at least one filter (zone, billing month, or billing date) to load disconnection candidates.</p>
+                                        @endif
                                     </div>
                                 </div>
                             @else
@@ -277,7 +261,7 @@
                                     {{-- List filter context: duplicate detection is scoped per billing month / date / mode --}}
                                     <input type="hidden" name="list_billing_month" value="{{ $billingMonth ?? '' }}">
                                     <input type="hidden" name="list_billing_date" value="{{ $billingDate ?? '' }}">
-                                    <input type="hidden" name="list_filter_type" value="{{ $filterType ?? 'disconnection_date' }}">
+                                    <input type="hidden" name="list_filter_type" value="meter_rental_arrears">
                                     <div id="financialsHiddenContainer" aria-hidden="true"></div>
                                     <div class="row mb-3">
                                         <div class="col-md-6">
@@ -350,6 +334,7 @@
                                                                     <th>Meter No.</th>
                                                                     <th>Latest Reading</th>
                                                                     <th class="text-right">Current Bill + WM (20)</th>
+                                                                    <th class="text-right">Meter Rental Arrears</th>
                                                                     <th class="text-right">This Month / Arrears</th>
                                                                     <th class="text-right">Last Month / Arrears CY</th>
                                                                     <th class="text-right">Other / A/R</th>
@@ -391,6 +376,7 @@
                                                                         <td>{{ $consumer->meter_number }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->last_reading ?? 0), 0) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->current_billing_with_maintenance ?? 20), 2) }}</td>
+                                                                        <td class="text-right font-weight-bold {{ (float)($consumer->meter_rental_arrears ?? 0) > 60 ? 'text-danger' : 'text-muted' }}">{{ number_format((float)($consumer->meter_rental_arrears ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_30_days ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_60_days ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_90_days ?? 0) + (float)($consumer->aging_over_90 ?? 0), 2) }}</td>
@@ -656,11 +642,7 @@
 
     @if(!$consumersByZone->isEmpty())
         @php
-            $filterTypeLabel = match ($filterType ?? '') {
-                '2_consecutive' => '2 consecutive months without payment',
-                '3_consecutive' => '3 consecutive months without payment',
-                default => 'Passed disconnection dates',
-            };
+            $filterTypeLabel = 'Meter Rental Arrears greater than ₱60';
             $zoneLabel = !empty($zone ?? null) ? 'Zone ' . $zone : 'All zones';
             $billingMonthLabel = '—';
             if (!empty($billingMonth ?? null)) {
