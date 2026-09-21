@@ -1046,7 +1046,7 @@ class BillingProcessController extends Controller
             $query->where(mr_col('paid_at'), '>=', $penaltyDate->copy()->startOfDay()->format('Y-m-d H:i:s'));
         }
 
-        return (float) $query->sum('penalty');
+        return (float) $query->sum('current_penalty');
     }
 
     /**
@@ -1103,7 +1103,7 @@ class BillingProcessController extends Controller
      */
     private function isPenaltyLedgerRowUnpaid(ConsumerLedger $row, int $consumerZoneId): bool
     {
-        if ((string) ($row->trans ?? '') !== 'PENALTY') {
+        if (strtoupper(trim((string) ($row->trans ?? ''))) !== 'PENALTY') {
             return false;
         }
         $amt = (float) ($row->penalty ?? 0);
@@ -1137,7 +1137,7 @@ class BillingProcessController extends Controller
                 if ($penaltyDate) {
                     $readingPenaltyQuery->where(mr_col('paid_at'), '>=', $penaltyDate->copy()->startOfDay()->format('Y-m-d H:i:s'));
                 }
-                $paidPenalty += (float) $readingPenaltyQuery->sum('penalty');
+                $paidPenalty += (float) $readingPenaltyQuery->sum('current_penalty');
             }
             $paidPenalty += $this->getNullReadingPenaltyPaidForScheduleMonth($consumerZoneId, (int) $row->schedule_id, $penaltyDate);
             if ($paidPenalty + 0.005 >= $amt) {

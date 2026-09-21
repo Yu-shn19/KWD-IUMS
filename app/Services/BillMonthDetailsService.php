@@ -32,6 +32,7 @@ class BillMonthDetailsService
 
     public function handle(Request $request): JsonResponse
     {
+        try {
         $this->scheduleById = [];
         $s = new BillMonthDetailsState();
 
@@ -56,6 +57,17 @@ class BillMonthDetailsService
         $this->applyReconciliationAndFinalize($request, $s);
 
         return $this->buildSuccessResponse($s);
+        } catch (Throwable $e) {
+            Log::error('Failed to load bill month details', [
+                'error' => $e->getMessage(),
+                'account_number' => $request->input('account_number'),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to load bill month details.',
+            ], 500);
+        }
     }
 
     private function parseInputAndResolveConsumer(Request $request, BillMonthDetailsState $s): ?JsonResponse
@@ -1664,6 +1676,7 @@ class BillMonthDetailsService
                         $paidAfter
                     );
                     $overlay = $this->preferLedgerBreakdownWhenOverlayEmpty($overlay, $s);
+                    $overlay = $this->mergeUnpaidPenaltyIntoOverlay($overlay, $s);
                 }
 
                 $responsePaymentStatus = $hasExplicitOrPaidBreakdown
@@ -1963,7 +1976,7 @@ class BillMonthDetailsService
         );
 
         if ($overlayTotal > 0.009) {
-            return $overlay;
+            return $this->mergeUnpaidPenaltyIntoOverlay($overlay, $s);
         }
 
         if ($ledgerTotal > 0.009) {
@@ -1976,6 +1989,43 @@ class BillMonthDetailsService
         }
 
         return $ledger;
+    }
+
+    /**
+     * Schedule overlay often stores penalty as 0 even after surcharge is posted
+     * to penalties / consumer_ledgers. Keep those unpaid amounts in Current Penalty.
+     *
+     * @param array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float} $overlay
+     * @return array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float}
+     */
+    private function mergeUnpaidPenaltyIntoOverlay(array $overlay, BillMonthDetailsState $s): array
+    {
+        $overlayPenalty = round(max(0.0, (float) ($overlay['penalty'] ?? 0)), 2);
+        $ledgerPenalty = round(max(0.0, (float) $s->penaltyAmount), 2);
+        if ($overlayPenalty > 0.009) {
+            $overlay['penalty'] = max($overlayPenalty, $ledgerPenalty);
+            return $overlay;
+        }
+        if ($ledgerPenalty > 0.009) {
+            $overlay['penalty'] = $ledgerPenalty;
+            return $overlay;
+        }
+
+        try {
+            $fromTable = (float) Penalty::query()
+                ->where(mr_col('consumer_zone_id'), $s->consumer->id)
+                ->where(function ($q) {
+                    $q->whereNull(mr_col('paid_at'))->orWhere(mr_col('paid_at'), '');
+                })
+                ->sum('penalty_amount');
+            if ($fromTable > 0.009) {
+                $overlay['penalty'] = round($fromTable, 2);
+            }
+        } catch (Throwable $e) {
+            // Keep overlay penalty when the penalties table cannot be read.
+        }
+
+        return $overlay;
     }
 
     /**

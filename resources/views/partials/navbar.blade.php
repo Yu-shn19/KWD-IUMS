@@ -824,6 +824,9 @@ use Illuminate\Support\Facades\Storage;
           };
 
           const poll = async () => {
+            if (document.hidden) {
+              return;
+            }
             try {
               let cached = pruneExpiredAlerts(loadCachedAlerts());
               const since = encodeURIComponent(getLastSeen());

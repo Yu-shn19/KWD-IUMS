@@ -886,6 +886,9 @@ class BillingLookupService
         $currentArrears = round((float) ($schedule?->arrears ?? 0), 2);
         $prioYears = round((float) ($schedule?->prior_years ?? 0), 2);
         $penalty = round((float) ($schedule?->penalty ?? 0), 2);
+        if ($penalty <= 0.009) {
+            $penalty = $this->resolveLookupPenalty($state, $consumer);
+        }
         $meterRentalArrears = round((float) ($schedule?->meter_rental_arrears ?? 0), 2);
 
         if ($currentArrears < 0) {
@@ -976,6 +979,9 @@ class BillingLookupService
                     }
                 });
             foreach ($penaltyQuery->get() as $rec) {
+                if (!empty($rec->paid_at)) {
+                    continue;
+                }
                 if ($rec->penalty_amount !== null) {
                     $penalty += (float) $rec->penalty_amount;
                 }

@@ -800,7 +800,55 @@
             const deletePaymentEndpoint = @json(route('billing-payment.delete'));
             const ledgerRoute = @json(route('ledger'));
             let currentLookupController = null;
+            let billMonthDetailsController = null;
+            let lookupInFlight = false;
+            let skipAccountBlurLookup = false;
             let lastLookupKey = null;
+            const billingPaymentFetchQueue = [];
+            let billingPaymentFetchBusy = false;
+            const queuedFetch = (input, init = {}) => new Promise((resolve, reject) => {
+                const job = { input, init, resolve, reject, aborted: false };
+                const signal = init && init.signal;
+                if (signal) {
+                    if (signal.aborted) {
+                        reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+                        return;
+                    }
+                    signal.addEventListener('abort', () => {
+                        job.aborted = true;
+                        reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+                    }, { once: true });
+                }
+                billingPaymentFetchQueue.push(job);
+                const pump = async () => {
+                    if (billingPaymentFetchBusy) {
+                        return;
+                    }
+                    const next = billingPaymentFetchQueue.shift();
+                    if (!next) {
+                        return;
+                    }
+                    if (next.aborted) {
+                        pump();
+                        return;
+                    }
+                    billingPaymentFetchBusy = true;
+                    try {
+                        const response = await fetch(next.input, next.init);
+                        if (!next.aborted) {
+                            next.resolve(response);
+                        }
+                    } catch (error) {
+                        if (!next.aborted) {
+                            next.reject(error);
+                        }
+                    } finally {
+                        billingPaymentFetchBusy = false;
+                        pump();
+                    }
+                };
+                pump();
+            });
             let currentDownloadedId = null;
             let currentBalanceValue = 0;
             let latestBillMonth = null; // Store the latest/current bill month
@@ -1823,7 +1871,9 @@
                 if (!unpaidBillMonth) return;
                 
                 try {
-                    const response = await fetch(`{{ route('billing-payment.unpaid-months') }}?account_number=${encodeURIComponent(accountNumber)}`);
+                    const response = await queuedFetch(`{{ route('billing-payment.unpaid-months') }}?account_number=${encodeURIComponent(accountNumber)}`, {
+                        headers: { Accept: 'application/json' }
+                    });
                     const result = await response.json();
                     
                     if (result.success && result.data && result.data.length > 0) {
@@ -1866,6 +1916,11 @@
                 }
                 
                 isLoadingFromMonthSelector = true;
+                if (billMonthDetailsController) {
+                    billMonthDetailsController.abort();
+                }
+                billMonthDetailsController = new AbortController();
+                const detailsSignal = billMonthDetailsController.signal;
                 
                 let url = `{{ route('billing-payment.bill-month-details') }}?account_number=${encodeURIComponent(accountNumber)}`;
                 if (useDateRange) {
@@ -1887,9 +1942,38 @@
                 if (useOrForBreakdownLookup && orValueForDetails) {
                     url += `&or_number=${encodeURIComponent(orValueForDetails)}`;
                 }
+                const fetchBillMonthDetails = async () => {
+                    const response = await queuedFetch(url, { signal: detailsSignal, headers: { Accept: 'application/json' } });
+                    const result = await response.json().catch(() => null);
+                    if (!response.ok || !result) {
+                        const err = new Error('Bill month details request failed');
+                        err.retryable = true;
+                        throw err;
+                    }
+                    return result;
+                };
                 try {
-                    const response = await fetch(url);
-                    const result = await response.json();
+                    let result;
+                    let lastError = null;
+                    for (let attempt = 0; attempt < 4; attempt++) {
+                        try {
+                            result = await fetchBillMonthDetails();
+                            lastError = null;
+                            break;
+                        } catch (attemptError) {
+                            lastError = attemptError;
+                            if (attemptError?.name === 'AbortError' || detailsSignal.aborted) {
+                                throw attemptError;
+                            }
+                            await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+                            if (detailsSignal.aborted) {
+                                throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+                            }
+                        }
+                    }
+                    if (lastError) {
+                        throw lastError;
+                    }
                     
                     if (result.success && result.data) {
                         const data = result.data;
@@ -1936,13 +2020,10 @@
                         updateTotals();
                     }
                 } catch (error) {
-                    console.error('Error loading bill month details:', error);
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Error',
-                        text: 'Failed to load bill month details.',
-                        confirmButtonColor: '#e74a3b'
-                    });
+                    if (error?.name === 'AbortError' || detailsSignal.aborted) {
+                        return;
+                    }
+                    console.warn('Bill month details could not be refreshed; keeping lookup values.', error);
                 } finally {
                     setTimeout(() => {
                         isLoadingFromMonthSelector = false;
@@ -2066,11 +2147,7 @@
                 }
                 renderScDiscountLedgerText(account);
                 
-                // Fetch unpaid bill months if there's a current balance
-                if (currentBalanceValue > 0.01 && account.number) {
-                    fetchUnpaidBillMonths(account.number);
-                } else {
-                    // Hide bill month selector if no balance
+                if (!(currentBalanceValue > 0.01 && account.number)) {
                     const billMonthSelectorGroup = document.getElementById('billMonthSelectorGroup');
                     if (billMonthSelectorGroup) {
                         billMonthSelectorGroup.style.display = 'none';
@@ -2177,68 +2254,7 @@
                 if (!displayedBillMonthKey && billMonthField && billMonthField.value) {
                     displayedBillMonthKey = String(billMonthField.value).trim();
                 }
-                if (!keepPaidMonthOrBreakdown && !lockPaidOrBreakdown && account.number && (displayedBillMonthKey || transactionDateField?.value)) {
-                    // Always use bill month for date-meaning methods; only fall back to date-range when bill month is missing.
-                    const txDate = transactionDateField?.value?.trim();
-                    let url = `{{ route('billing-payment.bill-month-details') }}?account_number=${encodeURIComponent(account.number)}`;
-                    if (displayedBillMonthKey) {
-                        url += `&bill_month_from=${encodeURIComponent(displayedBillMonthKey)}&bill_month_to=${encodeURIComponent(displayedBillMonthKey)}`;
-                    } else if (txDate) {
-                        url += `&from_date=${encodeURIComponent(txDate)}&to_date=${encodeURIComponent(txDate)}`;
-                    }
-                    if (txDate) {
-                        url += `&transaction_date=${encodeURIComponent(txDate)}`;
-                    }
-                    const rawBalance = document.getElementById('currentBalance')?.value;
-                    const balanceForPy = rawBalance != null && rawBalance !== '' ? parseFloat(String(rawBalance).replace(/[^\d.-]/g, '')) : (typeof currentBalanceValue !== 'undefined' ? currentBalanceValue : null);
-                    if (balanceForPy != null && !isNaN(balanceForPy) && balanceForPy >= 0) {
-                        url += `&current_balance=${encodeURIComponent(balanceForPy)}`;
-                    }
-                    const orFieldForLookup = document.getElementById('officialReceipt');
-                    const orValueForLookup = orFieldForLookup ? String(orFieldForLookup.value || '').trim() : '';
-                    if (useOrForBreakdownLookup && orValueForLookup) {
-                        url += `&or_number=${encodeURIComponent(orValueForLookup)}`;
-                    }
-                    fetch(url)
-                        .then(r => r.json())
-                        .then(result => {
-                            if (result.success && result.data) {
-                // Payment status: use consumer_payment only. Paid when bill-month-details returns paid (OR used); otherwise Unpaid.
                 if (typeof setPaymentStatusForMonth === 'function') {
-                    const paymentStatusFromApi = result.data.payment_status === 'paid';
-                    setPaymentStatusForMonth(paymentStatusFromApi ? 'paid' : 'unpaid');
-                }
-                                applyScheduleDownloadedBreakdown(result.data);
-                                setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
-                                latestServerSeniorDiscount = parseNumeric(result.data.senior_citizen_discount ?? 0);
-                                setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), latestServerSeniorDiscount);
-                                setNumberFieldValue(document.getElementById('fieldMaterials'), 0);
-                                setNumberFieldValue(document.getElementById('fieldFees'), 0);
-                                setNumberFieldValue(document.getElementById('fieldInspection'), 0);
-                                const enableSeniorDiscountCheckbox = document.getElementById('enableSeniorDiscount');
-                                if (enableSeniorDiscountCheckbox) {
-                                    const shouldEnableSeniorDiscount = currentAccountIsSenior;
-                                    enableSeniorDiscountCheckbox.checked = shouldEnableSeniorDiscount;
-                                    if (shouldEnableSeniorDiscount && typeof applySeniorCitizenDiscount === 'function') {
-                                        applySeniorCitizenDiscount();
-                                    } else {
-                                        // Keep computed value in cache, but do not apply discount when unchecked.
-                                        setNumberFieldValue(document.getElementById('fieldSeniorDiscount'), 0);
-                                        const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
-                                        if (seniorDiscountField) seniorDiscountField.readOnly = false;
-                                        if (typeof updateTotals === 'function') updateTotals();
-                                    }
-                                }
-                                if ((parseFloat(currentBalanceValue) || 0) <= 0.009 && !lockPaidOrBreakdown && !breakdownHasScheduleAmounts(result.data)) {
-                                    clearPaymentBreakdown();
-                                }
-                                if (typeof updateTotals === 'function') updateTotals();
-                            }
-                        })
-                        .catch(() => {
-                            setPaymentStatusForMonth(isPaid ? 'paid' : 'unpaid');
-                        });
-                } else {
                     setPaymentStatusForMonth(isPaid ? 'paid' : 'unpaid');
                 }
 
@@ -2399,14 +2415,11 @@
                 }
 
                 const lookupKey = `${searchValue}|${billMonthRaw || 'AUTO'}|${currentOrValue || 'NO_OR'}`;
-                if (lookupKey === lastLookupKey && lastLookupKey !== null) {
-                    return; // Skip if same lookup, but allow if lastLookupKey was reset
+                if (lookupInFlight || (lookupKey === lastLookupKey && lastLookupKey !== null)) {
+                    return;
                 }
 
-                if (currentLookupController) {
-                    currentLookupController.abort();
-                }
-
+                lookupInFlight = true;
                 currentLookupController = new AbortController();
                 lockPaidOrBreakdown = false;
                 // Keep OR-based breakdown mode only when user explicitly searched by OR #.
@@ -2442,7 +2455,7 @@
                     if (billMonthRaw) {
                         url += `&bill_month=${encodeURIComponent(billMonthRaw)}`;
                     }
-                    const response = await fetch(url, { signal: currentLookupController.signal });
+                    const response = await queuedFetch(url, { signal: currentLookupController.signal, headers: { Accept: 'application/json' } });
                     const payload = await response.json().catch(() => null);
 
                     if (!response.ok || !payload) {
@@ -2480,6 +2493,9 @@
                     const resolvedBillMonthDisplay = payload.data?.billing?.bill_month_display || resolvedBillMonth;
                     const effectiveBillMonth = resolvedBillMonth || billMonthRaw || '';
                     const resolvedAccount = payload.data?.account?.number || searchValue;
+                    if (currentBalanceValue > 0.01 && resolvedAccount) {
+                        await fetchUnpaidBillMonths(resolvedAccount);
+                    }
 
                     const statusMessage = payload.message
                         ?? `Billing record loaded for ${resolvedAccount}${resolvedBillMonthDisplay ? ` (${resolvedBillMonthDisplay})` : ''}.`;
@@ -2524,6 +2540,7 @@
                     setPaymentStatusForMonth(null);
                     lastLookupKey = null;
                 } finally {
+                    lookupInFlight = false;
                     currentLookupController = null;
                 }
             };
@@ -2557,7 +2574,7 @@
 
                 try {
                     const url = `${lookupEndpoint}?or_number=${encodeURIComponent(orNumber)}`;
-                    const response = await fetch(url, { signal: currentLookupController.signal });
+                    const response = await queuedFetch(url, { signal: currentLookupController.signal, headers: { Accept: 'application/json' } });
                     const payload = await response.json().catch(() => null);
                     if (!response.ok || !payload) {
                         useOrForBreakdownLookup = false;
@@ -2586,6 +2603,9 @@
                     const orFieldAfter = document.getElementById('officialReceipt');
                     if (orFieldAfter) orFieldAfter.value = orNumber;
                     const resolvedAccount = payload.data?.account?.number || '';
+                    if (currentBalanceValue > 0.01 && resolvedAccount) {
+                        await fetchUnpaidBillMonths(resolvedAccount);
+                    }
                     const resolvedBillMonth = payload.data?.billing?.bill_month_input || payload.data?.billing?.bill_month_display || '';
                     updateLookupStatus(payload.message || `Billing record loaded for OR # ${orNumber} (${resolvedAccount}).`, 'success');
                     lastLookupKey = `${orNumber}|OR|${resolvedAccount}`;
@@ -2624,7 +2644,9 @@
                 if (!orField) return;
 
                 try {
-                    const response = await fetch('{{ route("billing-payment.generate-or") }}');
+                    const response = await queuedFetch('{{ route("billing-payment.generate-or") }}', {
+                        headers: { Accept: 'application/json' }
+                    });
                     const data = await response.json();
 
                     if (data.success && data.or_number) {
@@ -2646,6 +2668,10 @@
                 if (currentLookupController) {
                     currentLookupController.abort();
                     currentLookupController = null;
+                }
+                if (billMonthDetailsController) {
+                    billMonthDetailsController.abort();
+                    billMonthDetailsController = null;
                 }
 
                 lastLookupKey = null;
@@ -2962,8 +2988,9 @@
                 suggestionsController = new AbortController();
                 
                 try {
-                    const response = await fetch(`${accountSuggestionsEndpoint}?q=${encodeURIComponent(searchTerm)}`, {
-                        signal: suggestionsController.signal
+                    const response = await queuedFetch(`${accountSuggestionsEndpoint}?q=${encodeURIComponent(searchTerm)}`, {
+                        signal: suggestionsController.signal,
+                        headers: { Accept: 'application/json' }
                     });
                     const result = await response.json();
                     
@@ -3017,6 +3044,7 @@
                         suggestionsDropdown.style.display = 'none';
                         // Trigger lookup for selected account
                         lastLookupKey = null;
+                        skipAccountBlurLookup = true;
                         performLookup();
                     });
                     
@@ -3060,16 +3088,19 @@
                         suggestionsDropdown.style.display = 'none';
                     }
                     lastLookupKey = null;
+                    skipAccountBlurLookup = true;
                     performLookup();
                 });
                 
                 accountNumberField.addEventListener('blur', () => {
-                    // Hide suggestions after a short delay to allow click on a list item
                     setTimeout(() => {
                         if (suggestionsDropdown) {
                             suggestionsDropdown.style.display = 'none';
                         }
-                        // Load account when user leaves the field (unless a suggestion click already triggered lookup)
+                        if (skipAccountBlurLookup) {
+                            skipAccountBlurLookup = false;
+                            return;
+                        }
                         const value = accountNumberField.value?.trim();
                         if (value) {
                             performLookup();
@@ -3112,7 +3143,6 @@
                     if (lockPaidOrBreakdown || useOrForBreakdownLookup) {
                         return;
                     }
-                    debouncedLookup();
                     const accountNumber = accountNumberField?.value?.trim();
                     const billMonthKey = billMonthField.value?.trim();
                     const txDate = transactionDateField?.value?.trim();
