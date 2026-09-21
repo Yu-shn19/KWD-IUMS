@@ -2475,7 +2475,7 @@ class BillingProcessController extends Controller
     
    /**
      * Ledger remaining = same as Account Ledger footer (recalculated running balance, not stored balance column).
-     * Penalty base = min(current bill, ledger remaining).
+     * Penalty base = this bill amount (current billing), not arrears / ledger remaining.
      *
      * @return array{reconciled_owed: float, penalty_base: float, ledger_remaining: float}
      */
@@ -2491,23 +2491,21 @@ class BillingProcessController extends Controller
             );
 
             $reconciledOwed = min($composedOwed, $ledgerRemaining);
-            $penaltyBase = max(0.0, min($billAmount, $ledgerRemaining));
         } else {
             $ledgerRemaining = $composedOwed;
             $reconciledOwed = $composedOwed;
-            $penaltyBase = max(0.0, min($billAmount, $composedOwed));
         }
 
         return [
             'reconciled_owed' => $reconciledOwed,
-            'penalty_base' => $penaltyBase,
+            'penalty_base' => $billAmount,
             'ledger_remaining' => $ledgerRemaining,
         ];
     }
 
     /**
      * Get surcharge candidates: past-due consumers (no payment) for the selected zone and bill date.
-     * Used by Generate Surcharge to list consumers that can have penalty/surcharge applied.
+     * Used by Generate Surcharge. Penalty is 10% of this bill amount, not arrears.
      */
     public function getSurchargeCandidates(Request $request)
     {
@@ -2522,7 +2520,7 @@ class BillingProcessController extends Controller
             $today = Carbon::now()->startOfDay();
 
             // Schedules in zone with this bill_date and due_date already passed.
-            // Partial payments are allowed; rows are excluded later only when reconciled balance shows nothing owed.
+            // 10% is always on this bill amount; arrears are display-only. Fully paid rows are still skipped.
             $schedulesQuery = MeterReadingSchedule::query()
                 ->leftJoin(mr_col('downloaded_readings as dr'), mr_col('dr.schedule_id'), '=', mr_col('meter_reading_schedules.id'))
                 ->joinConsumerZone()
@@ -2546,6 +2544,7 @@ class BillingProcessController extends Controller
                     'meter_reading_schedules.bill_date',
                     'meter_reading_schedules.due_date',
                     'meter_reading_schedules.consumer_zone_id',
+                    'meter_reading_schedules.current_billing as mrs_current_billing',
                     'dr.id as downloaded_id',
                     'dr.current_reading as pres_read',
                     'dr.consumption as volume',
@@ -2554,7 +2553,16 @@ class BillingProcessController extends Controller
 
             $rows = $schedulesQuery->get();
 
+            $existingPenaltiesBySchedule = Penalty::query()
+                ->whereIn(mr_col('schedule_id'), $rows->pluck('schedule_id')->filter()->unique()->values())
+                ->orderBy(mr_col('id'), 'asc')
+                ->get()
+                ->groupBy(function ($penalty) {
+                    return (int) $penalty->schedule_id;
+                });
+
             $data = [];
+            $updateCount = 0;
             foreach ($rows as $row) {
                 $consumer = !empty($row->consumer_zone_id)
                     ? ConsumerZone::find($row->consumer_zone_id)
@@ -2568,12 +2576,7 @@ class BillingProcessController extends Controller
                 }
 
                 $arrearsBeforeBill = 0.00;
-                $currentBill = (float) ($row->dr_current_billing ?? 0);
-                if ($currentBill <= 0 && $consumer) {
-                    $breakdown = $this->getBillingBreakdownForConsumer((int) $consumer->id, 'post_due', null, null);
-                    $currentBill = (float) ($breakdown['current_billing'] ?? 0);
-                }
-                // Internal: balance before this schedule's BILLING (for reconcile with ledger footer)
+                $billingLedger = null;
                 if ($consumer && !empty($row->schedule_id)) {
                     $billingLedger = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
                         ->where(mr_col('schedule_id'), $row->schedule_id)
@@ -2589,21 +2592,47 @@ class BillingProcessController extends Controller
                     }
                 }
 
+                $currentBill = (float) ($row->dr_current_billing ?? 0);
+                if ($currentBill <= 0) {
+                    $currentBill = (float) ($row->mrs_current_billing ?? 0);
+                }
+                if ($currentBill <= 0 && $billingLedger) {
+                    $currentBill = (float) ($billingLedger->billamount ?? 0);
+                }
+
                 $surchargeDetails = $this->resolveSurchargePenaltyDetails((float) $currentBill, (float) $arrearsBeforeBill, $consumer);
                 $penaltyBase = $surchargeDetails['penalty_base'];
                 $reconciledOwed = $surchargeDetails['reconciled_owed'];
                 $ledgerRemaining = $surchargeDetails['ledger_remaining'];
 
-                $wmc = ($currentBill > 0) ? (float) self::WMC_PER_MONTH : 0.00;
-                // Strict 10% of penalty base (no â‚±19.50 minimum â€” that overstated small balances)
+                // Strict 10% of this bill amount (not arrears / ledger remaining)
                 $calculatedPenalty = round($penaltyBase * (float) self::PENALTY_RATE, 2);
-                // Arrears column = Account Ledger footer (computeLedgerFooterBalance); Total = that + penalty only
                 $arrearsColumn = round(max(0.0, (float) $ledgerRemaining), 2);
                 $total = round($arrearsColumn + $calculatedPenalty, 2);
 
-                // Skip when reconciled debt is zero (ledger vs bill+arrears already aligned here)
-                if ($reconciledOwed <= 0) {
+                if ($penaltyBase <= 0 || $calculatedPenalty <= 0 || $reconciledOwed <= 0) {
                     continue;
+                }
+
+                $existingGroup = $existingPenaltiesBySchedule->get((int) $row->schedule_id)
+                    ?? $existingPenaltiesBySchedule->get((string) $row->schedule_id);
+                $existingPenalty = $existingGroup ? $existingGroup->last() : null;
+                $alreadyApplied = $existingPenalty !== null;
+                $penaltyPaid = $alreadyApplied && !empty($existingPenalty->paid_at);
+                if ($penaltyPaid) {
+                    continue;
+                }
+                $existingPenaltyAmount = $alreadyApplied ? round((float) ($existingPenalty->penalty_amount ?? 0), 2) : 0.0;
+                $needsUpdate = $alreadyApplied && abs($existingPenaltyAmount - $calculatedPenalty) >= 0.01;
+                if ($needsUpdate) {
+                    $updateCount++;
+                }
+
+                $status = 'Past Due';
+                if ($needsUpdate) {
+                    $status = 'Applied (will update)';
+                } elseif ($alreadyApplied) {
+                    $status = 'Already Applied';
                 }
 
                 $data[] = [
@@ -2628,8 +2657,12 @@ class BillingProcessController extends Controller
                     'ledger_remaining' => round($ledgerRemaining, 2),
                     'total' => $total,
                     'due_date' => $row->due_date ? Carbon::parse($row->due_date)->format('Y-m-d') : null,
-                    'status' => 'Past Due',
-                    'include' => true,
+                    'status' => $status,
+                    'already_applied' => $alreadyApplied,
+                    'needs_update' => $needsUpdate,
+                    'existing_penalty' => $existingPenaltyAmount,
+                    'penalty_on_current_bill' => true,
+                    'include' => $needsUpdate || ! $alreadyApplied,
                 ];
             }
 
@@ -2638,11 +2671,17 @@ class BillingProcessController extends Controller
                 'total_penalty' => round(array_sum(array_column($data, 'calculated_penalty')), 2),
                 'zone' => $zone,
                 'bill_date' => $billDate->format('Y-m-d'),
+                'update_count' => $updateCount,
             ];
+
+            $message = count($data) . ' past-due consumer(s) found for surcharge.';
+            if ($updateCount > 0) {
+                $message .= ' ' . $updateCount . ' already applied and can be updated to 10% of bill amount.';
+            }
 
             return response()->json([
                 'success' => true,
-                'message' => count($data) . ' past-due consumer(s) found for surcharge.',
+                'message' => $message,
                 'data' => $data,
                 'summary' => $summary,
             ]);
@@ -3040,8 +3079,7 @@ class BillingProcessController extends Controller
          
      /**
      * Apply surcharge (penalty) to selected past-due consumers.
-     * Creates Penalty records for each selected item from Generate Surcharge
-     * or Generate Penalty (Single Consumer). Payment on the bill does not block apply.
+     * Creates Penalty records, or updates unpaid existing ones to 10% of bill amount.
      */
     public function applySurcharge(Request $request)
     {
@@ -3058,6 +3096,7 @@ class BillingProcessController extends Controller
 
             $items = $request->input('items', []);
             $applied = 0;
+            $updated = 0;
             $skipped = 0;
             $errors = [];
 
@@ -3067,16 +3106,9 @@ class BillingProcessController extends Controller
                 $consumerZoneId = isset($item['consumer_zone_id']) ? (int) $item['consumer_zone_id'] : null;
                 $currentBill = (float) ($item['current_billing'] ?? 0);
                 $dueDateStr = $item['due_date'] ?? null;
-                $calculatedPenalty = (float) ($item['calculated_penalty'] ?? 0);
+                $calculatedPenalty = round((float) ($item['calculated_penalty'] ?? 0), 2);
 
                 if ($scheduleId <= 0 || $calculatedPenalty <= 0) {
-                    $skipped++;
-                    continue;
-                }
-
-                // Skip if penalty already exists for this schedule
-                $exists = Penalty::query()->where(mr_col('schedule_id'), $scheduleId)->exists();
-                if ($exists) {
                     $skipped++;
                     continue;
                 }
@@ -3089,7 +3121,7 @@ class BillingProcessController extends Controller
                 $username = Auth::check() ? (Auth::user()->name ?? 'Billing') : 'Billing';
 
                 try {
-                    DB::transaction(function () use (
+                    $result = DB::transaction(function () use (
                         $consumerZoneId,
                         $scheduleId,
                         $downloadedId,
@@ -3101,68 +3133,71 @@ class BillingProcessController extends Controller
                         $penaltyDateTime,
                         $username,
                     ) {
-                        // Create penalty record first (same as existing logic)
-                        $penaltyRecord = Penalty::create([
-                            'consumer_zone_id' => $consumerZoneId ?: null,
-                            'schedule_id' => $scheduleId,
-                            'downloaded_reading_id' => $downloadedId,
-                            'date' => $penaltyDate->format('Y-m-d'),
-                            'due_date' => $dueDateFormatted,
-                            'reference' => $reference,
-                            'bill_amount' => $currentBill,
-                            'penalty_amount' => $calculatedPenalty,
-                            'balance' => $calculatedPenalty,
-                            'username' => $username,
-                            'txtime' => $penaltyDateTime,
-                        ]);
+                        $existing = Penalty::query()
+                            ->where(mr_col('schedule_id'), $scheduleId)
+                            ->orderBy(mr_col('id'), 'desc')
+                            ->lockForUpdate()
+                            ->first();
 
-                        // Create PENALTY row in consumer_ledger and update consumer_zone balance (same logic as CollectionController)
-                        if ($consumerZoneId) {
-                            $prevLedger = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerZoneId)
-                                ->whereNotNull(mr_col('balance'))
-                                ->orderBy(mr_col('id'), 'desc')
-                                ->first();
-                            $previousBalance = $prevLedger ? (float) ($prevLedger->balance ?? 0) : 0.00;
-                            $consumerZone = ConsumerZone::find($consumerZoneId);
-                            if ($consumerZone !== null) {
-                                $previousBalance = $previousBalance ?: (float) ($consumerZone->balance ?? 0);
+                        if ($existing) {
+                            if (!empty($existing->paid_at)) {
+                                return 'paid';
                             }
-                            $newBalance = $previousBalance + $calculatedPenalty;
+                            if (abs((float) $existing->penalty_amount - $calculatedPenalty) < 0.01) {
+                                return 'unchanged';
+                            }
 
-                            ConsumerLedger::create([
-                                'consumer_zone_id' => $consumerZoneId,
-                                'trans' => 'PENALTY',
-                                'penalty_id' => $penaltyRecord->id,
-                                'schedule_id' => $scheduleId,
-                                'downloaded_reading_id' => $downloadedId,
-                                'date' => $penaltyDate->format('Y-m-d'),
-                                'due_date' => $dueDateFormatted,
-                                'reference' => $reference,
-                                'reading' => 0,
-                                'volume' => 0,
-                                'billamount' => 0,
-                                'penalty' => $calculatedPenalty,
-                                'others' => 0,
-                                'debit' => $calculatedPenalty,
-                                'credit' => 0,
-                                'balance' => $newBalance,
-                                'username' => $username,
-                                'txtime' => $penaltyDateTime,
-                            ]);
+                            $this->updateExistingSurchargePenalty(
+                                $existing,
+                                $currentBill,
+                                $calculatedPenalty,
+                                $downloadedId,
+                                $consumerZoneId,
+                                $username
+                            );
 
-                            // Balance is tracked on consumer_ledgers only.
+                            return 'updated';
                         }
+
+                        $this->createSurchargePenalty(
+                            $consumerZoneId,
+                            $scheduleId,
+                            $downloadedId,
+                            $currentBill,
+                            $calculatedPenalty,
+                            $dueDateFormatted,
+                            $penaltyDate,
+                            $reference,
+                            $penaltyDateTime,
+                            $username
+                        );
+
+                        return 'created';
                     });
-                    $applied++;
+
+                    if ($result === 'created') {
+                        $applied++;
+                    } elseif ($result === 'updated') {
+                        $updated++;
+                    } else {
+                        $skipped++;
+                    }
                 } catch (\Throwable $e) {
                     Log::error('applySurcharge item error: ' . $e->getMessage(), ['item' => $item, 'trace' => $e->getTraceAsString()]);
                     $errors[] = ($item['account_number'] ?? 'Schedule ' . $scheduleId) . ': ' . $e->getMessage();
                 }
             }
 
-            $message = $applied . ' surcharge(s) applied successfully.';
+            $parts = [];
+            if ($applied > 0) {
+                $parts[] = $applied . ' surcharge(s) applied';
+            }
+            if ($updated > 0) {
+                $parts[] = $updated . ' existing surcharge(s) updated to 10% of bill amount';
+            }
+            $message = count($parts) > 0 ? implode(', ', $parts) . '.' : 'No new surcharge changes.';
             if ($skipped > 0) {
-                $message .= ' ' . $skipped . ' skipped (already applied or invalid).';
+                $message .= ' ' . $skipped . ' skipped (already correct, paid, or invalid).';
             }
             if (count($errors) > 0) {
                 $message .= ' Errors: ' . implode('; ', array_slice($errors, 0, 3));
@@ -3175,6 +3210,7 @@ class BillingProcessController extends Controller
                 'success' => true,
                 'message' => $message,
                 'applied' => $applied,
+                'updated' => $updated,
                 'skipped' => $skipped,
             ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -3186,6 +3222,148 @@ class BillingProcessController extends Controller
                 'message' => 'Error applying surcharge: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    private function createSurchargePenalty(
+        ?int $consumerZoneId,
+        int $scheduleId,
+        ?int $downloadedId,
+        float $currentBill,
+        float $calculatedPenalty,
+        string $dueDateFormatted,
+        Carbon $penaltyDate,
+        string $reference,
+        string $penaltyDateTime,
+        string $username
+    ): void {
+        $penaltyRecord = Penalty::create([
+            'consumer_zone_id' => $consumerZoneId ?: null,
+            'schedule_id' => $scheduleId,
+            'downloaded_reading_id' => $downloadedId,
+            'date' => $penaltyDate->format('Y-m-d'),
+            'due_date' => $dueDateFormatted,
+            'reference' => $reference,
+            'bill_amount' => $currentBill,
+            'penalty_amount' => $calculatedPenalty,
+            'balance' => $calculatedPenalty,
+            'username' => $username,
+            'txtime' => $penaltyDateTime,
+        ]);
+
+        if (!$consumerZoneId) {
+            return;
+        }
+
+        $prevLedger = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->whereNotNull(mr_col('balance'))
+            ->orderBy(mr_col('id'), 'desc')
+            ->first();
+        $previousBalance = $prevLedger ? (float) ($prevLedger->balance ?? 0) : 0.00;
+        $consumerZone = ConsumerZone::find($consumerZoneId);
+        if ($consumerZone !== null) {
+            $previousBalance = $previousBalance ?: (float) ($consumerZone->balance ?? 0);
+        }
+        $newBalance = $previousBalance + $calculatedPenalty;
+
+        ConsumerLedger::create([
+            'consumer_zone_id' => $consumerZoneId,
+            'trans' => 'PENALTY',
+            'penalty_id' => $penaltyRecord->id,
+            'schedule_id' => $scheduleId,
+            'downloaded_reading_id' => $downloadedId,
+            'date' => $penaltyDate->format('Y-m-d'),
+            'due_date' => $dueDateFormatted,
+            'reference' => $reference,
+            'reading' => 0,
+            'volume' => 0,
+            'billamount' => 0,
+            'penalty' => $calculatedPenalty,
+            'others' => 0,
+            'debit' => $calculatedPenalty,
+            'credit' => 0,
+            'balance' => $newBalance,
+            'username' => $username,
+            'txtime' => $penaltyDateTime,
+        ]);
+    }
+
+    private function updateExistingSurchargePenalty(
+        Penalty $existing,
+        float $currentBill,
+        float $calculatedPenalty,
+        ?int $downloadedId,
+        ?int $consumerZoneId,
+        string $username
+    ): void {
+        $existing->bill_amount = $currentBill;
+        $existing->penalty_amount = $calculatedPenalty;
+        $existing->balance = $calculatedPenalty;
+        $existing->username = $username;
+        if ($downloadedId && Schema::hasColumn('penalties', 'downloaded_reading_id') && empty($existing->downloaded_reading_id)) {
+            $existing->downloaded_reading_id = $downloadedId;
+        }
+        $existing->save();
+
+        if (!$consumerZoneId) {
+            return;
+        }
+
+        $ledger = ConsumerLedger::query()
+            ->where(function ($q) use ($existing, $consumerZoneId) {
+                $q->where(mr_col('penalty_id'), $existing->id);
+                if (!empty($existing->schedule_id)) {
+                    $q->orWhere(function ($q2) use ($consumerZoneId, $existing) {
+                        $q2->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                            ->where(mr_col('schedule_id'), $existing->schedule_id)
+                            ->whereRaw("UPPER(TRIM(trans)) = 'PENALTY'");
+                    });
+                }
+            })
+            ->orderBy(mr_col('id'), 'asc')
+            ->first();
+
+        if ($ledger) {
+            $ledger->penalty = $calculatedPenalty;
+            $ledger->debit = $calculatedPenalty;
+            if ($downloadedId && empty($ledger->downloaded_reading_id)) {
+                $ledger->downloaded_reading_id = $downloadedId;
+            }
+            $ledger->save();
+        } else {
+            $prevLedger = ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                ->whereNotNull(mr_col('balance'))
+                ->orderBy(mr_col('id'), 'desc')
+                ->first();
+            $previousBalance = $prevLedger ? (float) ($prevLedger->balance ?? 0) : 0.00;
+            $newBalance = $previousBalance + $calculatedPenalty;
+            $penaltyDate = $existing->date ? Carbon::parse($existing->date) : Carbon::today();
+            $dueDateFormatted = $existing->due_date
+                ? Carbon::parse($existing->due_date)->format('Y-m-d')
+                : $penaltyDate->format('Y-m-d');
+
+            ConsumerLedger::create([
+                'consumer_zone_id' => $consumerZoneId,
+                'trans' => 'PENALTY',
+                'penalty_id' => $existing->id,
+                'schedule_id' => $existing->schedule_id,
+                'downloaded_reading_id' => $downloadedId,
+                'date' => $penaltyDate->format('Y-m-d'),
+                'due_date' => $dueDateFormatted,
+                'reference' => $existing->reference,
+                'reading' => 0,
+                'volume' => 0,
+                'billamount' => 0,
+                'penalty' => $calculatedPenalty,
+                'others' => 0,
+                'debit' => $calculatedPenalty,
+                'credit' => 0,
+                'balance' => $newBalance,
+                'username' => $username,
+                'txtime' => $penaltyDate->format('Y-m-d') . ' 00:00:00',
+            ]);
+        }
+
+        $this->recalculateConsumerLedgerBalances((int) $consumerZoneId);
     }
      /**
      * Export penalty report as Excel (same data source as penaltyReport: penalties table).

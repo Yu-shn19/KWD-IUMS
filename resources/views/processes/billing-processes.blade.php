@@ -298,7 +298,7 @@
                                                     <i class="fas fa-save mr-1"></i>Save Schedules
                                                 </button>
                                                 <button id="applySurchargeBtn" class="btn btn-sm btn-warning mr-2" style="display: none;">
-                                                    <i class="fas fa-exclamation-triangle mr-1"></i>Apply Surcharge
+                                                    <i class="fas fa-exclamation-triangle mr-1"></i>Apply / Update Surcharge
                                                 </button>
                                                 <button id="printBillingBtn" class="btn btn-sm btn-outline-primary mr-2">
                                                     <i class="fas fa-print mr-1"></i>Print
@@ -778,7 +778,7 @@
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = '';
                         const surchargeHelp = document.getElementById('surchargeBillDateHelp');
-                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date for past-due consumers (penalty/surcharge)';
+                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date for past-due consumers. Surcharge is 10% of the bill amount, not arrears.';
                     } else if (selectedProcess === 'Generate Penalty (Single Consumer)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'none';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -1444,12 +1444,14 @@
                     row.dataset.accountNumber = (record.account_number || '').toString().trim();
                     row.dataset.accountName = (record.account_name || '').toString().trim();
                     const checked = record.include !== false;
-                    const penaltyOnCurrentBill = record.penalty_on_current_bill === true || currentDataType === 'single_penalty';
+                    const penaltyOnCurrentBill = record.penalty_on_current_bill === true || currentDataType === 'single_penalty' || currentDataType === 'surcharge';
                     const penaltyBaseHint = penaltyOnCurrentBill
-                        ? `Base: ₱${formatNumber(record.penalty_base || record.current_billing || 0)} (current bill)`
+                        ? `Base: ₱${formatNumber(record.penalty_base || record.current_billing || 0)} (bill amount)`
                         : `Base: ₱${formatNumber(record.penalty_base || 0)} (ledger ₱${formatNumber(record.ledger_remaining != null ? record.ledger_remaining : record.penalty_base || 0)})`;
                     const statusLabel = record.status || 'Past Due';
-                    const statusBadgeClass = (record.has_payment || (statusLabel && statusLabel.indexOf('Paid') !== -1)) ? 'badge-warning' : 'badge-danger';
+                    const statusBadgeClass = record.needs_update
+                        ? 'badge-warning'
+                        : ((record.has_payment || record.already_applied || (statusLabel && statusLabel.indexOf('Paid') !== -1)) ? 'badge-info' : 'badge-danger');
                     row.innerHTML = `
                         <td class="text-center py-3 px-3 align-middle">
                             <input type="checkbox" class="surcharge-include-checkbox" ${checked ? 'checked' : ''} data-index="${index}" title="Uncheck to exclude from surcharge">
@@ -2582,9 +2584,9 @@
                         showAlert('error', 'No valid rows to apply surcharge.');
                         return;
                     }
-                    let confirmMsg = 'Apply surcharge (10% penalty) to ' + items.length + ' selected consumer(s)?';
+                    let confirmMsg = 'Apply surcharge (10% of bill amount) to ' + items.length + ' selected consumer(s)?\n\nAlready applied surcharges will be updated to 10% of the bill amount (not arrears).';
                     if (currentDataType === 'single_penalty') {
-                        confirmMsg = 'Apply surcharge (10% of current bill) to ' + items.length + ' selected consumer(s)?\n\nThis can still be applied even if the account already has a payment.';
+                        confirmMsg = 'Apply surcharge (10% of bill amount) to ' + items.length + ' selected consumer(s)?\n\nThis can still be applied even if the account already has a payment. Existing unpaid surcharge will be updated.';
                     }
                     if (!confirm(confirmMsg)) {
                         return;
