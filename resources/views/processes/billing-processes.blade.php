@@ -147,7 +147,7 @@
                                                                 Account Number <span class="text-danger">*</span>
                                                             </label>
                                                             <input type="text" class="form-control" id="singleConsumerAccount" placeholder="e.g. 2099" style="font-size: 14px;">
-                                                            <small class="text-muted">Consumer account to prepare meter reading for</small>
+                                                            <small class="text-muted" id="singleConsumerAccountHelp">Consumer account to prepare meter reading for</small>
                                                         </div>
 
                                                         <!-- Zone Selection -->
@@ -186,7 +186,7 @@
                                                                 Bill Date <span class="text-danger">*</span>
                                                             </label>
                                                             <input type="date" class="form-control" id="surchargeBillDate" style="font-size: 14px;">
-                                                            <small class="text-muted">Bill date for past-due consumers (penalty/surcharge)</small>
+                                                            <small class="text-muted" id="surchargeBillDateHelp">Bill date for past-due consumers (penalty/surcharge)</small>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -777,6 +777,8 @@
                         if (singleConsumerAccountGroup) singleConsumerAccountGroup.style.display = 'none';
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = '';
+                        const surchargeHelp = document.getElementById('surchargeBillDateHelp');
+                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date for past-due consumers (penalty/surcharge)';
                     } else if (selectedProcess === 'Generate Penalty (Single Consumer)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'none';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -785,6 +787,10 @@
                         if (singleConsumerAccountGroup) singleConsumerAccountGroup.style.display = 'block';
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = 'none';
+                        const accountHelp = document.getElementById('singleConsumerAccountHelp');
+                        if (accountHelp) accountHelp.textContent = 'Surcharge can still be applied to this current bill even if the account already has a payment.';
+                        const surchargeHelp = document.getElementById('surchargeBillDateHelp');
+                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date of the past-due current bill. Existing payment does not block surcharge.';
                     } else if (selectedProcess === 'Meter Reading Preparation (Single Consumer)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'block';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -793,6 +799,10 @@
                         if (singleConsumerAccountGroup) singleConsumerAccountGroup.style.display = 'block';
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = '';
+                        const accountHelp = document.getElementById('singleConsumerAccountHelp');
+                        if (accountHelp) accountHelp.textContent = 'Consumer account to prepare meter reading for';
+                        const surchargeHelp = document.getElementById('surchargeBillDateHelp');
+                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date for past-due consumers (penalty/surcharge)';
                     } else if (selectedProcess === 'Meter Reading Preparation (Multiple Consumers)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'block';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -831,7 +841,7 @@
 
             // Store surcharge candidates for Apply Surcharge (with Include checkboxes)
             let currentSurchargeData = [];
-            let currentDataType = ''; // 'surcharge' | 'downloaded' | 'prepared' | ''
+            let currentDataType = ''; // 'surcharge' | 'single_penalty' | 'downloaded' | 'prepared' | ''
 
             /** Alphabetical (A–Z) sort by Account Name; used for Meter Reading Preparation + search */
             function sortRowsByAccountNumber(rows) {
@@ -1316,7 +1326,8 @@
                 });
             }
 
-            // Generate Penalty (Single Consumer) - Load one past-due consumer by account and bill date
+            // Generate Penalty (Single Consumer) - Load one past-due consumer by account and bill date.
+            // Payment does not block: surcharge is 10% of the current bill even if already paid.
             function executeGenerateSingleConsumerPenalty() {
                 const accountNumber = (document.getElementById('singleConsumerAccount').value || '').trim();
                 const billDate = document.getElementById('surchargeBillDate').value;
@@ -1349,13 +1360,18 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        currentDataType = 'surcharge';
+                        currentDataType = 'single_penalty';
                         currentSurchargeData = data.data || [];
                         populateSurchargeTable(currentSurchargeData);
                         updateFooter(data.summary || {});
                         document.getElementById('saveSchedulesBtn').style.display = 'none';
-                        document.getElementById('applySurchargeBtn').style.display = 'inline-block';
-                        showAlert('success', data.message || 'Penalty candidate loaded successfully');
+                        if (currentSurchargeData.length > 0) {
+                            document.getElementById('applySurchargeBtn').style.display = 'inline-block';
+                            showAlert('success', data.message || 'Penalty candidate loaded successfully');
+                        } else {
+                            document.getElementById('applySurchargeBtn').style.display = 'none';
+                            showAlert('warning', data.message || 'No past-due current bill found for this account.');
+                        }
                     } else {
                         showAlert('error', data.message || 'Failed to load penalty candidate');
                         clearTable();
@@ -1402,13 +1418,16 @@
                 }
 
                 if (!data || data.length === 0) {
+                    const isSinglePenalty = currentDataType === 'single_penalty';
                     tbody.innerHTML = `
                         <tr>
                             <td colspan="18" class="text-center text-muted py-5">
                                 <div class="py-5">
                                     <i class="fas fa-inbox fa-3x mb-3 text-muted opacity-50"></i>
-                                    <h6 class="text-muted">No Past-Due Consumers Found</h6>
-                                    <p class="mb-0 small">No consumers past due without payment for the selected zone and bill date.</p>
+                                    <h6 class="text-muted">${isSinglePenalty ? 'No Past-Due Current Bill Found' : 'No Past-Due Consumers Found'}</h6>
+                                    <p class="mb-0 small">${isSinglePenalty
+                                        ? 'No past-due current bill found for this account and bill date. Payment does not block surcharge; a billed amount is still required.'
+                                        : 'No consumers past due without payment for the selected zone and bill date.'}</p>
                                 </div>
                             </td>
                         </tr>
@@ -1425,6 +1444,12 @@
                     row.dataset.accountNumber = (record.account_number || '').toString().trim();
                     row.dataset.accountName = (record.account_name || '').toString().trim();
                     const checked = record.include !== false;
+                    const penaltyOnCurrentBill = record.penalty_on_current_bill === true || currentDataType === 'single_penalty';
+                    const penaltyBaseHint = penaltyOnCurrentBill
+                        ? `Base: ₱${formatNumber(record.penalty_base || record.current_billing || 0)} (current bill)`
+                        : `Base: ₱${formatNumber(record.penalty_base || 0)} (ledger ₱${formatNumber(record.ledger_remaining != null ? record.ledger_remaining : record.penalty_base || 0)})`;
+                    const statusLabel = record.status || 'Past Due';
+                    const statusBadgeClass = (record.has_payment || (statusLabel && statusLabel.indexOf('Paid') !== -1)) ? 'badge-warning' : 'badge-danger';
                     row.innerHTML = `
                         <td class="text-center py-3 px-3 align-middle">
                             <input type="checkbox" class="surcharge-include-checkbox" ${checked ? 'checked' : ''} data-index="${index}" title="Uncheck to exclude from surcharge">
@@ -1445,10 +1470,10 @@
                         <td class="text-right py-3 px-3 ${(record.arrears || 0) > 0 ? 'text-warning' : 'text-muted'}">₱ ${formatNumber(record.arrears || 0)}</td>
                         <td class="text-right py-3 px-3 text-danger">
                             <span class="font-weight-bold">₱ ${formatNumber(record.calculated_penalty || 0)}</span>
-                            <br><small class="text-muted" style="font-size: 10px;">Base: ₱${formatNumber(record.penalty_base || 0)} (ledger ₱${formatNumber(record.ledger_remaining != null ? record.ledger_remaining : record.penalty_base || 0)})</small>
+                            <br><small class="text-muted" style="font-size: 10px;">${penaltyBaseHint}</small>
                         </td>
                         <td class="text-right py-3 px-3"><span class="font-weight-bold ${(record.total || 0) > 0 ? 'text-success' : 'text-muted'}">₱ ${formatNumber(record.total || 0)}</span></td>
-                        <td class="text-center py-3 px-3"><span class="badge badge-danger px-3 py-1">${record.status || 'Past Due'}</span></td>
+                        <td class="text-center py-3 px-3"><span class="badge ${statusBadgeClass} px-3 py-1">${statusLabel}</span></td>
                     `;
                     tbody.appendChild(row);
                 });
@@ -2557,7 +2582,11 @@
                         showAlert('error', 'No valid rows to apply surcharge.');
                         return;
                     }
-                    if (!confirm('Apply surcharge (10% penalty) to ' + items.length + ' selected consumer(s)?')) {
+                    let confirmMsg = 'Apply surcharge (10% penalty) to ' + items.length + ' selected consumer(s)?';
+                    if (currentDataType === 'single_penalty') {
+                        confirmMsg = 'Apply surcharge (10% of current bill) to ' + items.length + ' selected consumer(s)?\n\nThis can still be applied even if the account already has a payment.';
+                    }
+                    if (!confirm(confirmMsg)) {
                         return;
                     }
                     const btn = this;
