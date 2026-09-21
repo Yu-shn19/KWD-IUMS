@@ -1502,7 +1502,10 @@ class ReportController extends Controller
     /**
      * FIFO AR aging: one row per account with bucket columns and total_balance (same logic as AR Aging Summary).
      *
-     * BILLING/PENALTY: CURRENT until due date; on/after due → _30, then _60, _90, _OVER90 by due month.
+     * BILLING/PENALTY: CURRENT until due date; on/after due → _30 (billing + penalty added),
+     * then _60, _90, _OVER90 by due month.
+     * Include a charge if it was posted by the cutoff (txtime or date) or its due date is on/before the cutoff,
+     * so a bill dated after cutoff but already on the ledger is not dropped.
      * DM prio_years: always PREV YEAR.
      * First DM per account (system opening): remainder always _OVER90.
      * Later DMs: remainder ages from the date entered (same month = CURRENT, then _30/_60/_90/_OVER90).
@@ -1556,6 +1559,9 @@ class ReportController extends Controller
         $asOfDate = $asOf->format('Y-m-d');
         $billingCutoffDate = $billingCutOff->format('Y-m-d');
         $paymentCutoffDate = $paymentCutOff->format('Y-m-d');
+        // Include a ledger row if it was already posted by the cutoff, even when
+        // the bill/penalty date is later than txtime (e.g. bill date 09/24, TxTime 09/04).
+        $postedOnOrBefore = 'DATE(LEAST(COALESCE(cl.`date`, DATE(COALESCE(cl.txtime, cl.`date`))), DATE(COALESCE(cl.txtime, cl.`date`)))) <= ?';
         $prioYearsSql = Schema::hasColumn('consumer_ledgers', 'prio_years')
             ? 'GREATEST(COALESCE(cl.prio_years, 0), 0)'
             : '0';
@@ -1585,7 +1591,7 @@ class ReportController extends Controller
                     cz.account_no,
                     UPPER(TRIM(cl.trans)) AS trans,
                     CASE
-                        WHEN COALESCE(cl.due_date, cl.`date`) > ? THEN 'current'
+                        WHEN DATE(COALESCE(cl.due_date, cl.`date`)) > DATE(?) THEN 'current'
                         ELSE ELT(
                             LEAST(
                                 PERIOD_DIFF(
@@ -1605,7 +1611,10 @@ class ReportController extends Controller
                 INNER JOIN consumer_zone cz ON cz.id = cl.consumer_zone_id
                 WHERE UPPER(TRIM(cl.trans)) IN ('BILLING', 'BILL', 'PENALTY')
                   AND cl.debit > 0
-                  AND cl.`date` <= ?
+                  AND (
+                      {$postedOnOrBefore}
+                      OR COALESCE(cl.due_date, cl.`date`) <= ?
+                  )
                   {$chargeWhere}
 
                 UNION ALL
@@ -1624,7 +1633,7 @@ class ReportController extends Controller
                 WHERE UPPER(TRIM(cl.trans)) = 'DM'
                   AND cl.debit > 0
                   AND LEAST(cl.debit, {$prioYearsSql}) > 0
-                  AND cl.`date` <= ?
+                  AND {$postedOnOrBefore}
                   {$chargeWhere}
 
                 UNION ALL
@@ -1656,7 +1665,7 @@ class ReportController extends Controller
                 WHERE UPPER(TRIM(cl.trans)) = 'DM'
                   AND cl.debit > 0
                   AND GREATEST(0, cl.debit - LEAST(cl.debit, {$prioYearsSql})) > 0
-                  AND cl.`date` <= ?
+                  AND {$postedOnOrBefore}
                   {$chargeWhere}
             ),
             payments AS (
@@ -1680,7 +1689,7 @@ class ReportController extends Controller
                           AND (COALESCE(cl.credit, 0) <> 0 OR COALESCE(cl.debit, 0) < 0)
                       )
                   )
-                  AND cl.`date` <= ?
+                  AND {$postedOnOrBefore}
                   {$chargeWhere}
                 GROUP BY cl.consumer_zone_id, cz.account_no
             ),
@@ -1819,7 +1828,7 @@ class ReportController extends Controller
 
         $queryBindings = array_merge(
             $agingBindings,
-            [$asOfDate, $asOfDate, $billingCutoffDate],
+            [$asOfDate, $asOfDate, $billingCutoffDate, $billingCutoffDate],
             $agingBindings,
             [$billingCutoffDate],
             $agingBindings,
