@@ -893,6 +893,9 @@ class BillingLookupService
         $currentArrears = round((float) ($schedule?->arrears ?? 0), 2);
         $prioYears = round((float) ($schedule?->prior_years ?? 0), 2);
         $penalty = round((float) ($schedule?->penalty ?? 0), 2);
+        if ($consumer) {
+            $penalty = round(max(0.0, $penalty - ConsumerPayment::paidPenaltyForConsumer((int) $consumer->id)), 2);
+        }
         if ($penalty <= 0.009) {
             $penalty = $this->resolveLookupPenalty($state, $consumer);
         }
@@ -937,8 +940,22 @@ class BillingLookupService
             $currentMeterRental = round(max(0.0, $currentMeterRental - ($paid['current_mr'] ?? 0)), 2);
             $prioYears = round(max(0.0, $prioYears - ($paid['prio_years'] ?? 0)), 2);
             $currentArrears = round(max(0.0, $currentArrears - ($paid['current_arrears'] ?? 0)), 2);
-            $penalty = round(max(0.0, $penalty - ($paid['current_penalty'] ?? 0)), 2);
             $meterRentalArrears = round(max(0.0, $meterRentalArrears - ($paid['mr_arrears'] ?? 0)), 2);
+            if ($consumer) {
+                $penalty = Penalty::unpaidAmountForConsumer((int) $consumer->id);
+            }
+            if ($ledgerBalance !== null) {
+                [$currentBill, $currentMeterRental, $prioYears, $currentArrears, $penalty, $meterRentalArrears] =
+                    $this->reconcileLookupBreakdownToBalance(
+                        $currentBill,
+                        $currentMeterRental,
+                        $prioYears,
+                        $currentArrears,
+                        $penalty,
+                        $meterRentalArrears,
+                        $ledgerBalance
+                    );
+            }
         }
 
         return [
@@ -963,6 +980,57 @@ class BillingLookupService
             'arrears' => $currentArrears,
             'total_amount' => $state->reading->total_amount !== null ? (float) $state->reading->total_amount : 0.0,
             'sedr_number' => $state->reading->sedr_number ?? null,
+        ];
+    }
+
+    /**
+     * @return array{0: float, 1: float, 2: float, 3: float, 4: float, 5: float}
+     */
+    private function reconcileLookupBreakdownToBalance(
+        float $currentBill,
+        float $currentMeterRental,
+        float $prioYears,
+        float $currentArrears,
+        float $penalty,
+        float $meterRentalArrears,
+        float $balance
+    ): array {
+        $buckets = [
+            'current_billing' => round(max(0.0, $currentBill), 2),
+            'current_meter_rental' => round(max(0.0, $currentMeterRental), 2),
+            'prio_years' => round(max(0.0, $prioYears), 2),
+            'current_arrears' => round(max(0.0, $currentArrears), 2),
+            'penalty' => round(max(0.0, $penalty), 2),
+            'meter_rental_arrears' => round(max(0.0, $meterRentalArrears), 2),
+        ];
+        $balance = round(max(0.0, $balance), 2);
+        $sum = round(array_sum($buckets), 2);
+
+        if ($balance <= 0.009) {
+            return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        }
+
+        if ($sum > $balance + 0.009) {
+            $excess = round($sum - $balance, 2);
+            foreach (['current_billing', 'current_arrears', 'prio_years', 'meter_rental_arrears', 'current_meter_rental', 'penalty'] as $key) {
+                if ($excess <= 0.009) {
+                    break;
+                }
+                $deduct = min($buckets[$key], $excess);
+                $buckets[$key] = round($buckets[$key] - $deduct, 2);
+                $excess = round($excess - $deduct, 2);
+            }
+        } elseif ($sum + 0.009 < $balance) {
+            $buckets['current_arrears'] = round($buckets['current_arrears'] + ($balance - $sum), 2);
+        }
+
+        return [
+            $buckets['current_billing'],
+            $buckets['current_meter_rental'],
+            $buckets['prio_years'],
+            $buckets['current_arrears'],
+            $buckets['penalty'],
+            $buckets['meter_rental_arrears'],
         ];
     }
 

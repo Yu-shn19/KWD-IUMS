@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
 use App\Models\ConsumerPayment;
+use Carbon\Carbon;
 
 if (!function_exists(__NAMESPACE__ . '\mr_col')) {
     /**
@@ -84,6 +85,59 @@ class ConsumerLedger extends Model
         }
 
         return round((float) ($this->current_arrears ?? 0), 2);
+    }
+
+    /**
+     * Remaining Current Penalty: PENALTY ledger debits still on the card,
+     * minus payments dated on/after each penalty (so an earlier 75.90 payment
+     * does not wipe a later 25.30 surcharge).
+     */
+    public static function unpaidPenaltyAmount(int $consumerZoneId): float
+    {
+        if ($consumerZoneId <= 0) {
+            return 0.0;
+        }
+
+        $rows = static::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->whereRaw("UPPER(TRIM(trans)) = 'PENALTY'")
+            ->orderBy(mr_col('date'), 'asc')
+            ->orderBy(mr_col('id'), 'asc')
+            ->get();
+
+        $total = 0.0;
+        $earliest = null;
+        foreach ($rows as $row) {
+            $amt = (float) ($row->penalty ?? 0);
+            if ($amt <= 0.009) {
+                $amt = (float) ($row->debit ?? 0);
+            }
+            if ($amt <= 0.009) {
+                continue;
+            }
+            $total += $amt;
+            try {
+                if (!empty($row->date)) {
+                    $d = Carbon::parse($row->date)->startOfDay();
+                    if ($earliest === null || $d->lt($earliest)) {
+                        $earliest = $d;
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+        if ($total <= 0.009) {
+            return 0.0;
+        }
+
+        $paidQuery = ConsumerPayment::forConsumerZone($consumerZoneId)
+            ->whereNotNull(mr_col('paid_at'));
+        if ($earliest) {
+            $paidQuery->whereDate(mr_col('paid_at'), '>=', $earliest->format('Y-m-d'));
+        }
+        $paid = (float) $paidQuery->sum('current_penalty');
+
+        return round(max(0.0, $total - $paid), 2);
     }
 
     /**

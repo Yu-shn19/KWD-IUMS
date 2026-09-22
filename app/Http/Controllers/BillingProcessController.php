@@ -903,11 +903,8 @@ class BillingProcessController extends Controller
             if ($amt <= 0) {
             return false;
         }
-        if ($row->penalty_id) {
-            $pen = Penalty::find($row->penalty_id);
-            if ($pen && $pen->paid_at) {
-                return false;
-            }
+        if (!empty($row->paid_at)) {
+            return false;
         }
         if ($row->schedule_id) {
             $readingIds = DownloadedReading::query()->where(mr_col('schedule_id'), $row->schedule_id)->pluck(mr_col('id'));
@@ -1016,7 +1013,8 @@ class BillingProcessController extends Controller
         $arrearsCurrentYear = 0.0;
         $arrearsPreviousYear = 0.0;
         $waterMaintenanceCharge = 0.0;
-        $penalty = 0.0;
+        $dmPenalty = 0.0;
+        $rowPenalty = 0.0;
 
         $unpaidBillingRows = $ledgerRows->filter(function (ConsumerLedger $row) use ($consumerId) {
             return $this->isBillingRowUnpaid($row, $consumerId);
@@ -1102,7 +1100,7 @@ class BillingProcessController extends Controller
                     $dm = round($dm - $mr, 2);
                 }
                 if ($pen > 0) {
-                    $penalty += $pen;
+                    $dmPenalty += $pen;
                     $dm = round($dm - $pen, 2);
                 }
                 if ($dm <= 0) {
@@ -1129,9 +1127,11 @@ class BillingProcessController extends Controller
                 $p = (float) ($row->debit ?? 0);
             }
             if ($p > 0) {
-                $penalty += round($p, 2);
+                $rowPenalty += round($p, 2);
             }
         }
+
+        $penalty = Penalty::unpaidAmountForConsumer($consumerId);
 
         $currentBill = round($currentBill, 2);
         $arrearsCurrentYear = round(max(0, $arrearsCurrentYear), 2);

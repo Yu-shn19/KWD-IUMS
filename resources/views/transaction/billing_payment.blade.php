@@ -2166,14 +2166,17 @@
                     viewLedgerBtn.disabled = false;
                 }
 
-                // Use saved payment date when loaded by OR #; otherwise today (new collection).
+                // Saved paid_at only when this exact paid OR is looked up. New collection → today.
                 if (transactionDateField) {
+                    const typedOrForDate = String((document.getElementById('officialReceipt') || {}).value || '').trim();
+                    const savedOrForDate = String(payment?.reference || downloaded_reading?.official_receipt_number || '').trim();
                     const paidAtRaw = String(payment?.paid_at || '').trim();
-                    const paidDate = useOrForBreakdownLookup && /^\d{4}-\d{2}-\d{2}/.test(paidAtRaw)
-                        ? paidAtRaw.slice(0, 10)
-                        : '';
-                    if (paidDate) {
-                        transactionDateField.value = paidDate;
+                    const isExactPaidOrDate = typedOrForDate !== ''
+                        && savedOrForDate !== ''
+                        && typedOrForDate === savedOrForDate
+                        && /^\d{4}-\d{2}-\d{2}/.test(paidAtRaw);
+                    if (isExactPaidOrDate) {
+                        transactionDateField.value = paidAtRaw.slice(0, 10);
                     } else {
                         const now = new Date();
                         const y = now.getFullYear();
@@ -2240,9 +2243,12 @@
                 const hasMonthPaidRecord = downloadedOr !== '' || paymentRefOr !== '';
                 const hasExactOrMatch = typedOrNumber !== '' && (typedOrNumber === downloadedOr || typedOrNumber === paymentRefOr);
                 const isExplicitOrLookup = useOrForBreakdownLookup === true;
-                const isPaid = isExplicitOrLookup ? hasExactOrMatch : hasMonthPaidRecord;
                 const hasPaymentBreakdown = payment && (payment.current_billing !== undefined || payment.current_penalty !== undefined || payment.mr_arrears !== undefined);
                 const hasCurrentBalance = (parseFloat(currentBalanceValue) || 0) > 0.009;
+                // New collection with remaining balance stays Unpaid. Paid only for that exact OR, or zero balance.
+                const isPaid = isExplicitOrLookup
+                    ? hasExactOrMatch
+                    : (!hasCurrentBalance && hasMonthPaidRecord);
                 // Keep saved OR breakdown only when looking up that OR, or when the account is fully paid.
                 const keepPaidMonthOrBreakdown = isPaid && hasPaymentBreakdown && (isExplicitOrLookup || !hasCurrentBalance);
                 if (keepPaidMonthOrBreakdown) {
@@ -2334,23 +2340,22 @@
                 const remarkText = payment.remarks || (downloaded_reading && downloaded_reading.reader_notes) || '';
                 paymentRemarksField.value = (remarkCode ? remarkCode + ' ' : '') + (remarkText || '');
 
-                // Populate payment amount from downloaded_readings
-                if (paymentAmountField && payment.amount !== undefined && payment.amount !== null) {
+                // New collection with remaining balance: do not reuse last OR / paid amount.
+                if (paymentAmountField && !hasCurrentBalance && payment.amount !== undefined && payment.amount !== null) {
                     const formattedAmount = formatCurrency(payment.amount);
                     paymentAmountField.value = formattedAmount;
                     paymentTotalField.value = formattedAmount;
                 }
 
-                    // Generate OR number if empty
                 const orField = document.getElementById('officialReceipt');
                 if (orField) {
-                        if (!orField.value || orField.value.trim() === '') {
+                    const reusePaidOr = hasCurrentBalance && hasMonthPaidRecord && hasExactOrMatch;
+                    if (!orField.value || orField.value.trim() === '' || reusePaidOr) {
                         generateOrNumber();
                     }
                 }
 
-                // Populate cash tendered and change if payment was already made
-                if (payment.tendered && payment.tendered > 0) {
+                if (!hasCurrentBalance && payment.tendered && payment.tendered > 0) {
                     cashTenderedField.value = formatAmountFixed(payment.tendered);
                 }
                 if (payment.change !== undefined && payment.change !== null) {
@@ -2486,8 +2491,7 @@
                             || payload.data?.payment?.mr_arrears !== undefined);
                     const balanceFromPayload = parseNumeric(payload.data?.account?.current_balance);
                     const hasOutstandingBalance = (parseFloat(balanceFromPayload) || 0) > 0.009;
-                    const shouldUseOrBreakdownForPaidMonth = currentOrValue !== '' && paidWithBreakdownForMonth && hasOutstandingBalance;
-                    useOrForBreakdownLookup = shouldUseOrBreakdownForPaidMonth;
+                    useOrForBreakdownLookup = false;
                     // Remaining balance after partial pay: load a new breakdown, do not lock the last OR.
                     lockPaidOrBreakdown = paidWithBreakdownForMonth && !hasOutstandingBalance;
 
