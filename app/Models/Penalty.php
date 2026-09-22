@@ -3,8 +3,9 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-
 use Illuminate\Support\Facades\Schema;
+use Carbon\Carbon;
+use App\Models\ConsumerPayment;
 
 class Penalty extends Model
 {
@@ -80,6 +81,55 @@ class Penalty extends Model
         }
 
         return $payload;
+    }
+
+    /**
+     * Current Penalty from the penalties table (same source as Penalty Report).
+     * Payments dated before a surcharge do not reduce that surcharge.
+     */
+    public static function unpaidAmountForConsumer(int $consumerZoneId): float
+    {
+        if ($consumerZoneId <= 0 || ! Schema::hasTable('penalties')) {
+            return 0.0;
+        }
+
+        $query = static::query()->where('consumer_zone_id', $consumerZoneId);
+        if (Schema::hasColumn('penalties', 'penalty_amount')) {
+            $query->where('penalty_amount', '>', 0);
+        }
+
+        $rows = $query->orderBy('date')->orderBy('id')->get();
+        $total = 0.0;
+        $earliest = null;
+        foreach ($rows as $row) {
+            $amt = (float) ($row->penalty_amount ?? 0);
+            if ($amt <= 0.009) {
+                continue;
+            }
+            $total += $amt;
+            try {
+                $raw = $row->date ?? $row->due_date ?? null;
+                if ($raw) {
+                    $d = Carbon::parse($raw)->startOfDay();
+                    if ($earliest === null || $d->lt($earliest)) {
+                        $earliest = $d;
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+        if ($total <= 0.009) {
+            return 0.0;
+        }
+
+        $paidQuery = ConsumerPayment::forConsumerZone($consumerZoneId)
+            ->whereNotNull('paid_at');
+        if ($earliest) {
+            $paidQuery->whereDate('paid_at', '>=', $earliest->format('Y-m-d'));
+        }
+        $paid = (float) $paidQuery->sum('current_penalty');
+
+        return round(max(0.0, $total - $paid), 2);
     }
 
     /**

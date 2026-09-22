@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Data\BillMonthDetailsState;
 use App\Http\Controllers\BillingProcessController;
+use App\Models\ConsumerLedger;
 use App\Models\ConsumerPayment;
 use App\Models\ConsumerZone;
 use App\Models\DownloadedReading;
@@ -1682,6 +1683,8 @@ class BillMonthDetailsService
                     );
                     $overlay = $this->preferLedgerBreakdownWhenOverlayEmpty($overlay, $s);
                     $overlay = $this->mergeUnpaidPenaltyIntoOverlay($overlay, $s);
+                    $overlay['penalty'] = Penalty::unpaidAmountForConsumer((int) $s->consumer->id);
+                    $overlay = $this->reconcileOverlayToBalance($overlay, $s->currentBalance);
                 }
 
                 if (round((float) $s->currentBalance, 2) <= 0.009) {
@@ -1749,6 +1752,9 @@ class BillMonthDetailsService
         $currentArrears = round((float) ($schedule?->arrears ?? 0), 2);
         $penalty = round((float) ($schedule?->penalty ?? 0), 2);
         $meterRentalArrears = round((float) ($schedule?->meter_rental_arrears ?? 0), 2);
+        if ($consumerZoneId && $consumerZoneId > 0) {
+            $penalty = round(max(0.0, $penalty - ConsumerPayment::paidPenaltyForConsumer((int) $consumerZoneId, $paidAfter)), 2);
+        }
 
         if ($currentArrears < 0) {
             $currentBilling = round(max(0.0, $currentBilling - abs($currentArrears)), 2);
@@ -1790,7 +1796,6 @@ class BillMonthDetailsService
         $currentMeterRental = round(max(0.0, $currentMeterRental - ($paid['current_mr'] ?? 0)), 2);
         $prioYears = round(max(0.0, $prioYears - ($paid['prio_years'] ?? 0)), 2);
         $currentArrears = round(max(0.0, $currentArrears - ($paid['current_arrears'] ?? 0)), 2);
-        $penalty = round(max(0.0, $penalty - ($paid['current_penalty'] ?? 0)), 2);
         $meterRentalArrears = round(max(0.0, $meterRentalArrears - ($paid['mr_arrears'] ?? 0)), 2);
 
         return [
@@ -1999,6 +2004,46 @@ class BillMonthDetailsService
         }
 
         return $ledger;
+    }
+
+    /**
+     * Force breakdown buckets to equal the displayed ledger balance.
+     *
+     * @param array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float} $overlay
+     * @return array{current_billing: float, current_meter_rental: float, prio_years: float, current_arrears: float, penalty: float, meter_rental_arrears: float}
+     */
+    private function reconcileOverlayToBalance(array $overlay, $balance): array
+    {
+        $keys = ['current_billing', 'current_meter_rental', 'prio_years', 'current_arrears', 'penalty', 'meter_rental_arrears'];
+        foreach ($keys as $key) {
+            $overlay[$key] = round(max(0.0, (float) ($overlay[$key] ?? 0)), 2);
+        }
+        $balance = round(max(0.0, (float) $balance), 2);
+        $sum = round(array_sum(array_map(static fn ($key) => $overlay[$key], $keys)), 2);
+
+        if ($balance <= 0.009) {
+            foreach ($keys as $key) {
+                $overlay[$key] = 0.0;
+            }
+
+            return $overlay;
+        }
+
+        if ($sum > $balance + 0.009) {
+            $excess = round($sum - $balance, 2);
+            foreach (['current_billing', 'current_arrears', 'prio_years', 'meter_rental_arrears', 'current_meter_rental', 'penalty'] as $key) {
+                if ($excess <= 0.009) {
+                    break;
+                }
+                $deduct = min($overlay[$key], $excess);
+                $overlay[$key] = round($overlay[$key] - $deduct, 2);
+                $excess = round($excess - $deduct, 2);
+            }
+        } elseif ($sum + 0.009 < $balance) {
+            $overlay['current_arrears'] = round($overlay['current_arrears'] + ($balance - $sum), 2);
+        }
+
+        return $overlay;
     }
 
     /**

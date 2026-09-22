@@ -589,40 +589,9 @@ class DownloadedReadingPaymentService
             return;
         }
 
-        $schedule = $downloaded->schedule;
-        $schedule->update(MeterReadingSchedule::filterTableAttributes([
+        $downloaded->schedule->update(MeterReadingSchedule::filterTableAttributes([
             'status' => 'Completed',
         ]));
-
-        $dueDate = $schedule->due_date ? Carbon::parse($schedule->due_date) : null;
-        if (!$dueDate || !$paidAt->lte($dueDate->endOfDay())) {
-            return;
-        }
-
-        $billAmount = (float) ($schedule->current_billing ?? $downloaded->current_billing ?? 0);
-        $totalPaid = ConsumerPayment::query()->where(mr_col('reading_id'), $downloaded->id)
-            ->whereNotNull(mr_col('paid_at'))
-            ->whereDate(mr_col('paid_at'), '<=', $dueDate->format('Y-m-d'))
-            ->selectRaw('COALESCE(SUM(payment_amount + COALESCE(senior_citizen_discount, 0)), 0) as total')
-            ->value('total');
-
-        if ($billAmount <= 0 || $totalPaid + 0.01 < $billAmount || !$consumerId) {
-            return;
-        }
-
-        $penaltiesToDelete = Penalty::query()->where(mr_col('consumer_zone_id'), $consumerId)
-            ->where(mr_col('schedule_id'), $schedule->id)
-            ->pluck(mr_col('id'));
-
-        if ($penaltiesToDelete->isEmpty()) {
-            return;
-        }
-
-        Penalty::query()->whereIn(mr_col('id'), $penaltiesToDelete)->delete();
-        ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumerId)
-            ->where(mr_col('trans'), 'PENALTY')
-            ->whereIn(mr_col('schedule_id'), [$schedule->id])
-            ->delete();
     }
 
     /**

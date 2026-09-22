@@ -228,6 +228,35 @@ class ConsumerPayment extends Model
     }
 
     /**
+     * Penalty already applied on payments (column or PAYMENT ledger.penalty).
+     * Used so DM/schedule penalty (e.g. 75.90) is not charged again after it was paid.
+     */
+    public static function paidPenaltyForConsumer(int $consumerZoneId, $paidOnOrAfter = null): float
+    {
+        if ($consumerZoneId <= 0) {
+            return 0.0;
+        }
+
+        $fromPayments = (float) (static::summedBreakdownForConsumer($consumerZoneId, $paidOnOrAfter)['current_penalty'] ?? 0);
+
+        $fromLedger = 0.0;
+        if (Schema::hasTable('consumer_ledgers') && Schema::hasColumn('consumer_ledgers', 'penalty')) {
+            $ledgerQuery = ConsumerLedger::query()
+                ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+                ->whereRaw("UPPER(TRIM(trans)) = 'PAYMENT'");
+            if ($paidOnOrAfter) {
+                $cutoff = $paidOnOrAfter instanceof \Carbon\Carbon
+                    ? $paidOnOrAfter->copy()
+                    : \Carbon\Carbon::parse($paidOnOrAfter);
+                $ledgerQuery->whereRaw('COALESCE(date, txtime) >= ?', [$cutoff->format('Y-m-d')]);
+            }
+            $fromLedger = (float) $ledgerQuery->sum(mr_col('penalty'));
+        }
+
+        return round(max($fromPayments, $fromLedger), 2);
+    }
+
+    /**
      * Keep only attributes that exist on consumer_payments; map legacy consumer_id → consumer_zone_id.
      */
     public static function filterTableAttributes(array $data): array
