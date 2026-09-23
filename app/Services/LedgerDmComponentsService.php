@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Http\Controllers\ConsumerLedgerController;
 use App\Models\ConsumerLedger;
 use App\Models\ConsumerPayment;
+use App\Models\Penalty;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Schema;
 
@@ -58,6 +59,31 @@ class LedgerDmComponentsService
     public function isEligibleForDisconnectionByMeterRentalArrears(float $meterRentalArrears): bool
     {
         return round($meterRentalArrears, 2) >= self::DISCONNECTION_METER_RENTAL_ARREARS_THRESHOLD;
+    }
+
+    /**
+     * Payment Breakdown Current Penalty: past (DM / schedule.penalty) + current (posted surcharges).
+     * Prefers the full ledger DM+PENALTY unpaid total when it already covers the schedule;
+     * otherwise adds schedule past + unpaid posted penalty so past is never absorbed into arrears.
+     */
+    public function unpaidPenaltyForPaymentBreakdown(int $consumerZoneId, float $schedulePenalty = 0.0): float
+    {
+        if ($consumerZoneId <= 0) {
+            return round(max(0.0, $schedulePenalty), 2);
+        }
+
+        $schedulePenalty = round(max(0.0, $schedulePenalty), 2);
+        $components = $this->computeForConsumers([$consumerZoneId]);
+        $ledgerPenalty = round((float) ($components[$consumerZoneId]['penalty'] ?? 0), 2);
+        $postedPenalty = Penalty::unpaidAmountForConsumer($consumerZoneId);
+
+        // Ledger already has past DM + current PENALTY rows (minus payments).
+        if ($ledgerPenalty + 0.009 >= $schedulePenalty) {
+            return $ledgerPenalty;
+        }
+
+        // Schedule still has past that ledger has not fully reflected — add current posted on top.
+        return round($schedulePenalty + $postedPenalty, 2);
     }
 
     /**

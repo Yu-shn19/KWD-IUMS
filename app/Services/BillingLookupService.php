@@ -942,7 +942,11 @@ class BillingLookupService
             $currentArrears = round(max(0.0, $currentArrears - ($paid['current_arrears'] ?? 0)), 2);
             $meterRentalArrears = round(max(0.0, $meterRentalArrears - ($paid['mr_arrears'] ?? 0)), 2);
             if ($consumer) {
-                $penalty = Penalty::unpaidAmountForConsumer((int) $consumer->id);
+                // Past (schedule/DM) + current posted surcharge — do not leave past penalty in arrears.
+                $penalty = app(LedgerDmComponentsService::class)->unpaidPenaltyForPaymentBreakdown(
+                    (int) $consumer->id,
+                    $penalty
+                );
             }
             if ($ledgerBalance !== null) {
                 [$currentBill, $currentMeterRental, $prioYears, $currentArrears, $penalty, $meterRentalArrears] =

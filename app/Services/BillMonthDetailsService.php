@@ -1683,7 +1683,11 @@ class BillMonthDetailsService
                     );
                     $overlay = $this->preferLedgerBreakdownWhenOverlayEmpty($overlay, $s);
                     $overlay = $this->mergeUnpaidPenaltyIntoOverlay($overlay, $s);
-                    $overlay['penalty'] = Penalty::unpaidAmountForConsumer((int) $s->consumer->id);
+                    // Past (schedule/DM) + current posted surcharge — do not leave past penalty in arrears.
+                    $overlay['penalty'] = app(LedgerDmComponentsService::class)->unpaidPenaltyForPaymentBreakdown(
+                        (int) $s->consumer->id,
+                        (float) ($overlay['penalty'] ?? 0)
+                    );
                     $overlay = $this->reconcileOverlayToBalance($overlay, $s->currentBalance);
                 }
 
@@ -1724,6 +1728,7 @@ class BillMonthDetailsService
     /**
      * Payment Breakdown: downloaded_readings (current bill / current MR)
      * and meter_reading_schedules (PY, arrears, penalty, MR arrears).
+     * Current Penalty is then expanded to past (schedule/DM) + current posted surcharge.
      *
      * Negative arrears (CM credit) display as 0.00 and reduce Current Billing
      * so the breakdown total matches the ledger balance.
