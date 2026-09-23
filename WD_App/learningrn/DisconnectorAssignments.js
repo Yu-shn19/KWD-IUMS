@@ -114,6 +114,37 @@ const computeDisconnectorAgingBalance = (item) => {
   return buckets.BALANCE;
 };
 
+/** Live remaining balance from consumer_ledgers (API ledger_balance preferred). */
+const getAssignmentLedgerBalance = (assignment) => {
+  if (!assignment || typeof assignment !== 'object') return 0;
+  const raw =
+    assignment.ledger_balance ??
+    assignment.remaining_balance ??
+    assignment.total_balance ??
+    assignment.BALANCE ??
+    assignment.total_outstanding ??
+    null;
+  if (raw !== null && raw !== undefined && raw !== '') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return computeDisconnectorAgingBalance(assignment);
+};
+
+const isAssignmentFullyPaidByBalance = (assignment) => {
+  if (!assignment || typeof assignment !== 'object') return false;
+  if (assignment.is_fully_paid === true) return true;
+  return getAssignmentLedgerBalance(assignment) <= 0.01;
+};
+
+/** Paid (full or half) for disconnection — do not disconnect. */
+const isAssignmentDoNotDisconnect = (assignment) => {
+  if (!assignment || typeof assignment !== 'object') return false;
+  if (assignment.consumer_has_paid === true) return true;
+  if (isAssignmentFullyPaidByBalance(assignment)) return true;
+  return false;
+};
+
 const buildAssignmentIdentifier = (item = {}) => {
   const accountNo = (item.account_no || item.account_number || item.accountNumber || '').toString().trim();
   const zone = (item.zone_code || item.zone || '').toString().trim();
@@ -261,9 +292,11 @@ export default function DisconnectorAssignments({ userData, onBack }) {
   }, [cancelledDueToPayment]);
 
   const isAssignmentPaid = (assignment) => {
-    if (isActiveDisconnectionAssignment(assignment)) {
-      return false;
+    // Active list: mark Paid when API says consumer_has_paid / payment / zero ledger.
+    if (isAssignmentDoNotDisconnect(assignment)) {
+      return true;
     }
+    // Legacy cancelled-due-to-payment entries (if still merged into list).
     const orderId = getAssignmentOrderId(assignment);
     return orderId !== '' && paidCancelledOrderIds.has(orderId);
   };
@@ -493,6 +526,12 @@ export default function DisconnectorAssignments({ userData, onBack }) {
           this_month_arrears: item.this_month_arrears ?? existing.this_month_arrears,
           last_month_arrears: item.last_month_arrears ?? existing.last_month_arrears,
           total_outstanding: item.total_outstanding ?? existing.total_outstanding,
+          ledger_balance: item.ledger_balance ?? existing.ledger_balance,
+          remaining_balance: item.remaining_balance ?? existing.remaining_balance,
+          is_fully_paid: item.is_fully_paid ?? existing.is_fully_paid,
+          consumer_has_paid: item.consumer_has_paid ?? existing.consumer_has_paid,
+          total_balance: item.total_balance ?? existing.total_balance,
+          BALANCE: item.BALANCE ?? existing.BALANCE,
         };
       });
 
@@ -802,9 +841,21 @@ export default function DisconnectorAssignments({ userData, onBack }) {
     );
   };
 
-  const handleCardPress = (uniqueKey) => {
+  const handleCardPress = (uniqueKey, assignment) => {
     // Toggle selection - if already selected, deselect it
-    setSelectedAssignmentId(selectedAssignmentId === uniqueKey ? null : uniqueKey);
+    const next = selectedAssignmentId === uniqueKey ? null : uniqueKey;
+    setSelectedAssignmentId(next);
+
+    // Full or half payment: same Paid message + show ledger balance.
+    if (next && assignment && isAssignmentPaid(assignment)) {
+      const name = assignment.account_name || assignment.name || 'Consumer';
+      const remaining = getAssignmentLedgerBalance(assignment);
+      const balanceLine =
+        remaining > 0.01
+          ? `\n\nRemaining balance: ${formatMoney(remaining)}\n(From consumer ledger)`
+          : `\n\nBalance: ${formatMoney(0)}\n(Fully paid)`;
+      Alert.alert('Paid', `${name} has paid – do not disconnect.${balanceLine}`);
+    }
   };
 
   const handleViewLocation = async (assignment) => {
@@ -873,6 +924,19 @@ export default function DisconnectorAssignments({ userData, onBack }) {
   };
 
   const handleDisconnect = async (assignment) => {
+    if (isAssignmentPaid(assignment) || isAssignmentDoNotDisconnect(assignment)) {
+      const remaining = getAssignmentLedgerBalance(assignment);
+      const balanceLine =
+        remaining > 0.01
+          ? `\n\nRemaining balance: ${formatMoney(remaining)}`
+          : '';
+      Alert.alert(
+        'Already paid',
+        `This consumer has already paid and cannot be marked as disconnected.${balanceLine}`
+      );
+      return;
+    }
+
     // Debug: Log assignment object to see available fields
     console.log('Assignment object in handleDisconnect:', JSON.stringify(assignment, null, 2));
     console.log('All assignment fields:', Object.keys(assignment));
@@ -1629,7 +1693,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
             return (
               <View key={uniqueKey} style={styles.card}>
                 <TouchableOpacity
-                  onPress={() => handleCardPress(uniqueKey)}
+                  onPress={() => handleCardPress(uniqueKey, assignment)}
                   activeOpacity={0.7}
                 >
                   <View style={styles.cardHeader}>
@@ -1697,7 +1761,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                         })()
                       ]}>
                         {(() => {
-                          if (isAssignmentPaid(assignment)) return 'Paid not assign';
+                          if (isAssignmentPaid(assignment)) return 'Already paid';
                           const rawStatus = assignment.status || assignment.assignment_status || 'Pending';
                           const normalizedStatus = normalize(rawStatus);
                           if (rawStatus === 'X' || (normalizedStatus.includes('disconnected') && !normalizedStatus.includes('reconnected'))) {
@@ -1717,10 +1781,16 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                   </View>
                 </TouchableOpacity>
 
-                {/* Paid message when card is selected */}
+                {/* Paid (full or half): same message + ledger balance */}
                 {isSelected && isAssignmentPaid(assignment) ? (
                   <View style={styles.paidMessageContainer}>
                     <Text style={styles.paidMessageText}>This consumer has paid – do not disconnect.</Text>
+                    <Text style={styles.paidBalanceText}>
+                      {getAssignmentLedgerBalance(assignment) > 0.01
+                        ? `Remaining balance: ${formatMoney(getAssignmentLedgerBalance(assignment))}`
+                        : `Balance: ${formatMoney(0)} (Fully paid)`}
+                    </Text>
+                    <Text style={styles.paidBalanceHint}>From consumer ledger</Text>
                   </View>
                 ) : isSelected ? (
                   <>
@@ -1775,7 +1845,7 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                           {formatMoney(assignment.PREV_YEAR ?? assignment.prev_year ?? assignment.previous_year ?? 0)}
                         </Text>
                         <Text style={[styles.agingValueCell, styles.agingBalanceValue]}>
-                          {formatMoney(computeDisconnectorAgingBalance(assignment))}
+                          {formatMoney(getAssignmentLedgerBalance(assignment))}
                         </Text>
                       </View>
                     </View>
@@ -2268,6 +2338,47 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  paidBalanceText: {
+    color: '#1b5e20',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  paidBalanceHint: {
+    color: '#66bb6a',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  remainingBalanceContainer: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#fff8e1',
+    borderWidth: 1,
+    borderColor: '#ffe082',
+    alignItems: 'center',
+  },
+  remainingBalanceLabel: {
+    color: '#f57f17',
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  remainingBalanceValue: {
+    color: '#e65100',
+    fontSize: 22,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  remainingBalanceHint: {
+    color: '#9e9e9e',
+    fontSize: 11,
+    marginTop: 4,
   },
   agingInfoContainer: {
     marginTop: 12,
