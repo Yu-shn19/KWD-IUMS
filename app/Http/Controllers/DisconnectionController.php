@@ -187,7 +187,7 @@ class DisconnectionController extends Controller
             ), $this->getOrdersTabData($request)));
         }
 
-        // Eligibility is Meter Rental Arrears > ₱60 only (same amount as Meter Reading Preparation).
+        // Eligibility is Meter Rental Arrears ≥ ₱40 only (same amount as Meter Reading Preparation).
         $billingFilter = $billingMonth ?: $billingDate;
         $isMonthFilter = ! empty($billingMonth);
         $consumers = $this->getConsumersForDisconnection($zone, $billingFilter, $isMonthFilter);

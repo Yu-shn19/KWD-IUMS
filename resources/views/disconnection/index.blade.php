@@ -146,7 +146,7 @@
                         <div>
                             <h1 class="h3 mb-1 text-dark font-weight-bold">Disconnection Management</h1>
                             <p class="text-muted mb-0 small">
-                                List of consumers with Meter Rental Arrears greater than ₱60 (same amount as Meter Reading Preparation)
+                                List of consumers with Meter Rental Arrears greater than or equal to ₱40 (same amount as Meter Reading Preparation)
                             </p>
                         </div>
                         @if(isset($totalConsumers) && $totalConsumers > 0)
@@ -249,7 +249,7 @@
                                         <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
                                         <h5 class="text-muted">No consumers found for disconnection</h5>
                                         @if(!empty($zone) || !empty($billingMonth) || !empty($billingDate))
-                                            <p class="text-muted">No accounts in this filter have Meter Rental Arrears greater than ₱60.</p>
+                                            <p class="text-muted">No accounts in this filter have Meter Rental Arrears greater than or equal to ₱40.</p>
                                         @else
                                             <p class="text-muted">Apply at least one filter (zone, billing month, or billing date) to load disconnection candidates.</p>
                                         @endif
@@ -376,7 +376,7 @@
                                                                         <td>{{ $consumer->meter_number }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->last_reading ?? 0), 0) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->current_billing_with_maintenance ?? 20), 2) }}</td>
-                                                                        <td class="text-right font-weight-bold {{ (float)($consumer->meter_rental_arrears ?? 0) > 60 ? 'text-danger' : 'text-muted' }}">{{ number_format((float)($consumer->meter_rental_arrears ?? 0), 2) }}</td>
+                                                                        <td class="text-right font-weight-bold {{ (float)($consumer->meter_rental_arrears ?? 0) >= 40 ? 'text-danger' : 'text-muted' }}">{{ number_format((float)($consumer->meter_rental_arrears ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_30_days ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_60_days ?? 0), 2) }}</td>
                                                                         <td class="text-right">{{ number_format((float)($consumer->aging_90_days ?? 0) + (float)($consumer->aging_over_90 ?? 0), 2) }}</td>
@@ -642,7 +642,7 @@
 
     @if(!$consumersByZone->isEmpty())
         @php
-            $filterTypeLabel = 'Meter Rental Arrears greater than ₱60';
+            $filterTypeLabel = 'Meter Rental Arrears greater than or equal to ₱40';
             $zoneLabel = !empty($zone ?? null) ? 'Zone ' . $zone : 'All zones';
             $billingMonthLabel = '—';
             if (!empty($billingMonth ?? null)) {

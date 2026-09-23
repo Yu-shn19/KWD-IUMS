@@ -17,8 +17,8 @@ if (! function_exists(__NAMESPACE__.'\mr_col')) {
 
 class LedgerDmComponentsService
 {
-    /** Disconnection candidates: Meter Rental Arrears must exceed this amount. */
-    public const DISCONNECTION_METER_RENTAL_ARREARS_THRESHOLD = 60.0;
+    /** Disconnection candidates: Meter Rental Arrears must be at least this amount. */
+    public const DISCONNECTION_METER_RENTAL_ARREARS_THRESHOLD = 40.0;
 
     /**
      * Same Meter Rental Arrears figure used by Meter Reading Preparation.
@@ -57,7 +57,7 @@ class LedgerDmComponentsService
 
     public function isEligibleForDisconnectionByMeterRentalArrears(float $meterRentalArrears): bool
     {
-        return round($meterRentalArrears, 2) > self::DISCONNECTION_METER_RENTAL_ARREARS_THRESHOLD;
+        return round($meterRentalArrears, 2) >= self::DISCONNECTION_METER_RENTAL_ARREARS_THRESHOLD;
     }
 
     /**
