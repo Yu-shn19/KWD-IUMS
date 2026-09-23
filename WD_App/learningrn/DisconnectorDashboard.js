@@ -137,8 +137,16 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
         const stored = await routesStorage.getRoutes(ROUTES_BUCKET_DISCONNECTOR);
         const cachedAssignments = extractAssignments(stored || []);
         setStats(categorizeAssignments(cachedAssignments));
+        const paidFromCache = (cachedAssignments || []).filter((a) => {
+          if (a?.consumer_has_paid === true || a?.is_fully_paid === true) return true;
+          const bal = Number(a?.ledger_balance ?? a?.remaining_balance);
+          return Number.isFinite(bal) && bal <= 0.01;
+        });
         const cachedPaidList = await disconnectorPaidStorage.getPaidList();
-        setCancelledDueToPayment(Array.isArray(cachedPaidList) ? cachedPaidList : []);
+        const mergedOffline = paidFromCache.length > 0
+          ? paidFromCache
+          : (Array.isArray(cachedPaidList) ? cachedPaidList : []);
+        setCancelledDueToPayment(mergedOffline);
         if (!silent) setIsRefreshing(false);
         return;
       }
@@ -194,7 +202,15 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
 
       setStats(totals);
 
-      // Fetch orders cancelled because consumer paid (do not disconnect these); cache for offline
+      // Paid consumers stay on the assignment list (not cancelled).
+      // Prefer active assignments flagged consumer_has_paid; also merge legacy cancelled-due-to-payment.
+      const paidFromAssignments = (assignments || []).filter((a) => {
+        if (a?.consumer_has_paid === true || a?.is_fully_paid === true) return true;
+        const bal = Number(a?.ledger_balance ?? a?.remaining_balance);
+        return Number.isFinite(bal) && bal <= 0.01;
+      });
+
+      let paidFromCancelled = [];
       if (disconnectorId && token) {
         try {
           const paidParams = { disconnector_id: disconnectorId };
@@ -206,19 +222,32 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
             token
           );
           const list = res?.cancelled_due_to_payment || [];
-          const paidList = Array.isArray(list) ? list : [];
-          // Use the raw paid list for notification + count.
-          // Filtering by current assignments can hide valid "already paid" notifications
-          // because the backend marks them as cancelled and they may disappear from active assignments.
-          setCancelledDueToPayment(paidList);
-          await disconnectorPaidStorage.savePaidList(paidList);
+          paidFromCancelled = Array.isArray(list) ? list : [];
         } catch (e) {
           console.warn('DisconnectorDashboard cancelled-due-to-payment:', e);
           const cachedPaid = await disconnectorPaidStorage.getPaidList();
-          const safeCachedPaid = Array.isArray(cachedPaid) ? cachedPaid : [];
-          setCancelledDueToPayment(safeCachedPaid);
+          paidFromCancelled = Array.isArray(cachedPaid) ? cachedPaid : [];
         }
       }
+
+      // Deduplicate by account / order id; prefer assignment rows (have live paid_at + balance).
+      const paidByKey = new Map();
+      const paidKey = (item) => {
+        const id = (item?.id ?? '').toString();
+        const acct = (item?.account_no || item?.account_number || '').toString().replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        return acct || (id ? `id:${id}` : '');
+      };
+      paidFromCancelled.forEach((item) => {
+        const k = paidKey(item);
+        if (k) paidByKey.set(k, item);
+      });
+      paidFromAssignments.forEach((item) => {
+        const k = paidKey(item);
+        if (k) paidByKey.set(k, item);
+      });
+      const paidList = Array.from(paidByKey.values());
+      setCancelledDueToPayment(paidList);
+      await disconnectorPaidStorage.savePaidList(paidList);
     } catch (error) {
       console.error('DisconnectorDashboard loadStats error:', error);
       // On error, try to load from local storage as fallback
@@ -274,8 +303,8 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
       Alert.alert(
         'Do not disconnect',
         n === 1
-          ? `1 consumer has paid and was removed from your list. Do not disconnect them.\n\n${names}`
-          : `${n} consumers have paid and were removed from your list. Do not disconnect them.\n\n${names}${n > 3 ? '\n... and more (see list below)' : ''}`,
+          ? `1 consumer has paid – do not disconnect them. They remain on your assignments list.\n\n${names}`
+          : `${n} consumers have paid – do not disconnect them. They remain on your assignments list.\n\n${names}${n > 3 ? '\n... and more (see list below)' : ''}`,
         [{ text: 'OK' }]
       );
     }
@@ -358,11 +387,17 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           <Text style={styles.statHint}>Awaiting disconnection</Text>
         </View>
 
-        <View style={[styles.statCard, styles.paidCountCard]}>
+        <TouchableOpacity
+          style={[styles.statCard, styles.paidCountCard]}
+          onPress={() => {
+            if (cancelledDueToPayment.length > 0) setPaidListModalVisible(true);
+          }}
+          activeOpacity={cancelledDueToPayment.length > 0 ? 0.7 : 1}
+        >
           <Text style={styles.statLabel}>Paid</Text>
           <Text style={styles.statValue}>{cancelledDueToPayment.length}</Text>
           <Text style={styles.statHint}>Do not disconnect</Text>
-        </View>
+        </TouchableOpacity>
 
         <View style={[styles.statCard, styles.completedCard]}>
           <Text style={styles.statLabel}>Completed</Text>
@@ -375,26 +410,26 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
         <View style={styles.noticeContainer}>
           <Text style={styles.noticeTitle}>Do not disconnect – paid</Text>
           <Text style={styles.noticeSubtitle}>
-            The following consumers have a payment on record and were removed from your list. Do not disconnect them.
+            These consumers have paid (full or partial) and stay on your assignments list. Do not disconnect them.
           </Text>
-          {cancelledDueToPayment.slice(0, 10).map((item) => (
-            <View key={item.id || item.account_no} style={styles.noticeRow}>
+          {cancelledDueToPayment.slice(0, 5).map((item) => (
+            <View key={item.id || item.account_no || item.account_number} style={styles.noticeRow}>
               <View style={styles.noticeRowLeft}>
-                <Text style={styles.noticeAccount}>{item.account_no}</Text>
+                <Text style={styles.noticeAccount}>{item.account_no || item.account_number || '—'}</Text>
                 <Text style={styles.noticeName} numberOfLines={1}>{item.account_name || '—'}</Text>
               </View>
               <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
             </View>
           ))}
-          {cancelledDueToPayment.length > 10 && (
-            <TouchableOpacity
-              style={styles.noticeSeeAllButton}
-              onPress={() => setPaidListModalVisible(true)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.noticeSeeAllText}>See All</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.noticeSeeAllButton}
+            onPress={() => setPaidListModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.noticeSeeAllText}>
+              See All ({cancelledDueToPayment.length})
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -406,7 +441,9 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           <View style={styles.buttonTextContainer}>
             <Text style={styles.buttonTitle}>View Assignments</Text>
             <Text style={styles.buttonSubtitle}>
-              See all customers scheduled for disconnection.
+              {cancelledDueToPayment.length > 0
+                ? `${cancelledDueToPayment.length} paid (do not disconnect) · see all customers scheduled for disconnection.`
+                : 'See all customers scheduled for disconnection.'}
             </Text>
           </View>
         </TouchableOpacity>
@@ -452,7 +489,7 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           <View style={styles.paidModalHeaderText}>
             <Text style={styles.paidModalTitle}>Do not disconnect – paid</Text>
             <Text style={styles.paidModalSubtitle}>
-              {cancelledDueToPayment.length} consumer(s) with a payment on record — do not disconnect them.
+              {cancelledDueToPayment.length} consumer(s) paid — still on your list; do not disconnect them.
             </Text>
           </View>
           <TouchableOpacity
@@ -470,7 +507,7 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           renderItem={({ item }) => (
             <View style={styles.paidModalRow}>
               <View style={styles.paidModalRowMain}>
-                <Text style={styles.noticeAccount}>{item.account_no}</Text>
+                <Text style={styles.noticeAccount}>{item.account_no || item.account_number || '—'}</Text>
                 <Text style={styles.paidModalName} numberOfLines={3}>
                   {item.account_name || '—'}
                 </Text>

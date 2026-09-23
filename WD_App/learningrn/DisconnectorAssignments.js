@@ -137,6 +137,17 @@ const isAssignmentFullyPaidByBalance = (assignment) => {
   return getAssignmentLedgerBalance(assignment) <= 0.01;
 };
 
+/** Paid date from API (paid_at / payment_date) or notes. */
+const getPaidAtFromAssignment = (item) => {
+  if (!item) return null;
+  const direct = item.paid_at ?? item.paidAt ?? item.payment_date ?? item.paymentDate;
+  if (direct) return direct;
+  const notes = (item.notes || '').toString();
+  const match = notes.match(/paid on (\d{4}-\d{2}-\d{2})/i);
+  if (match) return match[1];
+  return null;
+};
+
 /** Paid (full or half) for disconnection — do not disconnect. */
 const isAssignmentDoNotDisconnect = (assignment) => {
   if (!assignment || typeof assignment !== 'object') return false;
@@ -530,6 +541,8 @@ export default function DisconnectorAssignments({ userData, onBack }) {
           remaining_balance: item.remaining_balance ?? existing.remaining_balance,
           is_fully_paid: item.is_fully_paid ?? existing.is_fully_paid,
           consumer_has_paid: item.consumer_has_paid ?? existing.consumer_has_paid,
+          paid_at: item.paid_at ?? existing.paid_at,
+          payment_date: item.payment_date ?? existing.payment_date,
           total_balance: item.total_balance ?? existing.total_balance,
           BALANCE: item.BALANCE ?? existing.BALANCE,
         };
@@ -850,11 +863,12 @@ export default function DisconnectorAssignments({ userData, onBack }) {
     if (next && assignment && isAssignmentPaid(assignment)) {
       const name = assignment.account_name || assignment.name || 'Consumer';
       const remaining = getAssignmentLedgerBalance(assignment);
+      const paidLabel = formatDate(getPaidAtFromAssignment(assignment));
       const balanceLine =
         remaining > 0.01
           ? `\n\nRemaining balance: ${formatMoney(remaining)}\n(From consumer ledger)`
           : `\n\nBalance: ${formatMoney(0)}\n(Fully paid)`;
-      Alert.alert('Paid', `${name} has paid – do not disconnect.${balanceLine}`);
+      Alert.alert('Paid', `${name} has paid – do not disconnect.\nPaid: ${paidLabel}${balanceLine}`);
     }
   };
 
@@ -1779,6 +1793,11 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                     <Text style={styles.metaTag}>Scheduled: {formatDate(assignment.scheduled_at)}</Text>
                     <Text style={styles.metaTag}>Due: {formatDate(assignment.due_date)}</Text>
                   </View>
+                  {isAssignmentPaid(assignment) ? (
+                    <Text style={styles.paidDateMeta}>
+                      Paid: {formatDate(getPaidAtFromAssignment(assignment))}
+                    </Text>
+                  ) : null}
                 </TouchableOpacity>
 
                 {/* Paid (full or half): same message + ledger balance */}
@@ -1790,7 +1809,9 @@ export default function DisconnectorAssignments({ userData, onBack }) {
                         ? `Remaining balance: ${formatMoney(getAssignmentLedgerBalance(assignment))}`
                         : `Balance: ${formatMoney(0)} (Fully paid)`}
                     </Text>
-                    <Text style={styles.paidBalanceHint}>From consumer ledger</Text>
+                    <Text style={styles.paidBalanceHint}>
+                      Paid: {formatDate(getPaidAtFromAssignment(assignment))} · From consumer ledger
+                    </Text>
                   </View>
                 ) : isSelected ? (
                   <>
@@ -2321,6 +2342,12 @@ const styles = StyleSheet.create({
   paidBadgeText: {
     color: 'white',
     fontSize: 11,
+    fontWeight: '600',
+  },
+  paidDateMeta: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#2e7d32',
     fontWeight: '600',
   },
   paidMessageContainer: {

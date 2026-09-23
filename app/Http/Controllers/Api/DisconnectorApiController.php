@@ -404,18 +404,39 @@ class DisconnectorApiController extends Controller
         $isFullyPaid = $ledgerBalance <= 0.01;
 
         $hasPayment = false;
+        $paidAt = null;
         if ($consumerZoneId) {
             $paymentSince = $order->created_at ?? now()->subDays(30);
-            $hasPayment = ConsumerPayment::forConsumerZone($consumerZoneId)
+            $latestPayment = ConsumerPayment::forConsumerZone($consumerZoneId)
                 ->whereNotNull('paid_at')
                 ->where('paid_at', '>=', $paymentSince)
-                ->exists();
+                ->orderByDesc('paid_at')
+                ->first();
+            if ($latestPayment) {
+                $hasPayment = true;
+                $paidAt = $latestPayment->paid_at;
+            }
         }
         $cancelledDueToPayment = is_string($order->notes)
             && str_contains($order->notes, DisconnectionOrder::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX);
 
         // Full or half payment on this assignment → treat as paid for disconnection.
         $consumerHasPaid = $hasPayment || $cancelledDueToPayment || $isFullyPaid;
+
+        if (!$paidAt && $cancelledDueToPayment && is_string($order->notes)) {
+            if (preg_match('/paid on (\d{4}-\d{2}-\d{2})/i', $order->notes, $m)) {
+                $paidAt = $m[1];
+            }
+        }
+
+        $paidAtFormatted = null;
+        if ($paidAt) {
+            try {
+                $paidAtFormatted = Carbon::parse($paidAt)->format('Y-m-d H:i:s');
+            } catch (\Throwable $e) {
+                $paidAtFormatted = is_string($paidAt) ? $paidAt : null;
+            }
+        }
 
         return [
             'id' => $order->id,
@@ -444,6 +465,8 @@ class DisconnectorApiController extends Controller
             'consumer_zone_id' => $consumerZoneId,
             'consumer_id' => $consumerZoneId,
             'consumer_has_paid' => $consumerHasPaid,
+            'paid_at' => $paidAtFormatted,
+            'payment_date' => $paidAtFormatted,
             'type' => 'disconnection',
             'assignment_type' => 'disconnection',
         ];
