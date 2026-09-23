@@ -49,6 +49,22 @@
         border-bottom: 1px solid #e5e7eb;
         padding-bottom: 0.35rem;
     }
+    .reading-details-box {
+        margin-top: 0.75rem;
+        padding: 0.75rem 0.85rem;
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+        border-radius: 0.5rem;
+    }
+    .reading-details-box .reading-detail-label {
+        color: #6b7280;
+        font-size: 0.75rem;
+    }
+    .reading-details-box .reading-detail-value {
+        color: #111827;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
     .payment-grid {
         border: 1px solid #e5e7eb;
         border-radius: 0.75rem;
@@ -411,8 +427,35 @@
                                                 </div>
                                                 <input type="hidden" id="currentBalance" value="₱ 0.00">
                                             </div>
-                                            
-                            
+
+                                            <div id="readingDetailsBox" class="reading-details-box mb-2" style="display: none;">
+                                                <div class="row">
+                                                    <div class="col-6 mb-2">
+                                                        <div class="reading-detail-label">Reading Date</div>
+                                                        <div class="reading-detail-value" id="displayReadingDate">—</div>
+                                                    </div>
+                                                    <div class="col-6 mb-2">
+                                                        <div class="reading-detail-label">Reading From</div>
+                                                        <div class="reading-detail-value" id="displayReadingFrom">—</div>
+                                                    </div>
+                                                    <div class="col-6 mb-2">
+                                                        <div class="reading-detail-label">Due Date</div>
+                                                        <div class="reading-detail-value" id="displayDueDate">—</div>
+                                                    </div>
+                                                    <div class="col-6 mb-2">
+                                                        <div class="reading-detail-label">Present Reading</div>
+                                                        <div class="reading-detail-value" id="displayPresentReading">—</div>
+                                                    </div>
+                                                    <div class="col-6 mb-2">
+                                                        <div class="reading-detail-label">Previous Reading</div>
+                                                        <div class="reading-detail-value" id="displayPreviousReading">—</div>
+                                                    </div>
+                                                    <div class="col-6 mb-2">
+                                                        <div class="reading-detail-label">Cubic Meter Used</div>
+                                                        <div class="reading-detail-value" id="displayConsumption">—</div>
+                                                    </div>
+                                                </div>
+                                            </div>
 
                                             <div class="divider-label">Payment Details</div>
                                             <div class="form-group">
@@ -1191,6 +1234,7 @@
                         arrearsPreviousManuallyEdited = false;
                         if (updatePaymentBtn) updatePaymentBtn.disabled = true;
                         if (viewLedgerBtn) viewLedgerBtn.disabled = true;
+                        clearReadingDetailsDisplay();
 
                         // Reset non-sundry payment fields before applying BAM payload.
                         if (typeof clearPaymentBreakdown === 'function') clearPaymentBreakdown();
@@ -1463,6 +1507,88 @@
                     el.className = 'badge badge-secondary px-3 py-2';
                 }
                 el.style.fontSize = '0.8rem';
+            };
+
+            const formatReadingDetailDate = (value) => {
+                if (value == null || String(value).trim() === '') {
+                    return '—';
+                }
+                const raw = String(value).trim();
+                const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                if (match) {
+                    return `${match[2]}/${match[3]}/${match[1]}`;
+                }
+                const d = new Date(raw);
+                if (Number.isNaN(d.getTime())) {
+                    return raw;
+                }
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                const yyyy = d.getFullYear();
+                return `${mm}/${dd}/${yyyy}`;
+            };
+
+            const formatReadingDetailNumber = (value) => {
+                if (value == null || value === '') {
+                    return '—';
+                }
+                const num = Number(value);
+                if (!Number.isFinite(num)) {
+                    return String(value);
+                }
+                return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            const clearReadingDetailsDisplay = () => {
+                const box = document.getElementById('readingDetailsBox');
+                const ids = [
+                    'displayReadingDate',
+                    'displayReadingFrom',
+                    'displayDueDate',
+                    'displayPresentReading',
+                    'displayPreviousReading',
+                    'displayConsumption',
+                ];
+                ids.forEach((id) => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.textContent = '—';
+                    }
+                });
+                if (box) {
+                    box.style.display = 'none';
+                }
+            };
+
+            const populateReadingDetailsDisplay = (billing = {}, downloadedReading = {}) => {
+                const box = document.getElementById('readingDetailsBox');
+                const readingDate = billing.reading_date ?? downloadedReading.reading_date ?? null;
+                const readingFrom = billing.previous_reading_date ?? downloadedReading.previous_reading_date ?? null;
+                const dueDate = billing.due_date ?? downloadedReading.due_date ?? null;
+                const presentReading = billing.current_reading ?? downloadedReading.current_reading ?? null;
+                const previousReading = billing.previous_reading ?? downloadedReading.previous_reading ?? null;
+                const consumption = billing.consumption ?? downloadedReading.consumption ?? null;
+
+                const hasAny = [readingDate, readingFrom, dueDate, presentReading, previousReading, consumption]
+                    .some((v) => v != null && String(v).trim() !== '');
+
+                const setText = (id, text) => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.textContent = text;
+                    }
+                };
+
+                setText('displayReadingDate', formatReadingDetailDate(readingDate));
+                setText('displayReadingFrom', formatReadingDetailDate(readingFrom));
+                setText('displayDueDate', formatReadingDetailDate(dueDate));
+                setText('displayPresentReading', formatReadingDetailNumber(presentReading));
+                setText('displayPreviousReading', formatReadingDetailNumber(previousReading));
+                setText('displayConsumption', formatReadingDetailNumber(consumption));
+
+                if (box) {
+                    box.style.display = hasAny ? '' : 'none';
+                }
             };
 
             const getAccountNumber = () => {
@@ -2195,6 +2321,7 @@
 
                 // Populate billing fields from downloaded_readings + meter_reading_schedules
                 applyScheduleDownloadedBreakdown(billing);
+                populateReadingDetailsDisplay(billing, downloaded_reading);
                 setNumberFieldValue(document.getElementById('fieldAdvances'), 0);
                 
                 // Senior Citizen Discount: Reset to disabled state
@@ -2808,6 +2935,7 @@
                 if (viewLedgerBtn) {
                     viewLedgerBtn.disabled = true;
                 }
+                clearReadingDetailsDisplay();
 
                 // Ensure Senior Citizen Discount field is readonly and reset
                 const seniorDiscountField = document.getElementById('fieldSeniorDiscount');
