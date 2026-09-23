@@ -412,8 +412,8 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
           <Text style={styles.noticeSubtitle}>
             These consumers have paid (full or partial) and stay on your assignments list. Do not disconnect them.
           </Text>
-          {cancelledDueToPayment.slice(0, 10).map((item) => (
-            <View key={item.id || item.account_no} style={styles.noticeRow}>
+          {cancelledDueToPayment.slice(0, 5).map((item) => (
+            <View key={item.id || item.account_no || item.account_number} style={styles.noticeRow}>
               <View style={styles.noticeRowLeft}>
                 <Text style={styles.noticeAccount}>{item.account_no || item.account_number || '—'}</Text>
                 <Text style={styles.noticeName} numberOfLines={1}>{item.account_name || '—'}</Text>
@@ -421,15 +421,15 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
               <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
             </View>
           ))}
-          {cancelledDueToPayment.length > 10 && (
-            <TouchableOpacity
-              style={styles.noticeSeeAllButton}
-              onPress={() => setPaidListModalVisible(true)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.noticeSeeAllText}>See All</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.noticeSeeAllButton}
+            onPress={() => setPaidListModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.noticeSeeAllText}>
+              See All ({cancelledDueToPayment.length})
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
