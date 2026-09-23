@@ -60,8 +60,6 @@ class DownloadedReadingPaymentService
                 }
             }
 
-            $this->cancelDisconnectionOrdersIfNeeded($context, $consumerPayment);
-
             $billPaymentAmount = $this->computeBillPaymentAmount($validated);
 
             if ($context->consumerId) {
@@ -107,6 +105,10 @@ class DownloadedReadingPaymentService
                     $this->createOthersLroCredits($validated, $paidAt);
                 }
             }
+
+            // Disconnection only: cancel after ledger reflects payment so balance is accurate.
+            // Partial payments keep the assignment and refresh total_outstanding.
+            $this->cancelDisconnectionOrdersIfNeeded($context, $consumerPayment);
 
             $result = [
                 'downloaded_id' => $context->downloaded?->id,
@@ -326,15 +328,37 @@ class DownloadedReadingPaymentService
         ConsumerPayment $consumerPayment
     ): void {
         if ($context->consumerId && $consumerPayment->paid_at) {
-            $cancelled = DisconnectionOrder::cancelActiveOrdersForConsumerDueToPayment(
-                $context->consumerId,
-                $consumerPayment->paid_at
-            );
-            if ($cancelled > 0) {
-                Log::info('Disconnection orders cancelled due to payment', [
+            $accountNo = $context->accountNumber
+                ?? $context->consumer?->account_no
+                ?? null;
+
+            $ledgerBalance = 0.0;
+            if ($accountNo) {
+                try {
+                    $ledgerBalance = (new ConsumerLedgerController())->getLedgerBalanceOnly($accountNo);
+                } catch (\Throwable $e) {
+                    Log::warning('Disconnection payment: ledger balance lookup failed', [
+                        'account' => $accountNo,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $ledgerBalance = max(
+                        0,
+                        (float) ($context->outstandingBalance ?? 0) - (float) ($consumerPayment->payment_amount ?? 0)
+                    );
+                }
+            }
+
+            // Keep on disconnector list — do not cancel. Only refresh outstanding from ledger.
+            $updated = DisconnectionOrder::forConsumerZone($context->consumerId)
+                ->whereIn('status', ['pending', 'assigned', 'in-progress'])
+                ->update(['total_outstanding' => round(max(0, $ledgerBalance), 2)]);
+
+            if ($updated > 0) {
+                Log::info('Disconnection orders kept after payment; outstanding refreshed (do not disconnect)', [
                     'consumer_id' => $context->consumerId,
                     'account' => $context->accountNumber,
-                    'cancelled_count' => $cancelled,
+                    'ledger_balance' => $ledgerBalance,
+                    'updated_count' => $updated,
                 ]);
             }
 
@@ -342,7 +366,7 @@ class DownloadedReadingPaymentService
         }
 
         if ($consumerPayment->paid_at && !$context->consumerId) {
-            Log::warning('Disconnection cancel skipped: payment saved but consumer not resolved', [
+            Log::warning('Disconnection payment note skipped: payment saved but consumer not resolved', [
                 'account_number' => $context->accountNumber,
                 'downloaded_id' => $context->downloaded?->id,
             ]);

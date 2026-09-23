@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\ConsumerLedgerController;
 use App\Models\DisconnectionOrder;
 use App\Models\User;
 use App\Models\ConsumerPayment;
@@ -70,8 +71,20 @@ class DisconnectorApiController extends Controller
                     $row['_OVER90'] = $aging['_over90'];
                     $row['prev_year'] = $aging['prev_year'];
                     $row['PREV_YEAR'] = $aging['prev_year'];
-                    $row['total_balance'] = $aging['total_balance'];
-                    $row['BALANCE'] = $aging['total_balance'];
+                }
+
+                // Prefer live consumer_ledgers running balance for display accuracy.
+                $ledgerBalance = isset($row['ledger_balance'])
+                    ? (float) $row['ledger_balance']
+                    : (float) ($aging['total_balance'] ?? $row['total_outstanding'] ?? 0);
+                $row['total_balance'] = $ledgerBalance;
+                $row['BALANCE'] = $ledgerBalance;
+                $row['ledger_balance'] = $ledgerBalance;
+                $row['remaining_balance'] = max(0, $ledgerBalance);
+                $row['is_fully_paid'] = $ledgerBalance <= 0.01;
+                // Keep consumer_has_paid from formatAssignmentForMobile (any payment / cancelled).
+                if ($row['is_fully_paid']) {
+                    $row['consumer_has_paid'] = true;
                 }
 
                 return $row;
@@ -185,6 +198,34 @@ class DisconnectorApiController extends Controller
                     break;
 
                 case 'disconnected':
+                    // Payment on this assignment (full or half) or zero ledger → do not disconnect.
+                    $consumerZoneId = $order->consumer_zone_id;
+                    $paymentSince = $order->created_at ?? now()->subDays(30);
+                    $hasPayment = $consumerZoneId
+                        ? ConsumerPayment::forConsumerZone($consumerZoneId)
+                            ->whereNotNull('paid_at')
+                            ->where('paid_at', '>=', $paymentSince)
+                            ->exists()
+                        : false;
+                    $cancelledDueToPayment = is_string($order->notes)
+                        && str_contains($order->notes, DisconnectionOrder::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX);
+
+                    $accountNo = $order->account_no
+                        ?? ($order->consumerZone->account_no ?? null);
+                    $ledgerBalance = $accountNo
+                        ? $this->resolveLedgerBalance($accountNo, (float) ($order->total_outstanding ?? 0))
+                        : (float) ($order->total_outstanding ?? 0);
+
+                    if ($hasPayment || $cancelledDueToPayment || $ledgerBalance <= 0.01) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'This consumer has already paid and cannot be marked as disconnected.',
+                            'ledger_balance' => round($ledgerBalance, 2),
+                            'remaining_balance' => round(max(0, $ledgerBalance), 2),
+                            'is_fully_paid' => $ledgerBalance <= 0.01,
+                            'consumer_has_paid' => true,
+                        ], 422);
+                    }
                     $order->markAsDisconnected($notes);
                     // Consumer status_code is automatically updated to 'X' in the model method
                     break;
@@ -346,22 +387,35 @@ class DisconnectorApiController extends Controller
     }
 
     /**
-     * Format disconnection order for mobile app
-     * Includes consumer_has_paid so the app can disable the Disconnect button when the consumer has already paid.
+     * Format disconnection order for mobile app.
+     * Includes live ledger_balance from consumer_ledgers.
+     * Any payment (full or half) sets consumer_has_paid so the app blocks disconnect
+     * and can show Paid + remaining balance on tap.
      */
     private function formatAssignmentForMobile($order)
     {
-        $consumerHasPaid = false;
         $consumerZoneId = $order->consumer_zone_id;
-        if ($consumerZoneId) {
-            $consumerHasPaid = ConsumerPayment::forConsumerZone($consumerZoneId)
-                ->whereNotNull('paid_at')
-                ->exists();
-        }
-
-  $consumer = $order->relationLoaded('consumerZone') ? $order->consumerZone : null;
+        $consumer = $order->relationLoaded('consumerZone') ? $order->consumerZone : null;
         $latitude = $consumer?->latitude;
         $longitude = $consumer?->longitude;
+
+        $accountNo = $order->account_no ?? ($consumer?->account_no ?? null);
+        $ledgerBalance = $this->resolveLedgerBalance($accountNo, (float) ($order->total_outstanding ?? 0));
+        $isFullyPaid = $ledgerBalance <= 0.01;
+
+        $hasPayment = false;
+        if ($consumerZoneId) {
+            $paymentSince = $order->created_at ?? now()->subDays(30);
+            $hasPayment = ConsumerPayment::forConsumerZone($consumerZoneId)
+                ->whereNotNull('paid_at')
+                ->where('paid_at', '>=', $paymentSince)
+                ->exists();
+        }
+        $cancelledDueToPayment = is_string($order->notes)
+            && str_contains($order->notes, DisconnectionOrder::CANCELLED_DUE_TO_PAYMENT_NOTE_SUFFIX);
+
+        // Full or half payment on this assignment → treat as paid for disconnection.
+        $consumerHasPaid = $hasPayment || $cancelledDueToPayment || $isFullyPaid;
 
         return [
             'id' => $order->id,
@@ -378,6 +432,9 @@ class DisconnectorApiController extends Controller
             'last_month_arrears' => (float)$order->last_month_arrears,
             'others_ar' => (float)$order->others_ar,
             'total_outstanding' => (float)$order->total_outstanding,
+            'ledger_balance' => $ledgerBalance,
+            'remaining_balance' => max(0, $ledgerBalance),
+            'is_fully_paid' => $isFullyPaid,
             'unpaid_months' => $order->unpaid_months,
             'oldest_unpaid_date' => $order->oldest_unpaid_date?->format('Y-m-d'),
             'latest_unpaid_date' => $order->latest_unpaid_date?->format('Y-m-d'),
@@ -390,6 +447,22 @@ class DisconnectorApiController extends Controller
             'type' => 'disconnection',
             'assignment_type' => 'disconnection',
         ];
+    }
+
+    /**
+     * Live running balance from consumer_ledgers (same as consumer ledger screen).
+     */
+    private function resolveLedgerBalance(?string $accountNo, float $fallback = 0.0): float
+    {
+        if (!$accountNo) {
+            return round($fallback, 2);
+        }
+
+        try {
+            return round((new ConsumerLedgerController())->getLedgerBalanceOnly($accountNo), 2);
+        } catch (\Throwable $e) {
+            return round($fallback, 2);
+        }
     }
 
     /**
