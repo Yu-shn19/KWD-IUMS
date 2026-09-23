@@ -141,15 +141,93 @@ class DisconnectionController extends Controller
     }
 
     /**
+     * Normalize zone filter input (single string or array) into a unique list of codes.
+     *
+     * @param  string|array<int, string>|null  $zones
+     * @return list<string>
+     */
+    private function normalizeZoneCodes(string|array|null $zones): array
+    {
+        if ($zones === null || $zones === '') {
+            return [];
+        }
+
+        if (is_string($zones)) {
+            $zones = [$zones];
+        }
+
+        if (! is_array($zones)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($zones as $zone) {
+            $code = trim((string) $zone);
+            if ($code !== '') {
+                $normalized[] = $code;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function selectedZonesFromRequest(Request $request): array
+    {
+        return $this->normalizeZoneCodes($request->input('zone'));
+    }
+
+    /**
+     * @param  list<string>  $zones
+     */
+    private function applyZoneCodesFilter($query, array $zones, string $column = 'zone_code'): void
+    {
+        if ($zones === []) {
+            return;
+        }
+
+        $query->where(function ($q) use ($zones, $column) {
+            foreach ($zones as $zone) {
+                $q->orWhere(function ($inner) use ($zone, $column) {
+                    ConsumerZone::applyZoneCodeConstraint($inner, $zone, $column);
+                });
+            }
+        });
+    }
+
+    /**
+     * @param  list<string>  $zones
+     */
+    private function applyScheduleZoneCodesFilter($query, array $zones): void
+    {
+        if ($zones === []) {
+            return;
+        }
+
+        if (count($zones) === 1) {
+            $query->forZoneCode($zones[0]);
+
+            return;
+        }
+
+        $query->whereHas('consumerZone', function (Builder $q) use ($zones) {
+            $this->applyZoneCodesFilter($q, $zones);
+        });
+    }
+
+    /**
      * Display list of consumers eligible for disconnection by zone
      */
     public function index(Request $request)
     {
-        $zone = $request->get('zone');
+        $selectedZones = $this->selectedZonesFromRequest($request);
+        $zone = count($selectedZones) === 1 ? $selectedZones[0] : null; // backward-compatible single value for older view bits
         $billingMonth = $request->get('billing_month'); // Format: YYYY-MM
         $billingDate = $request->get('billing_date');
         $filterType = 'meter_rental_arrears';
-        $hasAnyFilter = ! empty($zone) || ! empty($billingMonth) || ! empty($billingDate);
+        $hasAnyFilter = $selectedZones !== [] || ! empty($billingMonth) || ! empty($billingDate);
 
         // Keep the page lightweight on first load: show filters only until user applies at least one filter.
         if (! $hasAnyFilter) {
@@ -177,6 +255,7 @@ class DisconnectionController extends Controller
                 'consumersByZone',
                 'zones',
                 'zone',
+                'selectedZones',
                 'filterType',
                 'disconnectors',
                 'totalConsumers',
@@ -190,7 +269,7 @@ class DisconnectionController extends Controller
         // Eligibility is Meter Rental Arrears ≥ ₱40 only (same amount as Meter Reading Preparation).
         $billingFilter = $billingMonth ?: $billingDate;
         $isMonthFilter = ! empty($billingMonth);
-        $consumers = $this->getConsumersForDisconnection($zone, $billingFilter, $isMonthFilter);
+        $consumers = $this->getConsumersForDisconnection($selectedZones, $billingFilter, $isMonthFilter);
 
         $totalOutstandingKey = mr_col('total_outstanding');
         $czZoneCode = mr_col('zone_code');
@@ -216,10 +295,10 @@ class DisconnectionController extends Controller
 
         $defaultDisconnectionDate = null;
         if ($billingFilter) {
-            $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter, $mrsDisconnectionDate) {
+            $querySchedule = function ($withZone) use ($selectedZones, $billingFilter, $isMonthFilter, $mrsDisconnectionDate) {
                 $q = MeterReadingSchedule::query()->whereNotNull($mrsDisconnectionDate);
-                if ($withZone && $zone) {
-                    $q->forZoneCode($zone);
+                if ($withZone && $selectedZones !== []) {
+                    $this->applyScheduleZoneCodesFilter($q, $selectedZones);
                 }
                 if ($isMonthFilter) {
                     $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
@@ -238,7 +317,7 @@ class DisconnectionController extends Controller
                 return $q->orderBy($mrsDisconnectionDate)->first();
             };
             $schedule = $querySchedule(true);
-            if (! $schedule && $zone) {
+            if (! $schedule && $selectedZones !== []) {
                 $schedule = $querySchedule(false);
             }
             if ($schedule && $schedule->disconnection_date) {
@@ -256,7 +335,7 @@ class DisconnectionController extends Controller
         }
 
         return view('disconnection.index', array_merge(
-            compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
+            compact('consumersByZone', 'zones', 'zone', 'selectedZones', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
             $this->getOrdersTabData($request)
         ));
     }
@@ -266,7 +345,7 @@ class DisconnectionController extends Controller
      */
     private function getDefaultDisconnectionDateForBillingFilter(Request $request): string
     {
-        $zone = $request->get('zone');
+        $selectedZones = $this->selectedZonesFromRequest($request);
         $billingMonth = $request->get('billing_month');
         $billingDate = $request->get('billing_date');
         $billingFilter = $billingMonth ?: $billingDate;
@@ -274,11 +353,11 @@ class DisconnectionController extends Controller
         if (! $billingFilter) {
             return Carbon::today()->addDays(7)->format('Y-m-d');
         }
-        $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
+        $querySchedule = function ($withZone) use ($selectedZones, $billingFilter, $isMonthFilter) {
             $mrsDisconnectionDate = mr_col('disconnection_date');
             $q = MeterReadingSchedule::query()->whereNotNull($mrsDisconnectionDate);
-            if ($withZone && $zone) {
-                $q->forZoneCode($zone);
+            if ($withZone && $selectedZones !== []) {
+                $this->applyScheduleZoneCodesFilter($q, $selectedZones);
             }
             if ($isMonthFilter) {
                 $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
@@ -297,7 +376,7 @@ class DisconnectionController extends Controller
             return $q->orderBy($mrsDisconnectionDate)->first();
         };
         $schedule = $querySchedule(true);
-        if (! $schedule && $zone) {
+        if (! $schedule && $selectedZones !== []) {
             $schedule = $querySchedule(false);
         }
         if ($schedule && $schedule->disconnection_date) {
@@ -346,12 +425,15 @@ class DisconnectionController extends Controller
     }
 
     /**
-     * Get consumers who have passed disconnection date from meter_reading_schedules and haven't paid
+     * Get consumers eligible for disconnection (Meter Rental Arrears ≥ threshold).
+     *
+     * @param  string|array<int, string>|null  $zone  One zone, many zones, or null for all
      */
-    public function getConsumersForDisconnection(?string $zone = null, ?string $billingFilter = null, bool $isMonthFilter = false): Collection
+    public function getConsumersForDisconnection(string|array|null $zone = null, ?string $billingFilter = null, bool $isMonthFilter = false): Collection
     {
+        $zones = $this->normalizeZoneCodes($zone);
         $ledgerCutoffDate = $this->resolveLedgerCutoffDate($billingFilter, $isMonthFilter);
-        $candidateConsumers = $this->queryDisconnectionCandidateConsumers($zone);
+        $candidateConsumers = $this->queryDisconnectionCandidateConsumers($zones);
 
         $accountNos = $candidateConsumers->pluck('account_no')->filter()->unique()->values();
         $consumerIds = $candidateConsumers->pluck('id')->filter()->unique()->values();
@@ -389,8 +471,10 @@ class DisconnectionController extends Controller
 
     /**
      * AR-style candidate source: start from consumer_zone (not schedule-gated).
+     *
+     * @param  list<string>  $zones
      */
-    private function queryDisconnectionCandidateConsumers(?string $zone): Collection
+    private function queryDisconnectionCandidateConsumers(array $zones = []): Collection
     {
         $query = ConsumerZone::query()
             ->where(function ($q) {
@@ -398,9 +482,7 @@ class DisconnectionController extends Controller
                     ->orWhereNotIn(DB::raw('UPPER(TRIM(status_code))'), ['X', 'D', 'DISCONNECTED']);
             });
 
-        if ($zone) {
-            $query->where(mr_col('zone_code'), $zone);
-        }
+        $this->applyZoneCodesFilter($query, $zones);
 
         return $query->select(mr_col('id'), mr_col('account_no'))->get();
     }
@@ -1275,14 +1357,15 @@ class DisconnectionController extends Controller
     {
         $requiredMonths = max(2, min(3, $requiredMonths));
         $filterType = $requiredMonths === 2 ? '2_consecutive' : '3_consecutive';
-        $zone = $request->get('zone');
+        $selectedZones = $this->selectedZonesFromRequest($request);
+        $zone = count($selectedZones) === 1 ? $selectedZones[0] : null;
         $billingMonth = $request->get('billing_month');
         $billingDate = $request->get('billing_date');
         $ledgerCutoffDate = $this->resolveListLedgerCutoffForAging($billingMonth, $billingDate);
 
-        $consumers = $this->getActiveDisconnectionCandidates($zone);
+        $consumers = $this->getActiveDisconnectionCandidates($selectedZones);
         if ($consumers->isEmpty()) {
-            return $this->renderConsecutiveUnpaidMonthsIndexView($request, $zone, $filterType, collect());
+            return $this->renderConsecutiveUnpaidMonthsIndexView($request, $selectedZones, $filterType, collect());
         }
 
         $lookupData = $this->loadConsecutiveUnpaidLookupData(
@@ -1293,23 +1376,24 @@ class DisconnectionController extends Controller
         );
         $eligibleConsumers = $this->filterConsecutiveUnpaidEligibleConsumers($consumers, $lookupData, $requiredMonths);
 
-        return $this->renderConsecutiveUnpaidMonthsIndexView($request, $zone, $filterType, $eligibleConsumers);
+        return $this->renderConsecutiveUnpaidMonthsIndexView($request, $selectedZones, $filterType, $eligibleConsumers);
     }
 
     /**
      * Active (non-disconnected) consumers for disconnection candidate screens.
+     *
+     * @param  string|array<int, string>|null  $zone
      */
-    private function getActiveDisconnectionCandidates(?string $zone): Collection
+    private function getActiveDisconnectionCandidates(string|array|null $zone): Collection
     {
+        $zones = $this->normalizeZoneCodes($zone);
         $query = ConsumerZone::query()
             ->where(function ($q) {
                 $q->whereNull('status_code')
                     ->orWhereNotIn(DB::raw('UPPER(TRIM(status_code))'), ['X', 'D', 'DISCONNECTED']);
             });
 
-        if ($zone) {
-            $query->where(mr_col('zone_code'), $zone);
-        }
+        $this->applyZoneCodesFilter($query, $zones);
 
         return $query->get();
     }
@@ -1509,12 +1593,17 @@ class DisconnectionController extends Controller
         return $consumer;
     }
 
+    /**
+     * @param  string|array<int, string>|null  $zone
+     */
     private function renderConsecutiveUnpaidMonthsIndexView(
         Request $request,
-        ?string $zone,
+        string|array|null $zone,
         string $filterType,
         Collection $eligibleConsumers
     ): View {
+        $selectedZones = $this->normalizeZoneCodes($zone);
+        $zone = count($selectedZones) === 1 ? $selectedZones[0] : null;
         $czZoneCode = mr_col('zone_code');
         $userRole = mr_col('role');
         $userName = mr_col('name');
@@ -1531,29 +1620,32 @@ class DisconnectionController extends Controller
         $totalOutstanding = $eligibleConsumers->sum($totalOutstandingKey);
         $billingMonth = $request->get('billing_month');
         $billingDate = $request->get('billing_date');
-        $defaultDisconnectionDate = $this->getDefaultDisconnectionDateFromBilling($zone, $billingMonth, $billingDate);
+        $defaultDisconnectionDate = $this->getDefaultDisconnectionDateFromBilling($selectedZones, $billingMonth, $billingDate);
 
         return view('disconnection.index', array_merge(
-            compact('consumersByZone', 'zones', 'zone', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
+            compact('consumersByZone', 'zones', 'zone', 'selectedZones', 'filterType', 'disconnectors', 'totalConsumers', 'totalOutstanding', 'billingDate', 'billingMonth', 'defaultDisconnectionDate'),
             $this->getOrdersTabData($request)
         ));
     }
 
     /**
      * Get default disconnection date from meter_reading_schedules when billing month/date is provided.
+     *
+     * @param  string|array<int, string>|null  $zone
      */
-    public function getDefaultDisconnectionDateFromBilling(?string $zone, ?string $billingMonth, ?string $billingDate, ?Collection $consumers = null): string
+    public function getDefaultDisconnectionDateFromBilling(string|array|null $zone, ?string $billingMonth, ?string $billingDate, ?Collection $consumers = null): string
     {
+        $zones = $this->normalizeZoneCodes($zone);
         $billingFilter = $billingMonth ?: $billingDate;
         if (! $billingFilter) {
             return Carbon::today()->addDays(7)->format('Y-m-d');
         }
         $isMonthFilter = ! empty($billingMonth);
-        $querySchedule = function ($withZone) use ($zone, $billingFilter, $isMonthFilter) {
+        $querySchedule = function ($withZone) use ($zones, $billingFilter, $isMonthFilter) {
             $mrsDisconnectionDate = mr_col('disconnection_date');
             $q = MeterReadingSchedule::query()->whereNotNull($mrsDisconnectionDate);
-            if ($withZone && $zone) {
-                $q->forZoneCode($zone);
+            if ($withZone && $zones !== []) {
+                $this->applyScheduleZoneCodesFilter($q, $zones);
             }
             if ($isMonthFilter) {
                 $monthCarbon = Carbon::createFromFormat('Y-m', $billingFilter)->startOfMonth();
@@ -1572,7 +1664,7 @@ class DisconnectionController extends Controller
             return $q->orderBy($mrsDisconnectionDate)->first();
         };
         $schedule = $querySchedule(true);
-        if (! $schedule && $zone) {
+        if (! $schedule && $zones !== []) {
             $schedule = $querySchedule(false);
         }
         if ($schedule && $schedule->disconnection_date) {

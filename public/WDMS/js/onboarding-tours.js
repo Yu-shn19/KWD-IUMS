@@ -770,7 +770,7 @@
                     element: '[data-tour="disconnection-filters"]',
                     popover: {
                         title: 'Filters',
-                        description: 'Set Zone, Billing Month, or Billing Date, then Filter. Candidates are accounts with Meter Rental Arrears greater than or equal to ₱40.',
+                        description: 'Set one or more Zones (Ctrl/Cmd+click), Billing Month, or Billing Date, then Filter. Candidates are accounts with Meter Rental Arrears greater than or equal to ₱40.',
                         side: 'bottom',
                         align: 'start',
                     },

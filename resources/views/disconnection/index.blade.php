@@ -171,14 +171,21 @@
                                 <div class="row">
                                     <div class="col-md-3">
                                         <label class="small font-weight-bold">Zone</label>
-                                        <select name="zone" class="form-control form-control-sm" id="zoneFilter">
-                                            <option value="">All Zones</option>
+                                        @php
+                                            $selectedZones = $selectedZones ?? (
+                                                !empty($zone ?? null)
+                                                    ? (is_array($zone) ? $zone : [$zone])
+                                                    : []
+                                            );
+                                        @endphp
+                                        <select name="zone[]" class="form-control form-control-sm" id="zoneFilter" multiple size="6" title="Hold Ctrl (Windows) or Cmd (Mac) to select multiple zones. Leave empty for all zones.">
                                             @foreach($zones as $zoneCode)
-                                                <option value="{{ $zoneCode }}" {{ ($zone ?? '') == $zoneCode ? 'selected' : '' }}>
+                                                <option value="{{ $zoneCode }}" {{ in_array($zoneCode, $selectedZones, true) ? 'selected' : '' }}>
                                                     Zone {{ $zoneCode }}
                                                 </option>
                                             @endforeach
                                         </select>
+                                        <small class="form-text text-muted">Hold Ctrl/Cmd to select multiple (e.g. 1B, Z4, Z5). Leave empty for all zones.</small>
                                     </div>
                                     <div class="col-md-3">
                                         <label class="small font-weight-bold">
@@ -248,7 +255,7 @@
                                     <div class="card-body text-center py-5">
                                         <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
                                         <h5 class="text-muted">No consumers found for disconnection</h5>
-                                        @if(!empty($zone) || !empty($billingMonth) || !empty($billingDate))
+                                        @if(!empty($selectedZones ?? []) || !empty($zone) || !empty($billingMonth) || !empty($billingDate))
                                             <p class="text-muted">No accounts in this filter have Meter Rental Arrears greater than or equal to ₱40.</p>
                                         @else
                                             <p class="text-muted">Apply at least one filter (zone, billing month, or billing date) to load disconnection candidates.</p>
@@ -643,7 +650,16 @@
     @if(!$consumersByZone->isEmpty())
         @php
             $filterTypeLabel = 'Meter Rental Arrears greater than or equal to ₱40';
-            $zoneLabel = !empty($zone ?? null) ? 'Zone ' . $zone : 'All zones';
+            $printSelectedZones = $selectedZones ?? (
+                !empty($zone ?? null)
+                    ? (is_array($zone) ? $zone : [$zone])
+                    : []
+            );
+            if (!empty($printSelectedZones)) {
+                $zoneLabel = 'Zone' . (count($printSelectedZones) > 1 ? 's ' : ' ') . implode(', ', $printSelectedZones);
+            } else {
+                $zoneLabel = 'All zones';
+            }
             $billingMonthLabel = '—';
             if (!empty($billingMonth ?? null)) {
                 try {
