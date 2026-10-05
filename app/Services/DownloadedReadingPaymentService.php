@@ -110,6 +110,12 @@ class DownloadedReadingPaymentService
             // Partial payments keep the assignment and refresh total_outstanding.
             $this->cancelDisconnectionOrdersIfNeeded($context, $consumerPayment);
 
+            // Keep open meter reading schedule arrears aligned with ledger Current Balance
+            // so Read and Bill / Notice of Collection print the updated amount.
+            if ($context->consumerId) {
+                MeterReadingScheduleArrearsSync::refreshForConsumer((int) $context->consumerId);
+            }
+
             $result = [
                 'downloaded_id' => $context->downloaded?->id,
                 'status' => 'Paid',

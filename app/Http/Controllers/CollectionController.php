@@ -7,6 +7,7 @@ use App\Models\ConsumerPayment;
 use App\Models\ConsumerLedger;
 use App\Models\ConsumerZone;
 use App\Models\Penalty;
+use App\Services\MeterReadingScheduleArrearsSync;
 use Illuminate\Http\Request;
 use Maatwebsite\Excel\Facades\Excel;
 use Illuminate\Support\Facades\Log;
@@ -271,6 +272,7 @@ class CollectionController extends Controller
             $syncedCount = 0;
             $skippedCount = 0;
             $errors = [];
+            $touchedConsumerIds = [];
 
             foreach ($collections as $collection) {
                 try {
@@ -522,6 +524,7 @@ class CollectionController extends Controller
                     }
 
                     $syncedCount++;
+                    $touchedConsumerIds[(int) $consumerZone->id] = true;
 
                 } catch (\Exception $e) {
                     $skippedCount++;
@@ -530,6 +533,17 @@ class CollectionController extends Controller
                         'collection_id' => $collection->id,
                         'account_no' => $collection->account_no,
                         'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            foreach (array_keys($touchedConsumerIds) as $consumerZoneId) {
+                try {
+                    MeterReadingScheduleArrearsSync::refreshForConsumer((int) $consumerZoneId);
+                } catch (\Throwable $e) {
+                    Log::warning('Schedule arrears sync after collection import failed', [
+                        'consumer_zone_id' => $consumerZoneId,
+                        'error' => $e->getMessage(),
                     ]);
                 }
             }
@@ -616,6 +630,7 @@ class CollectionController extends Controller
             $syncedCount = 0;
             $skippedCount = 0;
             $errors = [];
+            $touchedConsumerIds = [];
 
             foreach ($collections as $collection) {
                 try {
@@ -705,6 +720,7 @@ class CollectionController extends Controller
                     ]);
 
                     $syncedCount++;
+                    $touchedConsumerIds[(int) $consumerZone->id] = true;
                 } catch (\Exception $e) {
                     $skippedCount++;
                     $errors[] = "Error syncing SC discount for collection ID {$collection->id}: " . $e->getMessage();
@@ -712,6 +728,17 @@ class CollectionController extends Controller
                         'collection_id' => $collection->id,
                         'account_no' => $collection->account_no,
                         'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            foreach (array_keys($touchedConsumerIds) as $consumerZoneId) {
+                try {
+                    MeterReadingScheduleArrearsSync::refreshForConsumer((int) $consumerZoneId);
+                } catch (\Throwable $e) {
+                    Log::warning('Schedule arrears sync after SC discount sync failed', [
+                        'consumer_zone_id' => $consumerZoneId,
+                        'error' => $e->getMessage(),
                     ]);
                 }
             }

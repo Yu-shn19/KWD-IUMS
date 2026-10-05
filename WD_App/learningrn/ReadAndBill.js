@@ -518,15 +518,19 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         readingsLocalService.getPendingCount().then(setPendingCount);
-        // Rehydrate assigned routes from local SQLite cache when returning to app.
-        // This keeps routes visible even after accidental exits / offline resumes.
+        // Cache first so the list is immediate; then silently re-download when online
+        // so schedule arrears refresh after Payments & Collections without tapping Refresh.
         (async () => {
           try {
             const userData = await userStorage.getUserData();
             const readerId = userData?.id ?? null;
             const cachedCustomers = await loadCustomersFromCache(readerId);
             if (cachedCustomers.length > 0) {
-              setCustomers(showAlerts ? sortCustomersPendingFirst(cachedCustomers) : cachedCustomers);
+              setCustomers(cachedCustomers);
+            }
+            const online = await networkStatus.isOnline(true);
+            if (online) {
+              await loadCustomersFromRoutes(false);
             }
           } catch (_) {}
         })();
@@ -754,11 +758,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
     }
   };
 
-  // Load customers from admin-uploaded routes (from database API, fallback to cache)
+  // Load customers from admin-uploaded routes (from database API, fallback to cache).
+  // Returns the mapped customer list so print can merge fresh arrears into the receipt.
   const loadCustomersFromRoutes = async (showAlerts = false) => {
     if (syncManager._syncLock) {
       console.log('⏳ Skipping route refresh while sync is in progress');
-      return;
+      return null;
     }
     setIsLoadingRoutes(true);
     
@@ -772,7 +777,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         const cachedCustomers = await loadCustomersFromCache(null);
         setCustomers(cachedCustomers);
         if (showAlerts) Alert.alert('No Reader', 'Reader profile not found. Please re-login.');
-        return;
+        return cachedCustomers;
       }
 
       // Check if online before attempting API call
@@ -1097,7 +1102,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             if (showAlerts) {
               Alert.alert('✅ Routes Loaded', `${mapped.length} route(s) downloaded from the server.`);
             }
-            return;
+            return mapped;
           } else {
             // API returned empty list, try cache as fallback
             console.log('⚠️ API returned empty list, trying cache...');
@@ -1108,7 +1113,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               if (showAlerts) {
                 Alert.alert('Using Cached Data', `Loaded ${cachedCustomers.length} route(s) from cache.`);
               }
-              return;
+              return cachedCustomers;
             }
             
             // Only clear if user explicitly requested refresh
@@ -1123,7 +1128,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               // Silent refresh - keep existing customers if any
               console.log('⚠️ No routes from API or cache, but keeping existing customers (silent refresh)');
             }
-            return;
+            return customers.length > 0 ? customers : [];
           }
         } catch (apiError) {
           console.error('Error loading routes from server:', apiError);
@@ -1141,21 +1146,23 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         if (showAlerts) {
           Alert.alert('Offline Mode', `Loaded ${cachedCustomers.length} route(s) from cache. Connect to internet to refresh.`);
         }
-      } else {
-        // Don't clear existing customers if this is a silent refresh
-        // Only clear if user explicitly requested refresh
-        if (showAlerts) {
-          if (customers.length === 0) {
-            setCustomers([]);
-            Alert.alert('No Cached Data', 'No routes found in cache. Connect to internet and refresh to download routes.');
-          } else {
-            Alert.alert('Offline Mode', 'No new cached routes found. Keeping your currently displayed assigned routes.');
-          }
-        } else {
-          // Silent refresh failed - keep existing customers if any
-          console.log('⚠️ No cached data found, but keeping existing customers (silent refresh)');
-        }
+        return cachedCustomers;
       }
+
+      // Don't clear existing customers if this is a silent refresh
+      // Only clear if user explicitly requested refresh
+      if (showAlerts) {
+        if (customers.length === 0) {
+          setCustomers([]);
+          Alert.alert('No Cached Data', 'No routes found in cache. Connect to internet and refresh to download routes.');
+        } else {
+          Alert.alert('Offline Mode', 'No new cached routes found. Keeping your currently displayed assigned routes.');
+        }
+      } else {
+        // Silent refresh failed - keep existing customers if any
+        console.log('⚠️ No cached data found, but keeping existing customers (silent refresh)');
+      }
+      return customers.length > 0 ? customers : [];
     } catch (e) {
       console.error('Error loading routes:', e);
       // Last resort: try to load from cache
@@ -1167,6 +1174,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
         if (showAlerts && cachedCustomers.length === 0) {
           Alert.alert('Connection Error', e.message || 'Cannot download routes from server.');
         }
+        return cachedCustomers;
       } catch (cacheError) {
         console.error('Error loading from cache:', cacheError);
         if (customers.length === 0) {
@@ -1180,6 +1188,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               : (e.message || 'Cannot download routes from server.')
           );
         }
+        return customers.length > 0 ? customers : [];
       }
     } finally {
       setIsLoadingRoutes(false);
@@ -2328,9 +2337,46 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
       setCustomers(optimisticCustomers);
       await routesStorage.saveRoutes(optimisticCustomers);
 
+      // Before Notice of Collection: if online, re-fetch schedules so arrears match
+      // ledger Current Balance after Payments & Collections. Keep the reading just submitted.
+      // Offline: print from cache (do not block).
+      let receiptCustomer = { ...selectedCustomer, read_at: readingData.read_at };
+      try {
+        const deviceOnlineForArrears = await networkStatus.isOnline(true);
+        if (deviceOnlineForArrears) {
+          const freshList = await loadCustomersFromRoutes(false);
+          if (Array.isArray(freshList) && freshList.length > 0) {
+            const accountKey = getAccountKeyFromRecord(selectedCustomer);
+            const freshRow =
+              freshList.find((c) => matchesScheduleId(c, scheduleId)) ||
+              (accountKey
+                ? freshList.find((c) => getAccountKeyFromRecord(c) === accountKey)
+                : null);
+            if (freshRow) {
+              receiptCustomer = {
+                ...receiptCustomer,
+                arrears: freshRow.arrears,
+                priorYears: freshRow.priorYears,
+                currentPenalty: freshRow.currentPenalty,
+                mrArrears: freshRow.mrArrears,
+                // Keep just-submitted reading / consumption — do not take server reading.
+                currentReading: reading,
+                current_reading: reading,
+                consumption,
+                status: 'saved offline',
+                read_at: readingData.read_at,
+                readAt: readingData.read_at,
+              };
+            }
+          }
+        }
+      } catch (_) {
+        // Keep cache-based receiptCustomer
+      }
+
       // Print-first flow for faster UX: print immediately after local save, then sync/upload.
       const receiptData = generateReceipt(
-        { ...selectedCustomer, read_at: readingData.read_at },
+        receiptCustomer,
         reading,
         userData,
         readingData.read_at
