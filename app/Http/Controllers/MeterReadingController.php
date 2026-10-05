@@ -11,6 +11,7 @@ use App\Models\ConsumerLedger;
 use App\Models\Penalty;
 use App\Models\LROLedger;
 use App\Support\SundryLedgerRemarks;
+use App\Http\Controllers\ConsumerLedgerController;
 use Carbon\Carbon;
 use App\Imports\PreviousReadingImport;
 use App\Services\BillMonthDetailsService;
@@ -793,6 +794,36 @@ class MeterReadingController extends Controller
             }
 
             $scheduleIds = $schedules->pluck(mr_col('id'))->all();
+
+            // Refresh arrears / total_amount from live ledger Current Balance before assign,
+            // so mobile Total Amount matches Account Ledger after payments.
+            $consumerIds = $schedules->pluck(mr_col('consumer_zone_id'))->filter()->unique()->values()->all();
+            $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk($consumerIds);
+            foreach ($schedules as $schedule) {
+                $cid = (int) ($schedule->consumer_zone_id ?? 0);
+                if ($cid <= 0) {
+                    continue;
+                }
+                $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
+                $storedArrears = round((float) ($schedule->arrears ?? 0), 2);
+                $storedPenalty = round((float) ($schedule->penalty ?? 0), 2);
+                $storedMr = round((float) ($schedule->meter_rental_arrears ?? 0), 2);
+                $storedPrior = round((float) ($schedule->prior_years ?? 0), 2);
+                $storedOutstanding = round($storedArrears + $storedPenalty + $storedMr + $storedPrior, 2);
+
+                if (abs($storedOutstanding - $ledgerBalance) <= 0.02) {
+                    continue;
+                }
+
+                $schedule->update(MeterReadingSchedule::filterTableAttributes([
+                    'arrears' => $ledgerBalance,
+                    'penalty' => 0,
+                    'meter_rental_arrears' => 0,
+                    'prior_years' => 0,
+                    'total_amount' => $ledgerBalance,
+                ]));
+            }
+
             $updated = MeterReadingSchedule::query()->whereIn(mr_col('id'), $scheduleIds)
                 ->update($this->scheduleAssignmentUpdatePayload($readerId));
 

@@ -200,13 +200,35 @@ class BillingProcessController extends Controller
                 'others' => 0.0,
                 'prio_years' => 0.0,
             ];
-            // Arrears = current_arrears from DM; negative ledger footer = advance (shown in Arrears column).
+            // Arrears / Total: prefer live ledger Current Balance (footer), not stale DM buckets.
             $ledgerBalance = (float) ($footerBalances[(int) $consumer->id] ?? 0);
-            $currentArrears = (float) $components['current_arrears'];
-            $arrears = $this->resolveDisplayArrearsWithAdvance($currentArrears, $ledgerBalance);
+            $dmArrears = (float) $components['current_arrears'];
             $penalty = (float) $components['penalty'];
             $meterRentalArrears = (float) $components['others'];
             $priorYears = (float) $components['prio_years'];
+            $dmTotalOutstanding = round($dmArrears + $penalty + $meterRentalArrears + $priorYears, 2);
+
+            if ($ledgerBalance < -0.009) {
+                // Advance/credit on ledger — show negative balance in Arrears.
+                $arrears = round($ledgerBalance, 2);
+                $currentArrears = 0.0;
+                $penalty = 0.0;
+                $meterRentalArrears = 0.0;
+                $priorYears = 0.0;
+            } elseif (abs($dmTotalOutstanding - $ledgerBalance) > 0.02) {
+                // Payment/adjustment updated the ledger; DM buckets are stale.
+                // Collapse into Arrears so Total Amount matches Account Ledger footer.
+                $arrears = round($ledgerBalance, 2);
+                $currentArrears = max(0.0, $arrears);
+                $penalty = 0.0;
+                $meterRentalArrears = 0.0;
+                $priorYears = 0.0;
+            } else {
+                // DM split already matches live balance — keep component breakdown.
+                $currentArrears = $dmArrears;
+                $arrears = round($dmArrears, 2);
+            }
+
             $total = $this->computeScheduleTotalWithAdvance(
                 $currentBill,
                 $wmc,
@@ -218,6 +240,10 @@ class BillingProcessController extends Controller
             // No current bill yet: show advance credit in Total Amount (negative arrears).
             if ($currentBill <= 0.009 && $arrears < -0.009) {
                 $total = round($total + $arrears, 2);
+            }
+            // No current bill yet: Total Amount must equal latest ledger balance.
+            if ($currentBill <= 0.009 && abs($total - $ledgerBalance) > 0.02) {
+                $total = round($ledgerBalance, 2);
             }
             $data[] = [
                 'sedr' => (string) $sedr++,
@@ -266,15 +292,13 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Arrears column: negative ledger footer = advance/credit; otherwise DM current_arrears.
+     * Arrears column for prepare: live ledger Current Balance (footer) is source of truth.
+     * DM current_arrears can stay stale after payments; only used when it already matches the footer.
      */
     private function resolveDisplayArrearsWithAdvance(float $dmArrears, float $ledgerFooterBalance): float
     {
-        if ($ledgerFooterBalance < -0.009) {
-            return round($ledgerFooterBalance, 2);
-        }
-
-        return round($dmArrears, 2);
+        // Always prefer Account Ledger footer (same as consumer ledger "Current Balance").
+        return round($ledgerFooterBalance, 2);
     }
 
     /**
