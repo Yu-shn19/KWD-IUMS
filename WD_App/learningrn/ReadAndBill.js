@@ -927,25 +927,30 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             const routesWithReaderId = list.map((route) => {
               const routeScheduleId = getScheduleIdFromRecord(route);
               const accountKey = getAccountKeyFromRecord(route);
-              const scheduleStatus = route.schedule_status ?? route.scheduleStatus ?? route.status;
-              const effectiveReading =
-                route.current_reading ??
-                route.currentReading ??
+              const rawScheduleStatus = route.schedule_status ?? route.scheduleStatus ?? null;
+              const scheduleStatus = rawScheduleStatus ?? route.status;
+              const scheduleReading =
                 route.schedule_current_reading ??
                 route.scheduleCurrentReading ??
                 null;
-              const effectiveConsumption =
-                route.consumption ??
+              const scheduleConsumption =
                 route.schedule_consumption ??
                 route.scheduleConsumption ??
                 null;
-              const hasDownload =
-                !!(route.has_downloaded_reading ?? route.hasDownloadedReading ?? route.downloaded_reading_id);
+              // Only trust a real download row id — not the loose has_downloaded_reading flag
+              // (old drop-in set that true from prior-month readings).
+              const hasRealDownload = !!(route.downloaded_reading_id);
+              const effectiveReading = hasRealDownload
+                ? (route.current_reading ?? route.currentReading ?? scheduleReading)
+                : scheduleReading;
+              const effectiveConsumption = hasRealDownload
+                ? (route.consumption ?? scheduleConsumption)
+                : scheduleConsumption;
               const apiStatus = normalizeCustomerStatus(
                 scheduleStatus,
                 effectiveReading,
                 {
-                  has_downloaded_reading: hasDownload,
+                  has_downloaded_reading: hasRealDownload,
                   downloaded_reading_id: route.downloaded_reading_id,
                 }
               );
@@ -957,13 +962,16 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 getAccountTailKey(route)
               );
 
-              // Match Download Reading page: Completed / Curr.Read / download ⇒ never Pending
+              const scheduleStillOpen = /^(assigned|prepared|in progress|in-progress)$/i.test(
+                String(scheduleStatus || '').trim()
+              );
+
+              // Completed only if this schedule itself has a reading/download — not prior months.
               const looksCompletedOnServer =
-                hasDownload ||
-                isCompletedCustomerStatus(apiStatus) ||
-                isCompletedCustomerStatus(scheduleStatus) ||
-                (effectiveReading != null && effectiveReading !== '') ||
-                (effectiveConsumption != null && Number(effectiveConsumption) > 0);
+                hasRealDownload ||
+                (!scheduleStillOpen && isCompletedCustomerStatus(scheduleStatus)) ||
+                (scheduleReading != null && scheduleReading !== '') ||
+                (scheduleConsumption != null && Number(scheduleConsumption) > 0);
 
               if (looksCompletedOnServer) {
                 if (accountKey) {
@@ -988,6 +996,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               }
 
               // Hard rule: never downgrade local completed / saved-offline → pending/Assigned
+              // but only for the same schedule id (local map is schedule-keyed now).
               const overlay = pickNonDowngradedProgress(
                 apiStatus,
                 effectiveReading,
@@ -998,6 +1007,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 ...route,
                 reader_id: readerId,
                 readerId: readerId,
+                status: overlay?.status || scheduleStatus || route.status || 'Assigned',
+                has_downloaded_reading: false,
+                downloaded_reading_id: null,
+                current_reading: overlay?.current_reading ?? null,
+                currentReading: overlay?.current_reading ?? null,
+                consumption: overlay?.consumption ?? 0,
                 ...(overlay
                   ? {
                       status: overlay.status,

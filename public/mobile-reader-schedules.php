@@ -129,16 +129,15 @@ try {
             ->leftJoin('consumer_zone as cz', function ($join) {
                 $join->whereRaw('cz.id = COALESCE(dr.consumer_zone_id, mrs.consumer_zone_id)');
             })
-            ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $readerId, $billMonthNormalized) {
+            ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $billMonthNormalized) {
+                // Exact schedule match for current assignment set
                 if (!empty($scheduleIds)) {
                     $q->whereIn('dr.schedule_id', $scheduleIds);
                 }
-                if (!empty($consumerZoneIds)) {
-                    $q->orWhereIn('dr.consumer_zone_id', $consumerZoneIds);
-                }
-                if ($billMonthNormalized) {
-                    $q->orWhere(function ($q2) use ($readerId, $billMonthNormalized) {
-                        $q2->where('mrs.assigned_reader_id', $readerId)
+                // Same consumer only for THIS bill month (prevents prior-month Completed bleed).
+                if (!empty($consumerZoneIds) && $billMonthNormalized) {
+                    $q->orWhere(function ($q2) use ($consumerZoneIds, $billMonthNormalized) {
+                        $q2->whereIn('dr.consumer_zone_id', $consumerZoneIds)
                             ->whereYear('mrs.bill_month', (int) substr($billMonthNormalized, 0, 4))
                             ->whereMonth('mrs.bill_month', (int) substr($billMonthNormalized, 5, 2));
                     });
@@ -160,6 +159,7 @@ try {
                 'dr.status',
                 'dr.reader_notes',
                 'mrs.consumer_zone_id as schedule_consumer_zone_id',
+                'mrs.bill_month as schedule_bill_month',
                 'cz.account_no',
                 'cz.id as resolved_consumer_zone_id',
             ])
@@ -206,7 +206,7 @@ try {
     $payload = [
         'success' => true,
         'message' => 'Schedules retrieved successfully',
-        'version' => '1.2-mobile-reader-schedules',
+        'version' => '1.4-bill-month-scoped-completed',
         'bill_month' => $billMonthNormalized ?? null,
         'reader' => [
             'id' => $reader->id,
@@ -220,12 +220,36 @@ try {
             $rateCodes
         ) {
             $accountKey = strtolower(trim((string) ($schedule->account_number ?? '')));
+            $scheduleBillYm = $schedule->bill_month
+                ? Carbon::parse($schedule->bill_month)->format('Y-m')
+                : null;
+
             $downloaded = $downloadedByScheduleId->get((int) $schedule->id);
             if (!$downloaded && $schedule->consumer_zone_id) {
-                $downloaded = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                $byCz = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                if ($byCz) {
+                    $drYm = !empty($byCz->schedule_bill_month)
+                        ? Carbon::parse($byCz->schedule_bill_month)->format('Y-m')
+                        : null;
+                    if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
+                        $downloaded = $byCz;
+                    } elseif ((int) ($byCz->schedule_id ?? 0) === (int) $schedule->id) {
+                        $downloaded = $byCz;
+                    }
+                }
             }
             if (!$downloaded && $accountKey !== '') {
-                $downloaded = $downloadedByAccount->get($accountKey);
+                $byAcct = $downloadedByAccount->get($accountKey);
+                if ($byAcct) {
+                    $drYm = !empty($byAcct->schedule_bill_month)
+                        ? Carbon::parse($byAcct->schedule_bill_month)->format('Y-m')
+                        : null;
+                    if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
+                        $downloaded = $byAcct;
+                    } elseif ((int) ($byAcct->schedule_id ?? 0) === (int) $schedule->id) {
+                        $downloaded = $byAcct;
+                    }
+                }
             }
 
             $scheduleHasReading = $schedule->current_reading !== null && $schedule->current_reading !== '';

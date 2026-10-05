@@ -258,7 +258,7 @@ class MeterReadingApiController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Schedules retrieved successfully',
-            'version' => '1.3-completed-matches-download-reading',
+            'version' => '1.4-bill-month-scoped-completed',
             'bill_month' => $latestBillMonth,
             'reader' => [
                 'id' => $reader->id,
