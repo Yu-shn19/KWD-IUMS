@@ -207,6 +207,22 @@ const findLocalProgress = (localByScheduleId, localByAccount, scheduleId, accoun
   );
 };
 
+/** Durable completed overlay only for same schedule or same bill month (YYYY-MM). */
+const durableMatchesAssignment = (durableRow, assignment) => {
+  if (!durableRow || !assignment) return false;
+  const assignSid =
+    assignment.schedule_id ?? assignment.scheduleId ?? assignment.id ?? null;
+  const durableSid = durableRow.schedule_id != null ? Number(durableRow.schedule_id) : null;
+  if (durableSid && assignSid && durableSid === Number(assignSid)) return true;
+
+  const durableYm = (durableRow.bill_month || '').toString().trim().slice(0, 7);
+  const assignYm = (assignment.bill_month || assignment.billMonth || '').toString().trim().slice(0, 7);
+  if (durableYm && assignYm && durableYm === assignYm) return true;
+
+  // Old durable rows without bill_month/schedule must not force Completed on a new assign.
+  return false;
+};
+
 /**
  * Never replace completed / saved-offline with Assigned/pending from the API.
  * Prefer API only when it is at least as advanced (e.g. API completed).
@@ -711,8 +727,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
           if (isCompletedCustomerStatus(cust.status)) return cust;
           if (isSavedOfflineCustomerStatus(cust.status)) return cust;
           const acct = getAccountKeyFromRecord(cust);
-          const row = acct ? durable[acct] : null;
-          if (!row) return cust;
+          const tail = getAccountTailKey(cust);
+          const row =
+            (acct ? durable[acct] : null) ||
+            (tail ? durable[tail] : null) ||
+            (tail ? durable[`tail:${tail}`] : null);
+          if (!row || !durableMatchesAssignment(row, cust)) return cust;
           return {
             ...cust,
             status: 'completed',
@@ -815,7 +835,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
             cachedRoutes.forEach((r) => {
               const id = getScheduleIdFromRecord(r);
               const currentReading = r.current_reading ?? r.currentReading;
-              rememberLocalProgress(id, getAccountKeyFromRecord(r), {
+              // Index by schedule only — account keys would mark a new bill-month assign as Completed.
+              rememberLocalProgress(id, null, {
                 status: r.status,
                 current_reading: currentReading,
                 consumption:
@@ -837,7 +858,8 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 const acct =
                   getAccountKeyFromRecord(row.data?.customer) ||
                   getAccountKeyFromRecord(row.data);
-                rememberLocalProgress(sid, acct, {
+                // Prefer schedule_id; account only for same bill month (checked via durableMatches later).
+                rememberLocalProgress(sid, sid ? null : acct, {
                   status: 'saved offline',
                   current_reading: cur,
                   consumption: row.data?.consumption != null ? row.data.consumption : 0,
@@ -855,7 +877,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                 const acct =
                   getAccountKeyFromRecord(row.data?.customer) ||
                   getAccountKeyFromRecord(row.data);
-                rememberLocalProgress(sid, acct, {
+                rememberLocalProgress(sid, null, {
                   status: 'completed',
                   current_reading: cur,
                   consumption: row.data?.consumption != null ? row.data.consumption : 0,
@@ -869,6 +891,11 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                     scheduleId: sid,
                     currentReading: cur,
                     consumption: row.data?.consumption,
+                    billMonth:
+                      row.data?.customer?.billMonth ||
+                      row.data?.customer?.bill_month ||
+                      row.data?.bill_month ||
+                      null,
                   }).catch(() => {});
                 }
               });
@@ -876,17 +903,22 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               console.warn('SQLite synced merge for routes:', syncMergeErr?.message);
             }
 
-            // Durable completed accounts — never allow API Assigned/Pending to wipe these
+            // Durable completed accounts — only for same schedule / same bill month
             try {
               const durable = await completedAccountsStorage.getAll();
               Object.keys(durable || {}).forEach((acctKey) => {
                 const row = durable[acctKey];
                 if (!row) return;
-                rememberLocalProgress(row.schedule_id, acctKey, {
-                  status: 'completed',
-                  current_reading: row.current_reading,
-                  consumption: row.consumption != null ? row.consumption : 0,
-                });
+                // Defer applying until we know each route's bill month (done in map below).
+                // Still remember by schedule_id when present.
+                if (row.schedule_id) {
+                  rememberLocalProgress(row.schedule_id, null, {
+                    status: 'completed',
+                    current_reading: row.current_reading,
+                    consumption: row.consumption != null ? row.consumption : 0,
+                    bill_month: row.bill_month ?? null,
+                  });
+                }
               });
             } catch (durableErr) {
               console.warn('Durable completed merge:', durableErr?.message);

@@ -180,14 +180,15 @@ class MeterReadingApiController extends Controller
                 ->leftJoin(mr_col('consumer_zone as cz'), function ($join) {
                     $join->whereRaw('cz.id = COALESCE(dr.consumer_zone_id, mrs.consumer_zone_id)');
                 })
-                ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $readerId, $billMonthFilter) {
+                ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $billMonthFilter) {
+                    // Prefer exact schedule match for the currently assigned schedules.
                     $q->whereIn('dr.schedule_id', $scheduleIds);
-                    if (!empty($consumerZoneIds)) {
-                        $q->orWhereIn('dr.consumer_zone_id', $consumerZoneIds);
-                    }
-                    if ($billMonthFilter) {
-                        $q->orWhere(function ($q2) use ($readerId, $billMonthFilter) {
-                            $q2->where('mrs.assigned_reader_id', $readerId)
+
+                    // Same consumer may only count as completed for THIS bill month.
+                    // Without this, a prior-month download marks a newly assigned schedule Completed.
+                    if (!empty($consumerZoneIds) && $billMonthFilter) {
+                        $q->orWhere(function ($q2) use ($consumerZoneIds, $billMonthFilter) {
+                            $q2->whereIn('dr.consumer_zone_id', $consumerZoneIds)
                                 ->whereDate('mrs.bill_month', $billMonthFilter);
                         });
                     }
@@ -210,6 +211,7 @@ class MeterReadingApiController extends Controller
                     'dr.status',
                     'dr.reader_notes',
                     'mrs.consumer_zone_id as schedule_consumer_zone_id',
+                    'mrs.bill_month as schedule_bill_month',
                     'cz.account_no',
                     'cz.id as resolved_consumer_zone_id',
                 ])
@@ -270,12 +272,37 @@ class MeterReadingApiController extends Controller
                 $rateCodes
             ) {
                 $accountKey = strtolower(trim((string) ($schedule->account_number ?? '')));
+                $scheduleBillYm = $schedule->bill_month
+                    ? Carbon::parse($schedule->bill_month)->format('Y-m')
+                    : null;
+
                 $downloaded = $downloadedByScheduleId->get((int) $schedule->id);
+                // Only reuse consumer/account downloads from the same bill month.
                 if (!$downloaded && $schedule->consumer_zone_id) {
-                    $downloaded = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                    $byCz = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                    if ($byCz) {
+                        $drYm = !empty($byCz->schedule_bill_month)
+                            ? Carbon::parse($byCz->schedule_bill_month)->format('Y-m')
+                            : null;
+                        if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
+                            $downloaded = $byCz;
+                        } elseif ((int) ($byCz->schedule_id ?? 0) === (int) $schedule->id) {
+                            $downloaded = $byCz;
+                        }
+                    }
                 }
                 if (!$downloaded && $accountKey !== '') {
-                    $downloaded = $downloadedByAccount->get($accountKey);
+                    $byAcct = $downloadedByAccount->get($accountKey);
+                    if ($byAcct) {
+                        $drYm = !empty($byAcct->schedule_bill_month)
+                            ? Carbon::parse($byAcct->schedule_bill_month)->format('Y-m')
+                            : null;
+                        if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
+                            $downloaded = $byAcct;
+                        } elseif ((int) ($byAcct->schedule_id ?? 0) === (int) $schedule->id) {
+                            $downloaded = $byAcct;
+                        }
+                    }
                 }
 
                 $czRow = $rateCodes->get($schedule->consumer_zone_id);
