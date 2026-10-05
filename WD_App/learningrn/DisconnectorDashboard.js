@@ -15,6 +15,25 @@ const formatDate = (value) => {
   }
 };
 
+const formatMoney = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '₱0.00';
+  return `₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const getRemainingBalanceFromItem = (item) => {
+  if (!item) return 0;
+  const raw =
+    item.remaining_balance ??
+    item.ledger_balance ??
+    item.total_balance ??
+    item.BALANCE ??
+    item.total_outstanding ??
+    0;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+};
+
 /** Paid date from API field, order notes, or cancellation update time. */
 const getPaidAtFromItem = (item) => {
   if (!item) return null;
@@ -27,10 +46,11 @@ const getPaidAtFromItem = (item) => {
 };
 
 const formatPaidConsumerLine = (item) => {
-  const account = item.account_no || '—';
+  const account = item.account_no || item.account_number || '—';
   const name = item.account_name ? ` (${item.account_name})` : '';
   const paidLabel = formatDate(getPaidAtFromItem(item));
-  return `${account}${name} — paid ${paidLabel}`;
+  const bal = formatMoney(getRemainingBalanceFromItem(item));
+  return `${account}${name} — paid ${paidLabel} · bal ${bal}`;
 };
 
 const extractAssignments = (records = []) => {
@@ -418,7 +438,12 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
                 <Text style={styles.noticeAccount}>{item.account_no || item.account_number || '—'}</Text>
                 <Text style={styles.noticeName} numberOfLines={1}>{item.account_name || '—'}</Text>
               </View>
-              <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
+              <View style={styles.noticeRowRight}>
+                <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
+                <Text style={styles.noticeBalance}>
+                  Bal: {formatMoney(getRemainingBalanceFromItem(item))}
+                </Text>
+              </View>
             </View>
           ))}
           <TouchableOpacity
@@ -512,7 +537,12 @@ export default function DisconnectorDashboard({ userData, onNavigate, onLogout }
                   {item.account_name || '—'}
                 </Text>
               </View>
-              <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
+              <View style={styles.noticeRowRight}>
+                <Text style={styles.noticePaidDate}>Paid: {formatDate(getPaidAtFromItem(item))}</Text>
+                <Text style={styles.noticeBalance}>
+                  Bal: {formatMoney(getRemainingBalanceFromItem(item))}
+                </Text>
+              </View>
             </View>
           )}
           ItemSeparatorComponent={() => <View style={styles.paidModalSeparator} />}
@@ -692,10 +722,19 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 8,
   },
+  noticeRowRight: {
+    alignItems: 'flex-end',
+  },
   noticePaidDate: {
     fontSize: 12,
     fontWeight: '600',
     color: '#2e7d32',
+  },
+  noticeBalance: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#e65100',
+    marginTop: 2,
   },
   noticeAccount: {
     fontSize: 14,
