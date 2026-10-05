@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\ConsumerLedgerController;
 use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
@@ -255,10 +256,18 @@ class MeterReadingApiController extends Controller
                 ->keyBy(mr_col('id'));
         }
 
+        // Live ledger balances so mobile Total Amount matches Account Ledger after payments.
+        $footerBalances = collect();
+        if ($schedules->isNotEmpty()) {
+            $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk(
+                $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->all()
+            );
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Schedules retrieved successfully',
-            'version' => '1.4-bill-month-scoped-completed',
+            'version' => '1.5-live-ledger-arrears',
             'bill_month' => $latestBillMonth,
             'reader' => [
                 'id' => $reader->id,
@@ -269,7 +278,8 @@ class MeterReadingApiController extends Controller
                 $downloadedByScheduleId,
                 $downloadedByConsumerZoneId,
                 $downloadedByAccount,
-                $rateCodes
+                $rateCodes,
+                $footerBalances
             ) {
                 $accountKey = strtolower(trim((string) ($schedule->account_number ?? '')));
                 $scheduleBillYm = $schedule->bill_month
@@ -329,6 +339,24 @@ class MeterReadingApiController extends Controller
                     $readingDate = $schedule->reading_date?->format('Y-m-d');
                 }
 
+                $arrears = (float) ($schedule->arrears ?? 0);
+                $priorYears = (float) ($schedule->prior_years ?? 0);
+                $penalty = (float) ($schedule->penalty ?? 0);
+                $meterRentalArrears = (float) ($schedule->meter_rental_arrears ?? 0);
+
+                // For unread schedules, refresh from live ledger Current Balance.
+                if (!$isReallyCompleted) {
+                    $cid = (int) ($schedule->consumer_zone_id ?? 0);
+                    $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
+                    $storedOutstanding = round($arrears + $priorYears + $penalty + $meterRentalArrears, 2);
+                    if (abs($storedOutstanding - $ledgerBalance) > 0.02) {
+                        $arrears = $ledgerBalance;
+                        $priorYears = 0.0;
+                        $penalty = 0.0;
+                        $meterRentalArrears = 0.0;
+                    }
+                }
+
                 return [
                     'id' => $schedule->id,
                     'sedr_number' => $schedule->sedr_number,
@@ -362,10 +390,10 @@ class MeterReadingApiController extends Controller
                     'bill_month' => $schedule->bill_month->format('Y-m-d'),
                     'bill_date' => $schedule->bill_date->format('Y-m-d'),
                     'due_date' => $schedule->due_date->format('Y-m-d'),
-                    'arrears' => (float) ($schedule->arrears ?? 0),
-                    'prior_years' => (float) ($schedule->prior_years ?? 0),
-                    'penalty' => (float) ($schedule->penalty ?? 0),
-                    'meter_rental_arrears' => (float) ($schedule->meter_rental_arrears ?? 0),
+                    'arrears' => $arrears,
+                    'prior_years' => $priorYears,
+                    'penalty' => $penalty,
+                    'meter_rental_arrears' => $meterRentalArrears,
                     'reader_notes' => $downloaded->reader_notes ?? null,
                 ];
             })

@@ -24,11 +24,11 @@ export const API_CONFIG = {
   },
 };
 
-// Active API — production uses HTTPS
+// Active API — production uses HTTPS for production
 export const CURRENT_ENV = 'production';
 
 export const getApiConfig = () => {
-  return API_CONFIG[CURRENT_ENV];
+  return API_CONFIG[CURRENT_ENV]; 
 };
 
 export const API_ENDPOINTS = {
