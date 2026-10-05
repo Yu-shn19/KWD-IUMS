@@ -38,7 +38,7 @@
            <a class="collapse-item" href="{{ route('consumer') }}" data-tour="nav-consumers">
           <i class="fas fa-circle small-icon"></i> Consumers
         </a>
-        <a class="collapse-item" href="{{ route('consumer.import') }}">
+        <!-- <a class="collapse-item" href="{{ route('consumer.import') }}">
           <i class="fas fa-circle small-icon"></i> Import Consumer Master List
         </a>
         <a class="collapse-item" href="{{ route('consumer.upload-base-reading') }}">
@@ -49,8 +49,8 @@
         </a>
         <a class="collapse-item" href="{{ route('consumer.edit-dm') }}">
           <i class="fas fa-circle small-icon"></i> Edit DM
-        </a>
-        <a class="collapse-item" href="#">
+        </a> -->
+        <!-- <a class="collapse-item" href="#">
           <i class="fas fa-circle small-icon"></i> Category/Routes
         </a>
         <a class="collapse-item" href="#">
@@ -61,7 +61,7 @@
         </a>
         <a class="collapse-item" href="#">
           <i class="fas fa-circle small-icon"></i> Sundies Account Title
-        </a>
+        </a> -->
       </div>
     </div>
   </li>
