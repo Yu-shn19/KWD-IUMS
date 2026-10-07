@@ -4768,32 +4768,37 @@ class BillingProcessController extends Controller
     /**
      * Generate a unique DM/CM reference: 6-digit number (000001, 000002, ...).
      * Ensures no duplicate reference in consumer_ledgers.
+     * On collision with any existing ledger reference, advances to the next number
+     * (retries used to recompute the same max+1 and loop forever).
      */
     private function generateUniqueMemoReference(string $trans, string $date): string
     {
         $trans = strtoupper($trans) === 'CM' ? 'CM' : 'DM';
-        $maxAttempts = 100;
 
-        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $lastRef = ConsumerLedger::query()->whereIn(mr_col('trans'), ['DM', 'CM'])
-                ->whereRaw('reference REGEXP ?', ['^[0-9]{6}$'])
-                ->orderByRaw(mr_col('CAST(reference AS UNSIGNED) DESC'))
-                ->value(mr_col('reference'));
+        $lastRef = ConsumerLedger::query()->whereIn(mr_col('trans'), ['DM', 'CM'])
+            ->whereRaw('reference REGEXP ?', ['^[0-9]{6}$'])
+            ->orderByRaw('CAST(reference AS UNSIGNED) DESC')
+            ->value(mr_col('reference'));
 
-            $seq = 1;
-            if ($lastRef !== null && preg_match('/^\d{1,6}$/', $lastRef)) {
-                $seq = (int) $lastRef + 1;
-            }
+        $seq = 1;
+        if ($lastRef !== null && preg_match('/^\d{1,6}$/', $lastRef)) {
+            $seq = (int) $lastRef + 1;
+        }
 
+        $maxAttempts = 1000;
+        for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
             if ($seq > 999999) {
                 throw new \RuntimeException("{$trans} reference sequence exhausted (max 999999).");
             }
 
             $reference = str_pad((string) $seq, 6, '0', STR_PAD_LEFT);
 
-            if (!ConsumerLedger::query()->where(mr_col('reference'), $reference)->exists()) {
+            if (! ConsumerLedger::query()->where(mr_col('reference'), $reference)->exists()) {
                 return $reference;
             }
+
+            // Taken by another ledger row — try the next number.
+            $seq++;
         }
 
         throw new \RuntimeException("Unable to generate unique {$trans} reference after {$maxAttempts} attempts.");
