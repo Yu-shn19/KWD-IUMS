@@ -1457,13 +1457,13 @@ class BillMonthDetailsService
                     }
                 }
                 
-                // Senior discount based on ledger/billing volume.
+                // Senior discount based on the current billing volume only.
                 // Rule:
                 // - Applies automatically when consumer has SC DISCOUNT on bill_disc_percent.
                 // - OSCA ID is optional and not required for eligibility.
-                // - Consider only BILL/BILLING rows with paid_at IS NULL (strict unpaid definition),
-                //   plus fallback paid detection from PAYMENT rows in same cycle.
-                // - Per unpaid month: 5% of WaterBillingService::calculate(min(volume, 30), category)
+                // - Use only the latest BILL/BILLING row (current billing). Older unpaid months are not added.
+                // - Current billing is treated unpaid when FIFO payment credits do not fully cover it.
+                // - 5% of WaterBillingService::calculate(min(volume, 30), category)
                 //   so RES / COM-A/B/C / GOVT / INDUSTRIAL all use the same volume formula (31+ still uses 30 cu.m discount).
                 if (!($s->orNumberInput !== '' && $s->orPayment) && $s->paymentStatus !== 'paid') {
                     $billDiscPercentRaw = $s->consumer->bill_disc_percent ?? null;
@@ -1503,31 +1503,34 @@ class BillMonthDetailsService
 
                         $seniorDiscountTotal = 0.0;
                         // Allocate PAYMENT credits to BILLING charges FIFO by ledger date.
-                        // A billing cycle is treated paid when its billing charge is fully covered by prior/available payments.
+                        // Discount uses the latest billing row only (current billing), and only while that row is still unpaid.
                         $remainingPaymentCredit = (float) $paymentRows->sum(function ($p) {
                             return (float) ($p->credit ?? 0);
                         });
-        
+
+                        $currentBillingRow = null;
+                        $currentBillingUnpaid = false;
                         foreach ($billingRows as $billingRow) {
                             $billingDebit = max(
                                 0.0,
                                 (float) ($billingRow->debit ?? 0),
                                 (float) (($billingRow->billamount ?? 0) + ($billingRow->others ?? 0))
                             );
-        
+
                             $covered = min($billingDebit, max(0.0, $remainingPaymentCredit));
                             $remainingPaymentCredit = max(0.0, $remainingPaymentCredit - $covered);
                             $billingRemaining = max(0.0, $billingDebit - $covered);
-        
-                            $isMarkedPaid = $billingRemaining <= 0.01;
-                            if (!$isMarkedPaid) {
-                                $monthVolume = max(0.0, (float) ($billingRow->volume ?? 0));
-                                $seniorDiscountTotal += $waterBilling->seniorCitizenDiscount(
-                                    $monthVolume,
-                                    $categoryCode !== '' ? $categoryCode : null,
-                                    $rateCode !== '' ? $rateCode : null
-                                );
-                            }
+
+                            $currentBillingRow = $billingRow;
+                            $currentBillingUnpaid = $billingRemaining > 0.01;
+                        }
+                        if ($currentBillingRow && $currentBillingUnpaid) {
+                            $monthVolume = max(0.0, (float) ($currentBillingRow->volume ?? 0));
+                            $seniorDiscountTotal = $waterBilling->seniorCitizenDiscount(
+                                $monthVolume,
+                                $categoryCode !== '' ? $categoryCode : null,
+                                $rateCode !== '' ? $rateCode : null
+                            );
                         }
                         $s->seniorCitizenDiscount = round(max(0.0, $seniorDiscountTotal), 2);
                         } catch (Throwable $e) {

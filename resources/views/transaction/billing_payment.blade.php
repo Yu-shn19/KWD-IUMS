@@ -1955,7 +1955,7 @@
                         ? getSeniorDiscountByConsumption(effectiveConsumption, currentAccountCategory)
                         : 0;
                     if (currentAccountIsSenior) {
-                        // Senior accounts use backend (unpaid months / saved OR). Volume formula is fallback only.
+                        // Senior accounts use backend current-billing discount (saved OR). Volume formula is fallback only.
                         discountValue = Math.max(parseNumeric(latestServerSeniorDiscount), 0);
                         if (discountValue <= 0 && volumeDiscount > 0) {
                             discountValue = volumeDiscount;
