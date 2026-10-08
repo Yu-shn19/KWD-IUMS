@@ -1246,18 +1246,25 @@ class ConsumerLedgerController extends Controller
                 $previousBalance = (float)($consumer->balance ?? 0);
             }
 
-            // CRITICAL: Only create penalty if consumer has an outstanding balance (arrears)
-            // If balance is 0 or negative (fully paid), do NOT create penalty
-            if ($previousBalance <= 0) {
-                Log::info('Penalty skipped - consumer has no outstanding balance', [
+            // Penalty is 10% of current billing only while that water bill is still unpaid.
+            // A leftover water maintenance charge (20.00) is not a current-billing balance.
+            $arrearsBeforeBill = ($billEntry && !empty($billEntry->id) && is_numeric($billEntry->id))
+                ? self::computeRunningBalanceBeforeLedgerEntry((int) $consumer->id, (int) $billEntry->id, null)
+                : 0.0;
+            $ledgerRemaining = self::computeLedgerFooterBalance((int) $consumer->id, null);
+            $downloadedId = !empty($schedule->downloaded_id) ? (int) $schedule->downloaded_id : null;
+            $paidCurrent = BillingProcessController::paidCurrentBillingForSchedule((int) $consumer->id, (int) $schedule->schedule_id, $downloadedId);
+            $wmc = BillingProcessController::waterMaintenanceAmount($billEntry instanceof ConsumerLedger ? $billEntry : null, $downloadedId);
+            if ($previousBalance <= 0 || !BillingProcessController::currentBillIsUnpaid($billAmount, $ledgerRemaining, $arrearsBeforeBill, $wmc, $paidCurrent, (int) $schedule->schedule_id)) {
+                Log::info('Penalty skipped - current billing has no balance', [
                     'account_no' => $accountNo,
                     'account_name' => $consumer->account_name,
                     'schedule_id' => $schedule->schedule_id,
                     'due_date' => $dueDate->format('Y-m-d'),
                     'previous_balance' => $previousBalance,
-                    'note' => 'Consumer has no arrears/balance, penalty not applicable'
+                    'note' => 'Current billing is paid. Water maintenance alone does not create a penalty.',
                 ]);
-                continue; // Skip penalty creation if consumer has no balance
+                continue;
             }
             
             // Calculate penalty: 10% of Bill Amount (matching past records)

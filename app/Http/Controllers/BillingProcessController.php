@@ -2318,8 +2318,116 @@ class BillingProcessController extends Controller
     }
 
     /**
-     * Get surcharge candidates: past-due consumers (no payment) for the selected zone and bill date.
-     * Used by Generate Surcharge. Penalty is 10% of this bill amount, not arrears.
+     * Water maintenance on this bill. A blank charge still uses the standard 20.00 maintenance amount.
+     */
+    public static function waterMaintenanceAmount(?ConsumerLedger $billingLedger, ?int $downloadedId): float
+    {
+        $wmc = $billingLedger ? round(max(0.0, (float) ($billingLedger->others ?? 0)), 2) : 0.0;
+        if ($wmc <= 0.009 && $downloadedId && Schema::hasColumn('downloaded_readings', 'current_meter_rental')) {
+            $wmc = round(max(0.0, (float) (DownloadedReading::query()->where(mr_col('id'), $downloadedId)->value(mr_col('current_meter_rental')) ?? 0)), 2);
+        }
+        if ($wmc <= 0.009) {
+            $wmc = self::WMC_PER_MONTH;
+        }
+
+        return $wmc;
+    }
+
+    /**
+     * Amount already paid toward this schedule's current billing (not water maintenance).
+     */
+    public static function paidCurrentBillingForSchedule(int $consumerZoneId, ?int $scheduleId, ?int $downloadedId): float
+    {
+        if ($consumerZoneId <= 0) {
+            return 0.0;
+        }
+
+        $readingIds = collect();
+        if ($downloadedId) {
+            $readingIds = collect([(int) $downloadedId]);
+        } elseif ($scheduleId) {
+            $readingIds = DownloadedReading::query()->where(mr_col('schedule_id'), $scheduleId)->pluck(mr_col('id'));
+        }
+
+        $paidBreakdown = 0.0;
+        if ($readingIds->isNotEmpty() && Schema::hasColumn('consumer_payments', 'current_billing')) {
+            $query = ConsumerPayment::forConsumerZone($consumerZoneId)
+                ->whereIn(mr_col('reading_id'), $readingIds->all())
+                ->whereNotNull(mr_col('paid_at'))
+                ->where(mr_col('payment_amount'), '>', 0);
+            if (Schema::hasColumn('consumer_payments', 'remarks')) {
+                $query->where(function ($q) {
+                    $q->whereNull(mr_col('remarks'))
+                        ->orWhere(mr_col('remarks'), 'not like', 'Cancelled OR#%');
+                });
+            }
+            $paidBreakdown = round((float) $query->sum(mr_col('current_billing')), 2);
+        }
+
+        $creditQuery = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->whereRaw("UPPER(TRIM(trans)) = 'PAYMENT'");
+        if ($scheduleId) {
+            $creditQuery->where(function ($q) use ($scheduleId, $readingIds) {
+                $q->where(mr_col('schedule_id'), $scheduleId);
+                if ($readingIds->isNotEmpty()) {
+                    $q->orWhereIn(mr_col('downloaded_reading_id'), $readingIds->all());
+                }
+            });
+        } elseif ($readingIds->isNotEmpty()) {
+            $creditQuery->whereIn(mr_col('downloaded_reading_id'), $readingIds->all());
+        } else {
+            return $paidBreakdown;
+        }
+
+        $paidCredit = round((float) $creditQuery->sum(mr_col('credit')), 2);
+
+        return round(max($paidBreakdown, $paidCredit), 2);
+    }
+
+    /**
+     * Penalty applies only while this period's water bill still has a balance.
+     * Water maintenance (typically 20.00) left on the account is not that balance.
+     */
+    public static function currentBillIsUnpaid(
+        float $currentBill,
+        float $ledgerRemaining,
+        float $arrearsBeforeBill,
+        float $waterMaintenance,
+        float $paidTowardCurrentBill = 0.0,
+        ?int $scheduleId = null
+    ): bool {
+        $bill = round(max(0.0, $currentBill), 2);
+        if ($bill <= 0.009) {
+            return false;
+        }
+        if (round($bill - max(0.0, $paidTowardCurrentBill), 2) <= 0.009) {
+            return false;
+        }
+
+        $remaining = round(max(0.0, $ledgerRemaining), 2);
+        if ($scheduleId && Schema::hasColumn('penalties', 'penalty_amount')) {
+            $postedPenalty = Penalty::query()->where(mr_col('schedule_id'), $scheduleId);
+            if (Schema::hasColumn('penalties', 'paid_at')) {
+                $postedPenalty->whereNull(mr_col('paid_at'));
+            }
+            $remaining = round(max(0.0, $remaining - (float) $postedPenalty->sum(mr_col('penalty_amount'))), 2);
+        }
+
+        $prior = round(max(0.0, $arrearsBeforeBill), 2);
+        $stillFromThisBill = round($remaining - $prior, 2);
+        $wmc = round(max(self::WMC_PER_MONTH, $waterMaintenance), 2);
+        if ($stillFromThisBill <= $wmc + 0.009) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Get surcharge candidates: past-due consumers for the selected zone and bill date.
+     * Penalty is 10% of current billing, and only when that current billing is still unpaid.
+     * A leftover water maintenance charge does not create a penalty.
      */
     public function getSurchargeCandidates(Request $request)
     {
@@ -2416,15 +2524,26 @@ class BillingProcessController extends Controller
 
                 $surchargeDetails = $this->resolveSurchargePenaltyDetails((float) $currentBill, (float) $arrearsBeforeBill, $consumer);
                 $penaltyBase = $surchargeDetails['penalty_base'];
-                $reconciledOwed = $surchargeDetails['reconciled_owed'];
                 $ledgerRemaining = $surchargeDetails['ledger_remaining'];
 
-                // Strict 10% of this bill amount (not arrears / ledger remaining)
+                // Strict 10% of this bill amount (not arrears / ledger remaining / water maintenance)
                 $calculatedPenalty = round($penaltyBase * (float) self::PENALTY_RATE, 2);
                 $arrearsColumn = round(max(0.0, (float) $ledgerRemaining), 2);
                 $total = round($arrearsColumn + $calculatedPenalty, 2);
 
-                if ($penaltyBase <= 0 || $calculatedPenalty <= 0 || $reconciledOwed <= 0) {
+                $downloadedId = !empty($row->downloaded_id) ? (int) $row->downloaded_id : null;
+                $paidCurrent = $consumer
+                    ? self::paidCurrentBillingForSchedule((int) $consumer->id, (int) $row->schedule_id, $downloadedId)
+                    : 0.0;
+                $wmc = self::waterMaintenanceAmount($billingLedger, $downloadedId);
+                if ($penaltyBase <= 0 || $calculatedPenalty <= 0 || !self::currentBillIsUnpaid(
+                    (float) $currentBill,
+                    (float) $ledgerRemaining,
+                    (float) $arrearsBeforeBill,
+                    $wmc,
+                    $paidCurrent,
+                    (int) $row->schedule_id
+                )) {
                     continue;
                 }
 
@@ -2720,8 +2839,8 @@ class BillingProcessController extends Controller
      * Get surcharge candidate for a specific consumer account on selected bill date.
      * Used by Generate Penalty (Single Consumer).
      *
-     * Unlike bulk Generate Surcharge, a payment does not disqualify the account:
-     * penalty is 10% of this bill's current amount even if the bill is already paid.
+     * Penalty is 10% of this bill's current amount only while that current billing
+     * still has a balance. Water maintenance left unpaid does not qualify.
      */
     public function getSingleConsumerPenaltyCandidate(Request $request)
     {
@@ -2736,7 +2855,7 @@ class BillingProcessController extends Controller
             $billDate = Carbon::parse($request->input('bill_date'))->startOfDay();
             $today = Carbon::now()->startOfDay();
 
-            // Past-due schedules only. Payments are allowed — surcharge still applies to this current bill.
+            // Past-due schedules only. Skip when current billing itself has no remaining balance.
             $rows = MeterReadingSchedule::query()
                 ->leftJoin(mr_col('downloaded_readings as dr'), mr_col('dr.schedule_id'), '=', mr_col('meter_reading_schedules.id'))
                 ->joinConsumerZone()
@@ -2810,14 +2929,25 @@ class BillingProcessController extends Controller
 
                 $surchargeDetails = $this->resolveSurchargePenaltyDetails((float) $currentBill, (float) $arrearsBeforeBill, $consumer);
                 $ledgerRemaining = $surchargeDetails['ledger_remaining'];
-                // Single consumer: 10% of this current bill, even if already paid / ledger remaining is 0.
                 $penaltyBase = max(0.0, (float) $currentBill);
 
                 $calculatedPenalty = round($penaltyBase * (float) self::PENALTY_RATE, 2);
                 $arrearsColumn = round(max(0.0, (float) $ledgerRemaining), 2);
                 $total = round($arrearsColumn + $calculatedPenalty, 2);
 
-                if ($penaltyBase <= 0 || $calculatedPenalty <= 0) {
+                $downloadedId = !empty($row->downloaded_id) ? (int) $row->downloaded_id : null;
+                $paidCurrent = $consumer
+                    ? self::paidCurrentBillingForSchedule((int) $consumer->id, (int) $row->schedule_id, $downloadedId)
+                    : 0.0;
+                $wmc = self::waterMaintenanceAmount($billingLedger, $downloadedId);
+                if ($penaltyBase <= 0 || $calculatedPenalty <= 0 || !self::currentBillIsUnpaid(
+                    (float) $currentBill,
+                    (float) $ledgerRemaining,
+                    (float) $arrearsBeforeBill,
+                    $wmc,
+                    $paidCurrent,
+                    (int) $row->schedule_id
+                )) {
                     continue;
                 }
 
@@ -2867,11 +2997,11 @@ class BillingProcessController extends Controller
             ];
 
             if (count($data) > 0) {
-                $message = count($data) . ' consumer record(s) eligible for penalty on the current bill (payment does not block).';
+                $message = count($data) . ' consumer record(s) eligible for penalty. Current billing still has a balance.';
             } elseif ($rows->isEmpty()) {
                 $message = 'No past-due billing found for this account and bill date.';
             } else {
-                $message = 'No current bill amount found to surcharge for this account and bill date.';
+                $message = 'No penalty. Current billing has no balance (water maintenance alone does not qualify).';
             }
 
             return response()->json([
@@ -2891,9 +3021,52 @@ class BillingProcessController extends Controller
         }
     }
          
+    /**
+     * True when this schedule's current water bill is still unpaid.
+     * Water maintenance remaining on the account does not count.
+     */
+    private function currentBillStillUnpaidForSchedule(int $scheduleId, ?int $consumerZoneId, float $currentBill, ?int $downloadedId): bool
+    {
+        if ($scheduleId <= 0 || !$consumerZoneId) {
+            return false;
+        }
+
+        $billingLedger = ConsumerLedger::query()
+            ->where(mr_col('consumer_zone_id'), $consumerZoneId)
+            ->where(mr_col('schedule_id'), $scheduleId)
+            ->whereIn(mr_col('trans'), ['BILLING', 'BILL'])
+            ->orderBy(mr_col('id'), 'asc')
+            ->first();
+
+        if ($currentBill <= 0.009 && $billingLedger) {
+            $currentBill = (float) ($billingLedger->billamount ?? 0);
+        }
+
+        $arrearsBeforeBill = 0.0;
+        if ($billingLedger) {
+            $arrearsBeforeBill = ConsumerLedgerController::computeRunningBalanceBeforeLedgerEntry(
+                $consumerZoneId,
+                (int) $billingLedger->id,
+                null
+            );
+        }
+
+        $ledgerRemaining = max(0.0, ConsumerLedgerController::computeLedgerFooterBalance($consumerZoneId, null));
+
+        return self::currentBillIsUnpaid(
+            $currentBill,
+            $ledgerRemaining,
+            $arrearsBeforeBill,
+            self::waterMaintenanceAmount($billingLedger, $downloadedId),
+            self::paidCurrentBillingForSchedule($consumerZoneId, $scheduleId, $downloadedId),
+            $scheduleId
+        );
+    }
+
      /**
      * Apply surcharge (penalty) to selected past-due consumers.
      * Creates Penalty records, or updates unpaid existing ones to 10% of bill amount.
+     * Skips the account when current billing has no balance, even if water maintenance remains.
      */
     public function applySurcharge(Request $request)
     {
@@ -2923,6 +3096,11 @@ class BillingProcessController extends Controller
                 $calculatedPenalty = round((float) ($item['calculated_penalty'] ?? 0), 2);
 
                 if ($scheduleId <= 0 || $calculatedPenalty <= 0) {
+                    $skipped++;
+                    continue;
+                }
+
+                if (!$this->currentBillStillUnpaidForSchedule($scheduleId, $consumerZoneId, $currentBill, $downloadedId)) {
                     $skipped++;
                     continue;
                 }

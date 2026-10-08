@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 use App\Models\Penalty;
 use App\Models\ConsumerLedger;
+use App\Http\Controllers\BillingProcessController;
+use App\Http\Controllers\ConsumerLedgerController;
 
 class CreatePenalties extends Command
 {
@@ -274,6 +276,22 @@ class CreatePenalties extends Command
                 $skipReasons['no_balance']++;
                 if ($debug) {
                     $this->line("  Skipped {$accountNo} schedule {$schedule->schedule_id}: Consumer has no outstanding balance (balance: {$previousBalance})");
+                }
+                continue;
+            }
+
+            $arrearsBeforeBill = $billEntry
+                ? ConsumerLedgerController::computeRunningBalanceBeforeLedgerEntry((int) $consumerZoneId, (int) $billEntry->id, null)
+                : 0.0;
+            $ledgerRemaining = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumerZoneId, null);
+            $downloadedId = !empty($schedule->downloaded_id) ? (int) $schedule->downloaded_id : null;
+            $paidCurrent = BillingProcessController::paidCurrentBillingForSchedule((int) $consumerZoneId, (int) $schedule->schedule_id, $downloadedId);
+            $wmc = BillingProcessController::waterMaintenanceAmount($billEntry, $downloadedId);
+            if (!BillingProcessController::currentBillIsUnpaid($billAmount, $ledgerRemaining, $arrearsBeforeBill, $wmc, $paidCurrent, (int) $schedule->schedule_id)) {
+                $skipped++;
+                $skipReasons['no_balance']++;
+                if ($debug) {
+                    $this->line("  Skipped {$accountNo} schedule {$schedule->schedule_id}: Current billing has no balance (water maintenance is not penalized)");
                 }
                 continue;
             }
