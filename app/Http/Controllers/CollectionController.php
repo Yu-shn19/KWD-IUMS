@@ -1483,13 +1483,26 @@ class CollectionController extends Controller
                         ? (float)($latestLedgerEntry->balance ?? 0) 
                         : (float)($consumerZone->balance ?? 0);
 
-                    // Only generate penalty if consumer has outstanding balance
-                    if ($previousBalance <= 0) {
+                    // Only generate penalty if this period's current billing is still unpaid.
+                    // A leftover water maintenance charge does not qualify.
+                    $billingLedger = ConsumerLedger::query()
+                        ->where($clConsumerZoneId, $consumerZoneId)
+                        ->where($clScheduleId, $schedule->schedule_id)
+                        ->whereIn($clTrans, ['BILLING', 'BILL'])
+                        ->orderBy($clId, 'asc')
+                        ->first();
+                    $arrearsBeforeBill = $billingLedger
+                        ? ConsumerLedgerController::computeRunningBalanceBeforeLedgerEntry((int) $consumerZoneId, (int) $billingLedger->id, null)
+                        : 0.0;
+                    $ledgerRemaining = ConsumerLedgerController::computeLedgerFooterBalance((int) $consumerZoneId, null);
+                    $paidCurrent = BillingProcessController::paidCurrentBillingForSchedule((int) $consumerZoneId, (int) $schedule->schedule_id, null);
+                    $wmc = BillingProcessController::waterMaintenanceAmount($billingLedger, null);
+                    if ($previousBalance <= 0 || !BillingProcessController::currentBillIsUnpaid($currentBill, $ledgerRemaining, $arrearsBeforeBill, $wmc, $paidCurrent, (int) $schedule->schedule_id)) {
                         $skippedCount++;
-                        Log::info('Skipping penalty - consumer has no outstanding balance', [
+                        Log::info('Skipping penalty - current billing has no balance', [
                             'account_no' => $accountNo,
                             'schedule_id' => $schedule->schedule_id,
-                            'previous_balance' => $previousBalance
+                            'previous_balance' => $previousBalance,
                         ]);
                         continue;
                     }

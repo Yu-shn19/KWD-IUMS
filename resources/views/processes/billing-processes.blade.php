@@ -778,7 +778,7 @@
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = '';
                         const surchargeHelp = document.getElementById('surchargeBillDateHelp');
-                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date for past-due consumers. Surcharge is 10% of the bill amount, not arrears.';
+                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date for past-due consumers. Surcharge is 10% of current billing only when that bill still has a balance. Water maintenance of 20.00 alone does not qualify.';
                     } else if (selectedProcess === 'Generate Penalty (Single Consumer)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'none';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -788,9 +788,9 @@
                         if (multipleConsumersAccountGroup) multipleConsumersAccountGroup.style.display = 'none';
                         if (zoneGroup) zoneGroup.style.display = 'none';
                         const accountHelp = document.getElementById('singleConsumerAccountHelp');
-                        if (accountHelp) accountHelp.textContent = 'Surcharge can still be applied to this current bill even if the account already has a payment.';
+                        if (accountHelp) accountHelp.textContent = 'Penalty is 10% of current billing only when that bill still has a balance. Water maintenance of 20.00 alone does not qualify.';
                         const surchargeHelp = document.getElementById('surchargeBillDateHelp');
-                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date of the past-due current bill. Existing payment does not block surcharge.';
+                        if (surchargeHelp) surchargeHelp.textContent = 'Bill date of the past-due current bill. No penalty when current billing has no balance.';
                     } else if (selectedProcess === 'Meter Reading Preparation (Single Consumer)') {
                         if (billMonthGroup) billMonthGroup.style.display = 'block';
                         if (readingDateGroup) readingDateGroup.style.display = 'none';
@@ -1326,8 +1326,8 @@
                 });
             }
 
-            // Generate Penalty (Single Consumer) - Load one past-due consumer by account and bill date.
-            // Payment does not block: surcharge is 10% of the current bill even if already paid.
+            // Generate Penalty (Single Consumer) - 10% of current billing only while that bill is unpaid.
+            // A leftover water maintenance charge does not create a penalty.
             function executeGenerateSingleConsumerPenalty() {
                 const accountNumber = (document.getElementById('singleConsumerAccount').value || '').trim();
                 const billDate = document.getElementById('surchargeBillDate').value;
@@ -1426,7 +1426,7 @@
                                     <i class="fas fa-inbox fa-3x mb-3 text-muted opacity-50"></i>
                                     <h6 class="text-muted">${isSinglePenalty ? 'No Past-Due Current Bill Found' : 'No Past-Due Consumers Found'}</h6>
                                     <p class="mb-0 small">${isSinglePenalty
-                                        ? 'No past-due current bill found for this account and bill date. Payment does not block surcharge; a billed amount is still required.'
+                                        ? 'No penalty for this account and bill date. Current billing has no balance, or there is no past-due bill. Water maintenance alone does not qualify.'
                                         : 'No consumers past due without payment for the selected zone and bill date.'}</p>
                                 </div>
                             </td>
