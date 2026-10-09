@@ -131,16 +131,7 @@ class BillMonthDetailsService
                 if ($request->has('current_balance') && $request->input('current_balance') !== null && $request->input('current_balance') !== '') {
                     $s->currentBalance = (float) $request->input('current_balance');
                 } else {
-                    $latestBalanceEntry = \App\Models\ConsumerLedger::query()->where(mr_col('consumer_zone_id'), $consumer->id)
-                        ->whereNotNull(mr_col('balance'))
-                        ->orderBy('date', 'desc')
-                        ->orderBy(mr_col('id'), 'desc')
-                        ->first();
-                    if ($latestBalanceEntry) {
-                        $s->currentBalance = (float)($latestBalanceEntry->balance ?? 0);
-                    } else {
-                        $s->currentBalance = $consumer->getLedgerBalance();
-                    }
+                    $s->currentBalance = (float) $consumer->getLedgerBalance();
                 }
                 $s->consumer = $consumer;
                 return null;
@@ -1762,6 +1753,32 @@ class BillMonthDetailsService
         $meterRentalArrears = round((float) ($schedule?->meter_rental_arrears ?? 0), 2);
         if ($consumerZoneId && $consumerZoneId > 0) {
             $penalty = round(max(0.0, $penalty - ConsumerPayment::paidPenaltyForConsumer((int) $consumerZoneId, $paidAfter)), 2);
+        }
+
+        // Schedule may store a single lumped Arrears total — restore DM PY / Arrears / MR / Penalty.
+        if ($consumerZoneId && $consumerZoneId > 0) {
+            $looksCollapsed = $prioYears <= 0.009
+                && $meterRentalArrears <= 0.009
+                && $currentArrears > 0.01;
+            $dm = app(LedgerDmComponentsService::class)->computeForConsumers([(int) $consumerZoneId]);
+            $dmRow = $dm[(int) $consumerZoneId] ?? null;
+            if ($dmRow && ($looksCollapsed || ($prioYears <= 0.009 && (float) ($dmRow['prio_years'] ?? 0) > 0.009))) {
+                $currentArrears = round((float) ($dmRow['current_arrears'] ?? $currentArrears), 2);
+                $prioYears = round((float) ($dmRow['prio_years'] ?? $prioYears), 2);
+                $meterRentalArrears = round((float) ($dmRow['others'] ?? $meterRentalArrears), 2);
+                if ((float) ($dmRow['penalty'] ?? 0) > $penalty) {
+                    $penalty = round((float) $dmRow['penalty'], 2);
+                }
+                // Current bill / Current MR are shown on their own lines — peel them out of carry.
+                if ($currentBilling > 0.009) {
+                    $peel = min($currentArrears, $currentBilling);
+                    $currentArrears = round($currentArrears - $peel, 2);
+                }
+                if ($currentMeterRental > 0.009) {
+                    $peel = min($meterRentalArrears, $currentMeterRental);
+                    $meterRentalArrears = round($meterRentalArrears - $peel, 2);
+                }
+            }
         }
 
         if ($currentArrears < 0) {

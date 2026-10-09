@@ -77,21 +77,15 @@ class ConsumerZone extends Model
     }
 
     /**
-     * Running balance from consumer_ledgers (not stored on consumer_zone).
+     * Running balance from consumer_ledgers (recomputed like Account Ledger footer).
+     * Do not trust the stored balance column on the latest row — it can be stale
+     * when DM rows are inserted out of chronological id order.
      */
     public function getLedgerBalance(): float
     {
-        $consumerZoneIdColumn = 'consumer_zone_id';
-        $idColumn = (new ConsumerLedger)->getKeyName();
-
-        $latest = ConsumerLedger::query()
-            ->where($consumerZoneIdColumn, $this->getKey())
-            ->whereNotNull('balance')
-            ->orderByDesc('date')
-            ->orderByDesc($idColumn)
-            ->first();
-
-        return $latest ? (float) ($latest->balance ?? 0) : 0.0;
+        return \App\Http\Controllers\ConsumerLedgerController::computeAccountLedgerFooterBalance(
+            (int) $this->getKey()
+        );
     }
 
     /**

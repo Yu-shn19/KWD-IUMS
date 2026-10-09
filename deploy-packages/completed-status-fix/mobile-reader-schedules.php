@@ -1,41 +1,29 @@
 <?php
 /**
  * Drop-in reader schedules endpoint for the mobile app.
- * Matches Download Reading: schedule Completed / Curr. Read / downloaded_readings => completed.
  *
  * URL: https://YOUR-DOMAIN/mobile-reader-schedules.php?reader_id=ID
  * Auth: Bearer token (same as /api/reader/schedules)
  *
- * Upload this single file to the server public/ folder if full git deploy is delayed.
+ * Thin wrapper — schedule payload comes from MeterReadingApiController
+ * so logic stays in one place (DM breakdown, completed status, etc.).
  */
+declare(strict_types=1);
+
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Headers: Authorization, Content-Type, Accept');
 header('Access-Control-Allow-Methods: GET, OPTIONS');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
     http_response_code(204);
     exit;
 }
 
-try {
-    require __DIR__ . '/../vendor/autoload.php';
-    $app = require __DIR__ . '/../bootstrap/app.php';
-    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-} catch (Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Bootstrap failed: ' . $e->getMessage()]);
-    exit;
-}
-
-use App\Models\User;
-use App\Models\MeterReadingSchedule;
-use App\Models\DownloadedReading;
-use App\Http\Controllers\ConsumerLedgerController;
-use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
-
-function mrs_json($payload, int $code = 200): void
+/**
+ * @param  array<string, mixed>  $payload
+ */
+function mrs_json(array $payload, int $code = 200): void
 {
     http_response_code($code);
     echo json_encode($payload);
@@ -48,8 +36,21 @@ function mrs_bearer_token(): ?string
     if (preg_match('/Bearer\s+(\S+)/i', $header, $m)) {
         return $m[1];
     }
-    return $_GET['api_token'] ?? null;
+
+    return isset($_GET['api_token']) ? (string) $_GET['api_token'] : null;
 }
+
+try {
+    require __DIR__ . '/../vendor/autoload.php';
+    $app = require __DIR__ . '/../bootstrap/app.php';
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+} catch (Throwable $e) {
+    mrs_json(['success' => false, 'message' => 'Bootstrap failed: ' . $e->getMessage()], 500);
+}
+
+use App\Http\Controllers\Api\MeterReadingApiController;
+use App\Models\User;
+use Illuminate\Http\Request;
 
 $token = mrs_bearer_token();
 if (!$token) {
@@ -76,262 +77,19 @@ try {
     mrs_json(['success' => false, 'message' => 'Invalid authentication token'], 401);
 }
 
-$readerId = (int) ($_GET['reader_id'] ?? $reader->id);
-if ($readerId !== (int) $reader->id) {
-    // Allow explicit reader_id only when it matches the authenticated user
-    $readerId = (int) $reader->id;
-}
-
-$billMonthRaw = $_GET['bill_month'] ?? null;
+$readerId = (int) $reader->id;
+$query = array_filter([
+    'reader_id' => $readerId,
+    'bill_month' => $_GET['bill_month'] ?? null,
+    'zone' => $_GET['zone'] ?? null,
+], static fn ($v) => $v !== null && $v !== '');
 
 try {
-    $query = MeterReadingSchedule::with('consumerZone')
-        ->where('assigned_reader_id', $readerId)
-        ->whereIn('status', ['Assigned', 'In Progress', 'Completed', 'Prepared']);
-
-    if ($billMonthRaw) {
-        $bm = Carbon::parse($billMonthRaw);
-        $query->whereYear('bill_month', $bm->year)->whereMonth('bill_month', $bm->month);
-        $billMonthNormalized = $bm->copy()->startOfMonth()->format('Y-m-d');
-    } else {
-        $latestBillMonth = MeterReadingSchedule::query()
-            ->where('assigned_reader_id', $readerId)
-            ->whereIn('status', ['Assigned', 'In Progress', 'Completed', 'Prepared'])
-            ->orderByDesc('bill_month')
-            ->value('bill_month');
-        if ($latestBillMonth) {
-            $lm = Carbon::parse($latestBillMonth);
-            $query->whereYear('bill_month', $lm->year)->whereMonth('bill_month', $lm->month);
-            $billMonthNormalized = $lm->copy()->startOfMonth()->format('Y-m-d');
-        } else {
-            $billMonthNormalized = null;
-        }
-    }
-
-    $schedules = $query->orderByRaw("
-        CASE
-            WHEN status = 'Assigned' THEN 1
-            WHEN status = 'In Progress' THEN 2
-            WHEN status = 'Completed' THEN 3
-            ELSE 4
-        END
-    ")->orderBy('id')->get();
-
-    $scheduleIds = $schedules->pluck('id')->map(fn ($id) => (int) $id)->all();
-    $consumerZoneIds = $schedules->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
-
-    $downloadedByScheduleId = collect();
-    $downloadedByConsumerZoneId = collect();
-    $downloadedByAccount = collect();
-
-    if (!empty($scheduleIds) || !empty($consumerZoneIds)) {
-        $downloadRows = DB::table('downloaded_readings as dr')
-            ->leftJoin('meter_reading_schedules as mrs', 'mrs.id', '=', 'dr.schedule_id')
-            ->leftJoin('consumer_zone as cz', function ($join) {
-                $join->whereRaw('cz.id = COALESCE(dr.consumer_zone_id, mrs.consumer_zone_id)');
-            })
-            ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $billMonthNormalized) {
-                // Exact schedule match for current assignment set
-                if (!empty($scheduleIds)) {
-                    $q->whereIn('dr.schedule_id', $scheduleIds);
-                }
-                // Same consumer only for THIS bill month (prevents prior-month Completed bleed).
-                if (!empty($consumerZoneIds) && $billMonthNormalized) {
-                    $q->orWhere(function ($q2) use ($consumerZoneIds, $billMonthNormalized) {
-                        $q2->whereIn('dr.consumer_zone_id', $consumerZoneIds)
-                            ->whereYear('mrs.bill_month', (int) substr($billMonthNormalized, 0, 4))
-                            ->whereMonth('mrs.bill_month', (int) substr($billMonthNormalized, 5, 2));
-                    });
-                }
-            })
-            ->where(function ($q) {
-                $q->whereNotNull('dr.current_reading')
-                    ->orWhereRaw('LOWER(COALESCE(dr.status, "")) IN (?, ?)', ['completed', 'verified']);
-            })
-            ->orderByDesc('dr.id')
-            ->select([
-                'dr.id',
-                'dr.schedule_id',
-                'dr.consumer_zone_id',
-                'dr.reader_id',
-                'dr.current_reading',
-                'dr.consumption',
-                'dr.reading_date',
-                'dr.status',
-                'dr.reader_notes',
-                'mrs.consumer_zone_id as schedule_consumer_zone_id',
-                'mrs.bill_month as schedule_bill_month',
-                'cz.account_no',
-                'cz.id as resolved_consumer_zone_id',
-            ])
-            ->get();
-
-        foreach ($downloadRows as $dr) {
-            $sid = (int) ($dr->schedule_id ?? 0);
-            $czid = (int) ($dr->consumer_zone_id ?: ($dr->schedule_consumer_zone_id ?? 0) ?: ($dr->resolved_consumer_zone_id ?? 0));
-            $acct = strtolower(trim((string) ($dr->account_no ?? '')));
-
-            if ($sid > 0 && !$downloadedByScheduleId->has($sid)) {
-                $downloadedByScheduleId->put($sid, $dr);
-            }
-            if ($czid > 0 && !$downloadedByConsumerZoneId->has($czid)) {
-                $downloadedByConsumerZoneId->put($czid, $dr);
-            }
-            if ($acct !== '' && !$downloadedByAccount->has($acct)) {
-                $downloadedByAccount->put($acct, $dr);
-            }
-        }
-    }
-
-    $rateCodes = collect();
-    if (!empty($consumerZoneIds)) {
-        $rateCodes = DB::table('consumer_zone')
-            ->whereIn('id', $consumerZoneIds)
-            ->select('id', 'rate_code', 'bill_disc_percent', 'osca_id_no')
-            ->get()
-            ->keyBy('id');
-    }
-
-    $formatName = function ($user) {
-        $parts = array_filter([
-            $user->first_name ?? null,
-            $user->middle_name ?? null,
-            $user->last_name ?? null,
-        ]);
-        if (!empty($parts)) {
-            return implode(' ', $parts);
-        }
-        return $user->name ?? 'READER';
-    };
-
-    $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk(
-        $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->all()
-    );
-
-    $payload = [
-        'success' => true,
-        'message' => 'Schedules retrieved successfully',
-        'version' => '1.5-live-ledger-arrears',
-        'bill_month' => $billMonthNormalized ?? null,
-        'reader' => [
-            'id' => $reader->id,
-            'name' => $formatName($reader),
-        ],
-        'total_schedules' => $schedules->count(),
-        'schedules' => $schedules->map(function ($schedule) use (
-            $downloadedByScheduleId,
-            $downloadedByConsumerZoneId,
-            $downloadedByAccount,
-            $rateCodes,
-            $footerBalances
-        ) {
-            $accountKey = strtolower(trim((string) ($schedule->account_number ?? '')));
-            $scheduleBillYm = $schedule->bill_month
-                ? Carbon::parse($schedule->bill_month)->format('Y-m')
-                : null;
-
-            $downloaded = $downloadedByScheduleId->get((int) $schedule->id);
-            if (!$downloaded && $schedule->consumer_zone_id) {
-                $byCz = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
-                if ($byCz) {
-                    $drYm = !empty($byCz->schedule_bill_month)
-                        ? Carbon::parse($byCz->schedule_bill_month)->format('Y-m')
-                        : null;
-                    if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
-                        $downloaded = $byCz;
-                    } elseif ((int) ($byCz->schedule_id ?? 0) === (int) $schedule->id) {
-                        $downloaded = $byCz;
-                    }
-                }
-            }
-            if (!$downloaded && $accountKey !== '') {
-                $byAcct = $downloadedByAccount->get($accountKey);
-                if ($byAcct) {
-                    $drYm = !empty($byAcct->schedule_bill_month)
-                        ? Carbon::parse($byAcct->schedule_bill_month)->format('Y-m')
-                        : null;
-                    if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
-                        $downloaded = $byAcct;
-                    } elseif ((int) ($byAcct->schedule_id ?? 0) === (int) $schedule->id) {
-                        $downloaded = $byAcct;
-                    }
-                }
-            }
-
-            $scheduleHasReading = $schedule->current_reading !== null && $schedule->current_reading !== '';
-            $scheduleCompleted = strcasecmp((string) $schedule->status, 'Completed') === 0
-                || strcasecmp((string) $schedule->status, 'Verified') === 0;
-            $hasDownloadedReading = (bool) $downloaded;
-            $isReallyCompleted = $hasDownloadedReading || $scheduleCompleted || $scheduleHasReading;
-
-            $readingDate = null;
-            if ($downloaded && !empty($downloaded->reading_date)) {
-                try {
-                    $readingDate = Carbon::parse($downloaded->reading_date)->format('Y-m-d');
-                } catch (Throwable $e) {
-                    $readingDate = (string) $downloaded->reading_date;
-                }
-            } elseif ($schedule->reading_date) {
-                $readingDate = $schedule->reading_date?->format('Y-m-d');
-            }
-
-            $arrears = (float) ($schedule->arrears ?? 0);
-            $priorYears = (float) ($schedule->prior_years ?? 0);
-            $penalty = (float) ($schedule->penalty ?? 0);
-            $meterRentalArrears = (float) ($schedule->meter_rental_arrears ?? 0);
-            if (!$isReallyCompleted) {
-                $cid = (int) ($schedule->consumer_zone_id ?? 0);
-                $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
-                $storedOutstanding = round($arrears + $priorYears + $penalty + $meterRentalArrears, 2);
-                if (abs($storedOutstanding - $ledgerBalance) > 0.02) {
-                    $arrears = $ledgerBalance;
-                    $priorYears = 0.0;
-                    $penalty = 0.0;
-                    $meterRentalArrears = 0.0;
-                }
-            }
-
-            return [
-                'id' => $schedule->id,
-                'sedr_number' => $schedule->sedr_number,
-                'account_number' => $schedule->account_number,
-                'account_name' => $schedule->account_name,
-                'address' => $schedule->address,
-                'zone' => $schedule->zone,
-                'category' => $schedule->category,
-                'rate_code' => $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null,
-                'bill_disc_percent' => $rateCodes->get($schedule->consumer_zone_id)?->bill_disc_percent ?? null,
-                'osca_id_no' => $rateCodes->get($schedule->consumer_zone_id)?->osca_id_no ?? null,
-                'meter_number' => $schedule->meter_number,
-                'previous_reading' => $schedule->previous_reading,
-                'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),
-                'current_reading' => $downloaded
-                    ? $downloaded->current_reading
-                    : ($scheduleHasReading ? $schedule->current_reading : null),
-                'reading_date' => $readingDate,
-                'consumption' => $downloaded
-                    ? $downloaded->consumption
-                    : ($scheduleHasReading ? $schedule->consumption : null),
-                'status' => $isReallyCompleted ? 'completed' : $schedule->status,
-                'schedule_status' => $schedule->status,
-                'schedule_current_reading' => $schedule->current_reading,
-                'schedule_consumption' => $schedule->consumption,
-                'has_downloaded_reading' => $hasDownloadedReading || $isReallyCompleted,
-                'downloaded_reading_id' => $downloaded->id ?? null,
-                'downloaded_reading_status' => $downloaded->status ?? ($isReallyCompleted ? 'completed' : null),
-                'bill_month' => $schedule->bill_month?->format('Y-m-d'),
-                'bill_date' => $schedule->bill_date?->format('Y-m-d'),
-                'due_date' => $schedule->due_date?->format('Y-m-d'),
-                'arrears' => $arrears,
-                'prior_years' => $priorYears,
-                'penalty' => $penalty,
-                'meter_rental_arrears' => $meterRentalArrears,
-                'reader_notes' => $downloaded->reader_notes ?? null,
-            ];
-        })->values(),
-    ];
-
-    mrs_json($payload);
+    $request = Request::create('/api/reader/schedules', 'GET', $query);
+    $response = app(MeterReadingApiController::class)->getAssignedSchedules($request);
+    http_response_code($response->getStatusCode());
+    echo $response->getContent();
+    exit;
 } catch (Throwable $e) {
     mrs_json([
         'success' => false,

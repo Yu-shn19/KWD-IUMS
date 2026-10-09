@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\ConsumerLedgerController;
 use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
 use App\Models\ConsumerLedger;
+use App\Services\LedgerDmComponentsService;
 use App\Services\WaterBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -180,14 +182,15 @@ class MeterReadingApiController extends Controller
                 ->leftJoin(mr_col('consumer_zone as cz'), function ($join) {
                     $join->whereRaw('cz.id = COALESCE(dr.consumer_zone_id, mrs.consumer_zone_id)');
                 })
-                ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $readerId, $billMonthFilter) {
+                ->where(function ($q) use ($scheduleIds, $consumerZoneIds, $billMonthFilter) {
+                    // Prefer exact schedule match for the currently assigned schedules.
                     $q->whereIn('dr.schedule_id', $scheduleIds);
-                    if (!empty($consumerZoneIds)) {
-                        $q->orWhereIn('dr.consumer_zone_id', $consumerZoneIds);
-                    }
-                    if ($billMonthFilter) {
-                        $q->orWhere(function ($q2) use ($readerId, $billMonthFilter) {
-                            $q2->where('mrs.assigned_reader_id', $readerId)
+
+                    // Same consumer may only count as completed for THIS bill month.
+                    // Without this, a prior-month download marks a newly assigned schedule Completed.
+                    if (!empty($consumerZoneIds) && $billMonthFilter) {
+                        $q->orWhere(function ($q2) use ($consumerZoneIds, $billMonthFilter) {
+                            $q2->whereIn('dr.consumer_zone_id', $consumerZoneIds)
                                 ->whereDate('mrs.bill_month', $billMonthFilter);
                         });
                     }
@@ -205,11 +208,15 @@ class MeterReadingApiController extends Controller
                     'dr.previous_reading',
                     'dr.current_reading',
                     'dr.consumption',
-                    'dr.current_bill',
+                    'dr.current_billing',
                     'dr.reading_date',
                     'dr.status',
                     'dr.reader_notes',
+                    ...(Schema::hasColumn('downloaded_readings', 'current_meter_rental')
+                        ? ['dr.current_meter_rental']
+                        : []),
                     'mrs.consumer_zone_id as schedule_consumer_zone_id',
+                    'mrs.bill_month as schedule_bill_month',
                     'cz.account_no',
                     'cz.id as resolved_consumer_zone_id',
                 ])
@@ -242,21 +249,30 @@ class MeterReadingApiController extends Controller
             }
         }
 
-        // Get rate codes from consumer_zone table for all schedules
+        // Get rate codes / SC discount flags from consumer_zone for all schedules
         $rateCodes = collect();
         if ($schedules->isNotEmpty()) {
             $consumerZoneIds = $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->toArray();
             $rateCodes = DB::table(mr_col('consumer_zone'))
                 ->whereIn(mr_col('id'), $consumerZoneIds)
-                ->select('id', 'account_no', 'rate_code')
+                ->select('id', 'account_no', 'rate_code', 'bill_disc_percent', 'osca_id_no')
                 ->get()
                 ->keyBy(mr_col('id'));
+        }
+
+        // Live ledger + DM breakdown so mobile receipt keeps PY / Arrears / Penalty / MR.
+        $footerBalances = collect();
+        $dmByConsumer = [];
+        if ($schedules->isNotEmpty()) {
+            $consumerIdsForBalance = $schedules->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
+            $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk($consumerIdsForBalance);
+            $dmByConsumer = app(LedgerDmComponentsService::class)->computeForConsumers($consumerIdsForBalance);
         }
 
         return response()->json([
             'success' => true,
             'message' => 'Schedules retrieved successfully',
-            'version' => '1.3-completed-matches-download-reading',
+            'version' => '1.7-receipt-dm-breakdown',
             'bill_month' => $latestBillMonth,
             'reader' => [
                 'id' => $reader->id,
@@ -267,18 +283,46 @@ class MeterReadingApiController extends Controller
                 $downloadedByScheduleId,
                 $downloadedByConsumerZoneId,
                 $downloadedByAccount,
-                $rateCodes
+                $rateCodes,
+                $footerBalances,
+                $dmByConsumer
             ) {
                 $accountKey = strtolower(trim((string) ($schedule->account_number ?? '')));
+                $scheduleBillYm = $schedule->bill_month
+                    ? Carbon::parse($schedule->bill_month)->format('Y-m')
+                    : null;
+
                 $downloaded = $downloadedByScheduleId->get((int) $schedule->id);
+                // Only reuse consumer/account downloads from the same bill month.
                 if (!$downloaded && $schedule->consumer_zone_id) {
-                    $downloaded = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                    $byCz = $downloadedByConsumerZoneId->get((int) $schedule->consumer_zone_id);
+                    if ($byCz) {
+                        $drYm = !empty($byCz->schedule_bill_month)
+                            ? Carbon::parse($byCz->schedule_bill_month)->format('Y-m')
+                            : null;
+                        if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
+                            $downloaded = $byCz;
+                        } elseif ((int) ($byCz->schedule_id ?? 0) === (int) $schedule->id) {
+                            $downloaded = $byCz;
+                        }
+                    }
                 }
                 if (!$downloaded && $accountKey !== '') {
-                    $downloaded = $downloadedByAccount->get($accountKey);
+                    $byAcct = $downloadedByAccount->get($accountKey);
+                    if ($byAcct) {
+                        $drYm = !empty($byAcct->schedule_bill_month)
+                            ? Carbon::parse($byAcct->schedule_bill_month)->format('Y-m')
+                            : null;
+                        if ($scheduleBillYm && $drYm && $scheduleBillYm === $drYm) {
+                            $downloaded = $byAcct;
+                        } elseif ((int) ($byAcct->schedule_id ?? 0) === (int) $schedule->id) {
+                            $downloaded = $byAcct;
+                        }
+                    }
                 }
 
-                $rateCode = $rateCodes->get($schedule->consumer_zone_id)?->rate_code ?? null;
+                $czRow = $rateCodes->get($schedule->consumer_zone_id);
+                $rateCode = $czRow?->rate_code ?? null;
 
                 // Same truth as Download Reading page (meter_reading_schedules + downloaded_readings):
                 // Completed if download exists OR schedule is Completed OR schedule already has a current reading.
@@ -301,6 +345,55 @@ class MeterReadingApiController extends Controller
                     $readingDate = $schedule->reading_date?->format('Y-m-d');
                 }
 
+                $arrears = (float) ($schedule->arrears ?? 0);
+                $priorYears = (float) ($schedule->prior_years ?? 0);
+                $penalty = (float) ($schedule->penalty ?? 0);
+                $meterRentalArrears = (float) ($schedule->meter_rental_arrears ?? 0);
+
+                // Always prefer live DM breakdown for mobile receipt (unread + completed).
+                // Same PY / Arrears / Penalty / MR Arrears as Billing Payment — never lump into Arrears.
+                $cid = (int) ($schedule->consumer_zone_id ?? 0);
+                $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
+                $dm = $dmByConsumer[$cid] ?? null;
+                $looksCollapsed = $priorYears <= 0.009
+                    && $meterRentalArrears <= 0.009
+                    && $arrears > 0.01;
+                $currentBillAmt = 0.0;
+                $currentMrAmt = 0.0;
+                if ($downloaded) {
+                    $currentBillAmt = round((float) ($downloaded->current_billing ?? 0), 2);
+                    $currentMrAmt = round((float) ($downloaded->current_meter_rental ?? 0), 2);
+                }
+                if ($currentBillAmt <= 0.009) {
+                    $currentBillAmt = round((float) ($schedule->current_billing ?? 0), 2);
+                }
+                if ($dm || $looksCollapsed) {
+                    $srcArrears = (float) ($dm['current_arrears'] ?? $arrears);
+                    $srcPenalty = (float) ($dm['penalty'] ?? $penalty);
+                    $srcOthers = (float) ($dm['others'] ?? $meterRentalArrears);
+                    $srcPrior = (float) ($dm['prio_years'] ?? $priorYears);
+                    // Current Bill / Current MR print on their own lines — peel out of carry.
+                    if ($currentBillAmt > 0.009) {
+                        $srcArrears = round($srcArrears - min($srcArrears, $currentBillAmt), 2);
+                    }
+                    if ($currentMrAmt > 0.009) {
+                        $srcOthers = round($srcOthers - min($srcOthers, $currentMrAmt), 2);
+                    }
+                    $reconciled = app(LedgerDmComponentsService::class)->reconcileOutstandingToLedgerBalance(
+                        $srcArrears,
+                        $srcPenalty,
+                        $srcOthers,
+                        $srcPrior,
+                        $ledgerBalance,
+                        $currentBillAmt,
+                        $currentMrAmt
+                    );
+                    $arrears = (float) $reconciled['current_arrears'];
+                    $priorYears = (float) $reconciled['prio_years'];
+                    $penalty = (float) $reconciled['penalty'];
+                    $meterRentalArrears = (float) $reconciled['others'];
+                }
+
                 return [
                     'id' => $schedule->id,
                     'sedr_number' => $schedule->sedr_number,
@@ -310,6 +403,8 @@ class MeterReadingApiController extends Controller
                     'zone' => $schedule->zone,
                     'category' => $schedule->category,
                     'rate_code' => $rateCode,
+                    'bill_disc_percent' => $czRow->bill_disc_percent ?? null,
+                    'osca_id_no' => $czRow->osca_id_no ?? null,
                     'meter_number' => $schedule->meter_number,
                     'previous_reading' => $schedule->previous_reading,
                     'previous_reading_date' => $schedule->previous_reading_date?->format('Y-m-d'),
@@ -332,10 +427,10 @@ class MeterReadingApiController extends Controller
                     'bill_month' => $schedule->bill_month->format('Y-m-d'),
                     'bill_date' => $schedule->bill_date->format('Y-m-d'),
                     'due_date' => $schedule->due_date->format('Y-m-d'),
-                    'arrears' => (float) ($schedule->arrears ?? 0),
-                    'prior_years' => (float) ($schedule->prior_years ?? 0),
-                    'penalty' => (float) ($schedule->penalty ?? 0),
-                    'meter_rental_arrears' => (float) ($schedule->meter_rental_arrears ?? 0),
+                    'arrears' => $arrears,
+                    'prior_years' => $priorYears,
+                    'penalty' => $penalty,
+                    'meter_rental_arrears' => $meterRentalArrears,
                     'reader_notes' => $downloaded->reader_notes ?? null,
                 ];
             })
@@ -362,7 +457,10 @@ class MeterReadingApiController extends Controller
             'account_number' => 'nullable|string|max:50',
             'current_reading' => 'required|integer|min:0',
             'reading_date' => 'nullable|date',
+            'read_at' => 'nullable|string|max:32',
+            'senior_citizen_discount' => 'nullable|numeric|min:0',
             'reader_notes' => 'nullable|string',
+            'current_meter_rental' => 'nullable|numeric|min:0',
             'reader_id' => 'required|exists:users,id'
         ]);
 
@@ -419,32 +517,54 @@ class MeterReadingApiController extends Controller
                     2
                 );
 
+                $currentMeterRental = $request->filled('current_meter_rental')
+                    ? round((float) $request->input('current_meter_rental'), 2)
+                    : ($currentBill > 0 ? WaterBillingService::METER_RENTAL : 0.0);
+
+                $seniorCitizenDiscount = $this->resolveSeniorCitizenDiscount(
+                    $request,
+                    $consumption,
+                    $schedule->category,
+                    $rateCode,
+                    $consumer
+                );
+
                 // STEP 1: meter_reading_schedules
                 $schedule->update(MeterReadingSchedule::filterTableAttributes([
                     'current_reading' => $currentReading,
                     'reading_date' => $request->reading_date ?? now(),
                     'consumption' => $consumption,
-                    'current_bill' => $currentBill,
+                    'current_billing' => $currentBill,
                     'status' => 'Completed',
                 ]));
                 $schedule->refresh();
 
                 // STEP 2: downloaded_readings
                 $reader = User::find($request->reader_id);
+                $readAtManila = $this->resolveManilaReadAt($request);
 
                 $downloadedPayload = [
                     'consumer_zone_id' => $schedule->consumer_zone_id,
                     'previous_reading' => $previousReading,
                     'current_reading' => $currentReading,
                     'consumption' => $consumption,
-                    'current_bill' => $currentBill,
+                    'current_billing' => $currentBill,
                     'reading_date' => $request->reading_date ?? now(),
                     'status' => 'completed',
                     'reader_notes' => $request->reader_notes,
                     'prepared_by' => $reader ? $this->formatName($reader) : 'READER',
                 ];
+                if (Schema::hasColumn('downloaded_readings', 'current_meter_rental')) {
+                    $downloadedPayload['current_meter_rental'] = $currentMeterRental;
+                }
+                if (Schema::hasColumn('downloaded_readings', 'senior_citizen_discount')) {
+                    $downloadedPayload['senior_citizen_discount'] = $seniorCitizenDiscount;
+                }
                 if (Schema::hasColumn('downloaded_readings', 'completed_at')) {
-                    $downloadedPayload['completed_at'] = now();
+                    $downloadedPayload['completed_at'] = now('Asia/Manila');
+                }
+                if (Schema::hasColumn('downloaded_readings', 'read_at')) {
+                    $downloadedPayload['read_at'] = $readAtManila;
                 }
 
                 $downloaded = DownloadedReading::updateOrCreate(
@@ -491,6 +611,7 @@ class MeterReadingApiController extends Controller
                         'credit' => $ledgerEntry ? (float) ($ledgerEntry->credit ?? 0) : 0,
                         'balance' => $newBalance,
                         'username' => $readerName,
+                        // Server time (not receipt read_at)
                         'txtime' => now(),
                     ];
 
@@ -549,7 +670,7 @@ class MeterReadingApiController extends Controller
                     'account_number' => $schedule->account_number,
                     'current_reading' => $schedule->current_reading,
                     'consumption' => $schedule->consumption,
-                    'current_bill' => $currentBill,
+                    'current_billing' => $currentBill,
                     'status' => $schedule->status
                 ]);
 
@@ -561,7 +682,7 @@ class MeterReadingApiController extends Controller
                         'account_number' => $schedule->account_number,
                         'current_reading' => $schedule->current_reading,
                         'consumption' => $schedule->consumption,
-                        'current_bill' => $schedule->current_bill,
+                        'current_billing' => $schedule->current_billing,
                         'status' => $schedule->status
                     ],
                     'downloaded_reading' => [
@@ -570,7 +691,10 @@ class MeterReadingApiController extends Controller
                         'reader_id' => $downloaded->reader_id,
                         'current_reading' => $downloaded->current_reading,
                         'consumption' => $downloaded->consumption,
-                        'current_bill' => $downloaded->current_bill,
+                        'current_billing' => $downloaded->current_billing,
+                        'current_meter_rental' => $downloaded->current_meter_rental,
+                        'senior_citizen_discount' => $downloaded->senior_citizen_discount ?? null,
+                        'read_at' => $downloaded->read_at,
                         'status' => $downloaded->status,
                     ]
                 ]);
@@ -589,6 +713,53 @@ class MeterReadingApiController extends Controller
                 'message' => 'Error submitting reading: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Manila wall-clock for downloaded_readings.read_at (never store as UTC Z).
+     * Prefers mobile read_at when provided; otherwise Asia/Manila now.
+     */
+    private function resolveManilaReadAt(Request $request): string
+    {
+        $raw = trim((string) $request->input('read_at', ''));
+        if ($raw !== '' && preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?/', $raw, $m)) {
+            $seconds = isset($m[3]) && $m[3] !== '' ? $m[3] : '00';
+
+            return $m[1] . ' ' . $m[2] . ':' . $seconds;
+        }
+
+        return now('Asia/Manila')->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * SC discount saved on downloaded_readings — same rule as mobile receipt.
+     * Prefer amount from the app; otherwise compute from consumer_zone.bill_disc_percent.
+     */
+    private function resolveSeniorCitizenDiscount(
+        Request $request,
+        float $consumption,
+        ?string $category,
+        ?string $rateCode,
+        $consumer
+    ): float {
+        if ($request->filled('senior_citizen_discount')) {
+            return round(max(0, (float) $request->input('senior_citizen_discount')), 2);
+        }
+
+        $billDiscRaw = $consumer->bill_disc_percent ?? null;
+        $billDiscNorm = is_string($billDiscRaw) ? strtoupper(trim($billDiscRaw)) : null;
+        if (is_numeric($billDiscRaw) && abs(((float) $billDiscRaw) - 5.0) < 0.001) {
+            $billDiscNorm = 'SC DISCOUNT';
+        }
+        if ($billDiscNorm !== 'SC DISCOUNT') {
+            return 0.0;
+        }
+
+        return app(WaterBillingService::class)->seniorCitizenDiscount(
+            $consumption,
+            $category,
+            $rateCode
+        );
     }
 
     /**
