@@ -122,12 +122,11 @@ class ReaderController extends Controller
 
             $drSelect = [];
             if (Schema::hasTable('downloaded_readings')) {
-                $drSelect[] = 'dr.completed_at';
-                if (Schema::hasColumn('downloaded_readings', 'read_at')) {
-                    $drSelect[] = 'dr.read_at';
-                }
-                if (Schema::hasColumn('downloaded_readings', 'senior_citizen_discount')) {
-                    $drSelect[] = 'dr.senior_citizen_discount';
+                // Only select columns that exist — completed_at is not on all DBs
+                foreach (['completed_at', 'read_at', 'senior_citizen_discount'] as $drCol) {
+                    if (Schema::hasColumn('downloaded_readings', $drCol)) {
+                        $drSelect[] = 'dr.'.$drCol;
+                    }
                 }
             }
 

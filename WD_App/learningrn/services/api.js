@@ -496,16 +496,63 @@ export const consumerAPI = {
   },
 };
 
+/** Prefer drop-in PHP (same pattern as mobile-reader-schedules.php), then Laravel API. */
+const fetchRetrieveZoneDropIn = async (action, params, token) => {
+  const apiBase = getApiConfig().baseURL.replace(/\/$/, '');
+  const siteBase = apiBase.replace(/\/api$/i, '');
+  const qs = new URLSearchParams({ action, ...params }).toString();
+  const timeoutMs = getApiConfig().timeout || 45000;
+  const candidateUrls = [
+    `${siteBase}/mobile-retrieve-zone.php?${qs}`,
+    `${siteBase}/public/mobile-retrieve-zone.php?${qs}`,
+    `${apiBase}/../mobile-retrieve-zone.php?${qs}`,
+  ];
+
+  for (const url of candidateUrls) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          Authorization: token ? `Bearer ${token}` : '',
+        },
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data && (Array.isArray(data.zones) || Array.isArray(data.data))) {
+        return data;
+      }
+    } catch (e) {
+      console.warn('retrieve-zone drop-in miss:', url, e?.message || e);
+    }
+  }
+  return null;
+};
+
 // Reader – downloaded_readings (zones and reading_date for logged-in reader)
 export const readerDownloadedReadingsAPI = {
-  // Get distinct zones and reading_dates for the logged-in reader (from downloaded_readings table)
-  // If readingDate is provided, returns only zones that have data on that date (previous zones assigned on that date).
+  // Get distinct zones and reading_dates for the logged-in reader (from meter_reading_schedules)
+  // If readingDate is provided, returns only zones that have data on that date.
   getFilters: async (readerId, token, readingDate = null) => {
     if (!readerId) return { zones: [], reading_dates: [] };
-    const params = new URLSearchParams({ reader_id: readerId });
-    if (readingDate) params.set('reading_date', readingDate);
+    const params = { reader_id: String(readerId) };
+    if (readingDate) params.reading_date = readingDate;
+
+    const dropIn = await fetchRetrieveZoneDropIn('filters', params, token);
+    if (dropIn) {
+      return {
+        zones: dropIn.zones ?? [],
+        reading_dates: dropIn.reading_dates ?? [],
+      };
+    }
+
+    const qs = new URLSearchParams(params).toString();
     const response = await apiRequest(
-      `/reader/downloaded-readings/filters?${params.toString()}`,
+      `/reader/downloaded-readings/filters?${qs}`,
       { method: 'GET', token }
     );
     return {
@@ -514,14 +561,21 @@ export const readerDownloadedReadingsAPI = {
     };
   },
 
-  // Get downloaded_readings list for reader + zone + reading_date
+  // Get schedule/readings list for reader + zone + reading_date
   getList: async (readerId, zone, readingDate, token) => {
     if (!readerId) return { data: [] };
-    const params = new URLSearchParams({ reader_id: readerId });
-    if (zone) params.set('zone', zone);
-    if (readingDate) params.set('reading_date', readingDate);
+    const params = { reader_id: String(readerId) };
+    if (zone) params.zone = zone;
+    if (readingDate) params.reading_date = readingDate;
+
+    const dropIn = await fetchRetrieveZoneDropIn('list', params, token);
+    if (dropIn) {
+      return { data: dropIn.data ?? [] };
+    }
+
+    const qs = new URLSearchParams(params).toString();
     const response = await apiRequest(
-      `/reader/downloaded-readings?${params.toString()}`,
+      `/reader/downloaded-readings?${qs}`,
       { method: 'GET', token }
     );
     return { data: response?.data ?? response ?? [] };
