@@ -192,13 +192,21 @@ class LedgerDmComponentsService
             ->whereRaw("UPPER(TRIM(trans)) = 'BILLING'");
         ConsumerLedgerController::applyVisibleLedgerScope($billingQuery);
         if ($latestDmIdByConsumer !== []) {
-            $billingQuery->where(function ($q) use ($latestDmIdByConsumer, $consumerZoneIds) {
+            // Include BILLING after the DM by id OR by date (DM rows are sometimes inserted later with a backdated date).
+            $billingQuery->where(function ($q) use ($latestDmIdByConsumer, $dmCutoffByConsumer, $consumerZoneIds) {
                 $withDm = [];
                 foreach ($consumerZoneIds as $cid) {
                     if (isset($latestDmIdByConsumer[$cid])) {
-                        $q->orWhere(function ($inner) use ($cid, $latestDmIdByConsumer) {
+                        $dmId = $latestDmIdByConsumer[$cid];
+                        $cutoff = $dmCutoffByConsumer[$cid] ?? null;
+                        $q->orWhere(function ($inner) use ($cid, $dmId, $cutoff) {
                             $inner->where(mr_col('consumer_zone_id'), $cid)
-                                ->where(mr_col('id'), '>', $latestDmIdByConsumer[$cid]);
+                                ->where(function ($afterDm) use ($dmId, $cutoff) {
+                                    $afterDm->where(mr_col('id'), '>', $dmId);
+                                    if ($cutoff) {
+                                        $afterDm->orWhereDate(mr_col('date'), '>', $cutoff->format('Y-m-d'));
+                                    }
+                                });
                         });
                         $withDm[] = $cid;
                     }
@@ -292,5 +300,65 @@ class LedgerDmComponentsService
         }
 
         return $dmByConsumer;
+    }
+
+    /**
+     * Keep PY / Arrears / Penalty / MR Arrears breakdown; only nudge buckets so the sum
+     * matches live ledger Current Balance. Never collapse everything into Arrears.
+     *
+     * @return array{current_arrears: float, penalty: float, others: float, prio_years: float}
+     */
+    public function reconcileOutstandingToLedgerBalance(
+        float $currentArrears,
+        float $penalty,
+        float $others,
+        float $prioYears,
+        float $ledgerBalance,
+        float $currentBill = 0.0,
+        float $currentMeterRental = 0.0
+    ): array {
+        $buckets = [
+            'prio_years' => round(max(0.0, $prioYears), 2),
+            'current_arrears' => round(max(0.0, $currentArrears), 2),
+            'penalty' => round(max(0.0, $penalty), 2),
+            'others' => round(max(0.0, $others), 2),
+            'current_billing' => round(max(0.0, $currentBill), 2),
+            'current_meter_rental' => round(max(0.0, $currentMeterRental), 2),
+        ];
+
+        if ($ledgerBalance < -0.009) {
+            return [
+                'current_arrears' => round($ledgerBalance, 2),
+                'penalty' => 0.0,
+                'others' => 0.0,
+                'prio_years' => 0.0,
+            ];
+        }
+
+        $target = round(max(0.0, $ledgerBalance), 2);
+        $sum = round(array_sum($buckets), 2);
+
+        if ($sum > $target + 0.009) {
+            $excess = round($sum - $target, 2);
+            // Reduce current bill first, then arrears — keep PY / penalty / MR as long as possible.
+            foreach (['current_billing', 'current_arrears', 'others', 'prio_years', 'current_meter_rental', 'penalty'] as $key) {
+                if ($excess <= 0.009) {
+                    break;
+                }
+                $deduct = min($buckets[$key], $excess);
+                $buckets[$key] = round($buckets[$key] - $deduct, 2);
+                $excess = round($excess - $deduct, 2);
+            }
+        } elseif ($sum + 0.009 < $target) {
+            // Shortfall goes to Arrears only (does not wipe other lines).
+            $buckets['current_arrears'] = round($buckets['current_arrears'] + ($target - $sum), 2);
+        }
+
+        return [
+            'current_arrears' => round((float) $buckets['current_arrears'], 2),
+            'penalty' => round((float) $buckets['penalty'], 2),
+            'others' => round((float) $buckets['others'], 2),
+            'prio_years' => round((float) $buckets['prio_years'], 2),
+        ];
     }
 }

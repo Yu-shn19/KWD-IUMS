@@ -12,6 +12,7 @@ use App\Models\Penalty;
 use App\Models\LROLedger;
 use App\Support\SundryLedgerRemarks;
 use App\Http\Controllers\ConsumerLedgerController;
+use App\Services\LedgerDmComponentsService;
 use Carbon\Carbon;
 use App\Imports\PreviousReadingImport;
 use App\Services\BillMonthDetailsService;
@@ -795,32 +796,45 @@ class MeterReadingController extends Controller
 
             $scheduleIds = $schedules->pluck(mr_col('id'))->all();
 
-            // Refresh arrears / total_amount from live ledger Current Balance before assign,
-            // so mobile Total Amount matches Account Ledger after payments.
-            $consumerIds = $schedules->pluck(mr_col('consumer_zone_id'))->filter()->unique()->values()->all();
+            // Refresh schedule breakdown from live DM components (keep PY / Penalty / MR / Arrears).
+            $consumerIds = $schedules->pluck(mr_col('consumer_zone_id'))->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
             $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk($consumerIds);
+            $dmByConsumer = app(LedgerDmComponentsService::class)->computeForConsumers($consumerIds);
+            $dmService = app(LedgerDmComponentsService::class);
+
             foreach ($schedules as $schedule) {
                 $cid = (int) ($schedule->consumer_zone_id ?? 0);
                 if ($cid <= 0) {
                     continue;
                 }
                 $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
-                $storedArrears = round((float) ($schedule->arrears ?? 0), 2);
-                $storedPenalty = round((float) ($schedule->penalty ?? 0), 2);
-                $storedMr = round((float) ($schedule->meter_rental_arrears ?? 0), 2);
-                $storedPrior = round((float) ($schedule->prior_years ?? 0), 2);
-                $storedOutstanding = round($storedArrears + $storedPenalty + $storedMr + $storedPrior, 2);
-
-                if (abs($storedOutstanding - $ledgerBalance) <= 0.02) {
-                    continue;
-                }
+                $dm = $dmByConsumer[$cid] ?? [
+                    'current_arrears' => (float) ($schedule->arrears ?? 0),
+                    'penalty' => (float) ($schedule->penalty ?? 0),
+                    'others' => (float) ($schedule->meter_rental_arrears ?? 0),
+                    'prio_years' => (float) ($schedule->prior_years ?? 0),
+                ];
+                $reconciled = $dmService->reconcileOutstandingToLedgerBalance(
+                    (float) ($dm['current_arrears'] ?? 0),
+                    (float) ($dm['penalty'] ?? 0),
+                    (float) ($dm['others'] ?? 0),
+                    (float) ($dm['prio_years'] ?? 0),
+                    $ledgerBalance
+                );
+                $total = round(
+                    (float) $reconciled['current_arrears']
+                    + (float) $reconciled['penalty']
+                    + (float) $reconciled['others']
+                    + (float) $reconciled['prio_years'],
+                    2
+                );
 
                 $schedule->update(MeterReadingSchedule::filterTableAttributes([
-                    'arrears' => $ledgerBalance,
-                    'penalty' => 0,
-                    'meter_rental_arrears' => 0,
-                    'prior_years' => 0,
-                    'total_amount' => $ledgerBalance,
+                    'arrears' => (float) $reconciled['current_arrears'],
+                    'penalty' => (float) $reconciled['penalty'],
+                    'meter_rental_arrears' => (float) $reconciled['others'],
+                    'prior_years' => (float) $reconciled['prio_years'],
+                    'total_amount' => $total,
                 ]));
             }
 

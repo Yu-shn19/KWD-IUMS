@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\MeterReadingSchedule;
 use App\Models\DownloadedReading;
 use App\Models\ConsumerLedger;
+use App\Services\LedgerDmComponentsService;
 use App\Services\WaterBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -211,6 +212,9 @@ class MeterReadingApiController extends Controller
                     'dr.reading_date',
                     'dr.status',
                     'dr.reader_notes',
+                    ...(Schema::hasColumn('downloaded_readings', 'current_meter_rental')
+                        ? ['dr.current_meter_rental']
+                        : []),
                     'mrs.consumer_zone_id as schedule_consumer_zone_id',
                     'mrs.bill_month as schedule_bill_month',
                     'cz.account_no',
@@ -256,18 +260,19 @@ class MeterReadingApiController extends Controller
                 ->keyBy(mr_col('id'));
         }
 
-        // Live ledger balances so mobile Total Amount matches Account Ledger after payments.
+        // Live ledger + DM breakdown so mobile receipt keeps PY / Arrears / Penalty / MR.
         $footerBalances = collect();
+        $dmByConsumer = [];
         if ($schedules->isNotEmpty()) {
-            $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk(
-                $schedules->pluck('consumer_zone_id')->filter()->unique()->values()->all()
-            );
+            $consumerIdsForBalance = $schedules->pluck('consumer_zone_id')->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
+            $footerBalances = ConsumerLedgerController::computeAccountLedgerFooterBalancesBulk($consumerIdsForBalance);
+            $dmByConsumer = app(LedgerDmComponentsService::class)->computeForConsumers($consumerIdsForBalance);
         }
 
         return response()->json([
             'success' => true,
             'message' => 'Schedules retrieved successfully',
-            'version' => '1.5-live-ledger-arrears',
+            'version' => '1.7-receipt-dm-breakdown',
             'bill_month' => $latestBillMonth,
             'reader' => [
                 'id' => $reader->id,
@@ -279,7 +284,8 @@ class MeterReadingApiController extends Controller
                 $downloadedByConsumerZoneId,
                 $downloadedByAccount,
                 $rateCodes,
-                $footerBalances
+                $footerBalances,
+                $dmByConsumer
             ) {
                 $accountKey = strtolower(trim((string) ($schedule->account_number ?? '')));
                 $scheduleBillYm = $schedule->bill_month
@@ -344,17 +350,48 @@ class MeterReadingApiController extends Controller
                 $penalty = (float) ($schedule->penalty ?? 0);
                 $meterRentalArrears = (float) ($schedule->meter_rental_arrears ?? 0);
 
-                // For unread schedules, refresh from live ledger Current Balance.
-                if (!$isReallyCompleted) {
-                    $cid = (int) ($schedule->consumer_zone_id ?? 0);
-                    $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
-                    $storedOutstanding = round($arrears + $priorYears + $penalty + $meterRentalArrears, 2);
-                    if (abs($storedOutstanding - $ledgerBalance) > 0.02) {
-                        $arrears = $ledgerBalance;
-                        $priorYears = 0.0;
-                        $penalty = 0.0;
-                        $meterRentalArrears = 0.0;
+                // Always prefer live DM breakdown for mobile receipt (unread + completed).
+                // Same PY / Arrears / Penalty / MR Arrears as Billing Payment — never lump into Arrears.
+                $cid = (int) ($schedule->consumer_zone_id ?? 0);
+                $ledgerBalance = round((float) ($footerBalances[$cid] ?? 0), 2);
+                $dm = $dmByConsumer[$cid] ?? null;
+                $looksCollapsed = $priorYears <= 0.009
+                    && $meterRentalArrears <= 0.009
+                    && $arrears > 0.01;
+                $currentBillAmt = 0.0;
+                $currentMrAmt = 0.0;
+                if ($downloaded) {
+                    $currentBillAmt = round((float) ($downloaded->current_billing ?? 0), 2);
+                    $currentMrAmt = round((float) ($downloaded->current_meter_rental ?? 0), 2);
+                }
+                if ($currentBillAmt <= 0.009) {
+                    $currentBillAmt = round((float) ($schedule->current_billing ?? 0), 2);
+                }
+                if ($dm || $looksCollapsed) {
+                    $srcArrears = (float) ($dm['current_arrears'] ?? $arrears);
+                    $srcPenalty = (float) ($dm['penalty'] ?? $penalty);
+                    $srcOthers = (float) ($dm['others'] ?? $meterRentalArrears);
+                    $srcPrior = (float) ($dm['prio_years'] ?? $priorYears);
+                    // Current Bill / Current MR print on their own lines — peel out of carry.
+                    if ($currentBillAmt > 0.009) {
+                        $srcArrears = round($srcArrears - min($srcArrears, $currentBillAmt), 2);
                     }
+                    if ($currentMrAmt > 0.009) {
+                        $srcOthers = round($srcOthers - min($srcOthers, $currentMrAmt), 2);
+                    }
+                    $reconciled = app(LedgerDmComponentsService::class)->reconcileOutstandingToLedgerBalance(
+                        $srcArrears,
+                        $srcPenalty,
+                        $srcOthers,
+                        $srcPrior,
+                        $ledgerBalance,
+                        $currentBillAmt,
+                        $currentMrAmt
+                    );
+                    $arrears = (float) $reconciled['current_arrears'];
+                    $priorYears = (float) $reconciled['prio_years'];
+                    $penalty = (float) $reconciled['penalty'];
+                    $meterRentalArrears = (float) $reconciled['others'];
                 }
 
                 return [

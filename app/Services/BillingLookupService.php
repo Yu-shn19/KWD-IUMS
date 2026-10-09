@@ -844,7 +844,7 @@ class BillingLookupService
             'bill_disc_percent' => $consumerForAddress?->bill_disc_percent,
             'osca_id_no' => $consumerForAddress?->osca_id_no,
             'bill_disc_updated_at' => !empty($consumerForAddress?->bill_disc_updated_at)
-                ? Carbon::parse($consumerForAddress->bill_disc_updated_at)->format('Y-m-d')
+                ? Carbon::parse((string) $consumerForAddress->bill_disc_updated_at)->format('Y-m-d')
                 : null,
             'meter_number' => $state->reading->meter_number ?? null,
             'reader_id' => $state->reading->reader_id,
@@ -857,7 +857,7 @@ class BillingLookupService
      */
     private function buildLookupBillingData(BillingLookupState $state, ?ConsumerZone $consumer): array
     {
-        $billMonthFromSchedule = $state->reading->bill_month ? Carbon::parse($state->reading->bill_month) : null;
+        $billMonthFromSchedule = $state->reading->bill_month ? Carbon::parse((string) $state->reading->bill_month) : null;
         $state->billMonthDate = $state->billMonthDate ?? ($billMonthFromSchedule ? $billMonthFromSchedule->copy()->startOfMonth() : null);
 
         $consumption = $state->reading->consumption ?? 0;
@@ -900,6 +900,32 @@ class BillingLookupService
             $penalty = $this->resolveLookupPenalty($state, $consumer);
         }
         $meterRentalArrears = round((float) ($schedule?->meter_rental_arrears ?? 0), 2);
+
+        // Schedule may have been collapsed into a single Arrears total — restore DM breakdown.
+        if ($consumer) {
+            $looksCollapsed = $prioYears <= 0.009
+                && $meterRentalArrears <= 0.009
+                && $currentArrears > 0.01;
+            $dm = app(LedgerDmComponentsService::class)->computeForConsumers([(int) $consumer->id]);
+            $dmRow = $dm[(int) $consumer->id] ?? null;
+            if ($dmRow && ($looksCollapsed || ($prioYears <= 0.009 && (float) ($dmRow['prio_years'] ?? 0) > 0.009))) {
+                $currentArrears = round((float) ($dmRow['current_arrears'] ?? $currentArrears), 2);
+                $prioYears = round((float) ($dmRow['prio_years'] ?? $prioYears), 2);
+                $meterRentalArrears = round((float) ($dmRow['others'] ?? $meterRentalArrears), 2);
+                if ((float) ($dmRow['penalty'] ?? 0) > $penalty) {
+                    $penalty = round((float) $dmRow['penalty'], 2);
+                }
+                // Current bill / Current MR are shown separately — peel them out of DM carry.
+                if ($currentBill > 0.009) {
+                    $peel = min($currentArrears, $currentBill);
+                    $currentArrears = round($currentArrears - $peel, 2);
+                }
+                if ($currentMeterRental > 0.009) {
+                    $peel = min($meterRentalArrears, $currentMeterRental);
+                    $meterRentalArrears = round($meterRentalArrears - $peel, 2);
+                }
+            }
+        }
 
         if ($currentArrears < 0) {
             $currentBill = round(max(0.0, $currentBill - abs($currentArrears)), 2);
