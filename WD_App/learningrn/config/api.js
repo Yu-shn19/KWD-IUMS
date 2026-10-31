@@ -1,7 +1,7 @@
 export const API_CONFIG = {
   // Local / IP test server (HTTP)
   development: {
-    baseURL: 'http://187.127.206.191/api',
+    baseURL: 'http://192.168.1.9:8000/api',
     timeout: 20000,
   },
 
@@ -25,7 +25,7 @@ export const API_CONFIG = {
 };
 
 // Active API — production uses HTTPS for production
-export const CURRENT_ENV = 'production';
+export const CURRENT_ENV = 'development';
 
 export const getApiConfig = () => {
   return API_CONFIG[CURRENT_ENV]; 

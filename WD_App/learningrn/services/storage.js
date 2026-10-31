@@ -262,6 +262,51 @@ export const completedAccountsStorage = {
       return false;
     }
   },
+
+  /**
+   * After a fresh server download, drop durable "completed" rows for schedules
+   * / bill months that are no longer in the active assignment list.
+   */
+  pruneNotInAssignments: async (assignments = []) => {
+    try {
+      const list = Array.isArray(assignments) ? assignments : [];
+      const keepScheduleIds = new Set();
+      const keepBillMonths = new Set();
+      list.forEach((row) => {
+        const sid = row?.schedule_id ?? row?.scheduleId ?? row?.id;
+        if (sid != null && sid !== '') {
+          const n = Number(sid);
+          if (!Number.isNaN(n)) keepScheduleIds.add(n);
+        }
+        const ym = String(row?.bill_month ?? row?.billMonth ?? '')
+          .trim()
+          .slice(0, 7);
+        if (/^\d{4}-\d{2}$/.test(ym)) keepBillMonths.add(ym);
+      });
+      const all = await completedAccountsStorage.getAll();
+      const next = {};
+      Object.keys(all || {}).forEach((key) => {
+        const entry = all[key];
+        if (!entry) return;
+        const sid = entry.schedule_id != null ? Number(entry.schedule_id) : null;
+        const ym = String(entry.bill_month || '').trim().slice(0, 7);
+        const hasSid = sid != null && !Number.isNaN(sid);
+        if (hasSid) {
+          if (keepScheduleIds.has(sid)) next[key] = entry;
+          return;
+        }
+        // Legacy row without schedule_id: keep only while that bill month is still loaded.
+        if (/^\d{4}-\d{2}$/.test(ym) && keepBillMonths.has(ym)) {
+          next[key] = entry;
+        }
+      });
+      await AsyncStorage.setItem(STORAGE_KEYS.COMPLETED_ACCOUNTS, JSON.stringify(next));
+      return true;
+    } catch (error) {
+      console.error('Error pruning completed accounts:', error);
+      return false;
+    }
+  },
 };
 export const routesStorage = {
   saveRoutes: async (routes, bucket = ROUTES_BUCKET_READER) => {

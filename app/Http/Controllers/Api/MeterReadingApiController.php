@@ -153,17 +153,70 @@ class MeterReadingApiController extends Controller
             $query->forZoneCode($zone);
         }
 
+        // Select schedule columns only — orderByAccountNumberTail joins consumer_zone and
+        // would otherwise overwrite meter_reading_schedules.id with cz.id (breaks wave filter).
+        $mrsTable = (new MeterReadingSchedule())->getTable();
+        $query->select("{$mrsTable}.*");
+
         // Order by status priority (active routes first), then by account # tail (after last "-")
         $schedules = $query->orderByRaw("
             CASE 
-                WHEN status = 'Assigned' THEN 1
-                WHEN status = 'In Progress' THEN 2
-                WHEN status = 'Completed' THEN 3
+                WHEN {$mrsTable}.status = 'Assigned' THEN 1
+                WHEN {$mrsTable}.status = 'In Progress' THEN 2
+                WHEN {$mrsTable}.status = 'Completed' THEN 3
                 ELSE 4
             END
         ")->orderByAccountNumberTail()->get();
 
         $latestBillMonth = $billMonthNormalized ?: ($latestBillMonth ? Carbon::parse($latestBillMonth)->format('Y-m-d') : null);
+
+        // When the reader has a new/active assignment:
+        // 1) Drop zones that are fully Completed (old finished zones).
+        // 2) Within an active zone, drop prior-wave Completed rows (same zone re-assigned
+        //    creates new schedule IDs while old Completed rows stay on the reader).
+        // Completed accounts from the CURRENT wave (id >= min active id) stay visible.
+        $activeStatuses = ['Prepared', 'Assigned', 'In Progress'];
+        $hasActiveAssignment = $schedules->contains(
+            static fn ($s) => in_array((string) $s->status, $activeStatuses, true)
+        );
+        if ($hasActiveAssignment) {
+            $zoneKeyFn = static function ($s): string {
+                $z = strtolower(trim((string) (
+                    $s->zone
+                    ?? $s->consumerZone?->zone_code
+                    ?? ''
+                )));
+
+                return $z !== '' ? $z : 'unknown-zone';
+            };
+
+            $kept = collect();
+            foreach ($schedules->groupBy($zoneKeyFn) as $rows) {
+                $activeRows = $rows->filter(
+                    static fn ($s) => in_array((string) $s->status, $activeStatuses, true)
+                );
+                if ($activeRows->isEmpty()) {
+                    continue; // fully completed old zone — remove from mobile
+                }
+                // Use getKey() — Collection::min('id') can be wrong after joins/order scopes.
+                $waveMinId = (int) $activeRows
+                    ->map(static fn ($s) => (int) $s->getKey())
+                    ->filter(static fn ($id) => $id > 0)
+                    ->min();
+                if ($waveMinId <= 0) {
+                    $kept = $kept->merge($activeRows);
+                    continue;
+                }
+                $kept = $kept->merge($rows->filter(static function ($s) use ($activeStatuses, $waveMinId) {
+                    if (in_array((string) $s->status, $activeStatuses, true)) {
+                        return true;
+                    }
+                    // Keep Completed only if it belongs to this assignment wave
+                    return (int) $s->getKey() >= $waveMinId;
+                }));
+            }
+            $schedules = $kept->values();
+        }
 
         // Source of truth for mobile "Completed": downloaded_readings (Download Reading).
         // Match by schedule_id, consumer_zone_id, or account number for this bill month.
@@ -272,7 +325,7 @@ class MeterReadingApiController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Schedules retrieved successfully',
-            'version' => '1.7-receipt-dm-breakdown',
+            'version' => '1.10-fix-schedule-id-after-zone-join',
             'bill_month' => $latestBillMonth,
             'reader' => [
                 'id' => $reader->id,

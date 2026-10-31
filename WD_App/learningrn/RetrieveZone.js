@@ -20,7 +20,13 @@ import { readerDownloadedReadingsAPI, routesAPI } from './services/api';
 import { tokenStorage, userStorage, routesStorage, printerStorage, receiptLogoStorage, receiptFormatStorage } from './services/storage';
 import { isSupported as btSupported, printReceiptEscPos } from './services/bluetoothPrinter';
 import PrinterSelector from './components/PrinterSelector';
-import { applyAdvanceToReceiptBilling, isSeniorCitizenDiscountEligible, calculateSeniorCitizenDiscount } from './utils/waterBilling';
+import {
+  METER_RENTAL,
+  calculateWaterBill,
+  applyAdvanceToReceiptBilling,
+  isSeniorCitizenDiscountEligible,
+  calculateSeniorCitizenDiscount,
+} from './utils/waterBilling';
 import { countCalendarDaysBetween, formatManilaDateTime, getManilaNowStored } from './utils/dateUtils';
 
 export default function RetrieveZone({ onBack, userData }) {
@@ -399,10 +405,25 @@ export default function RetrieveZone({ onBack, userData }) {
     const consumption = item.consumption != null ? Number(item.consumption) : (currReading >= prevReading ? currReading - prevReading : 0);
     // Same rule as Read and Bill: high consumption when current > previous AND consumption >= 10
     const isHighConsumption = currReading > prevReading && consumption >= 10;
-    const currentBillNum = item.current_billing != null ? Number(item.current_billing) : 0;
-    const meterMaintenanceCharge = 20.00;
-    const totalCurrentRaw = currentBillNum > 0 ? currentBillNum : meterMaintenanceCharge;
-    const currentBillOnly = totalCurrentRaw >= meterMaintenanceCharge ? totalCurrentRaw - meterMaintenanceCharge : 0;
+    // current_billing from API/schedule is water-only (meter rental stored separately).
+    // Do NOT subtract METER_RENTAL again — that understated Current Bill / TOTAL CURRENT by ₱20.
+    let currentBillOnly = item.current_billing != null ? Number(item.current_billing) : 0;
+    if (!Number.isFinite(currentBillOnly) || currentBillOnly < 0) currentBillOnly = 0;
+    if (currentBillOnly <= 0 && consumption > 0) {
+      const { bill } = calculateWaterBill(
+        consumption,
+        item.category,
+        item.rate_code ?? item.rateCode ?? null
+      );
+      currentBillOnly = bill;
+    }
+    const savedMeter = item.current_meter_rental ?? item.currentMeterRental;
+    const meterMaintenanceCharge =
+      savedMeter != null && savedMeter !== '' && Number.isFinite(Number(savedMeter))
+        ? Math.max(0, Number(savedMeter))
+        : currentBillOnly > 0
+          ? METER_RENTAL
+          : 0;
     const others = 0.00;
     const receiptBilling = applyAdvanceToReceiptBilling(
       item.arrears,
