@@ -141,10 +141,17 @@ const isActiveAssignmentRow = (row) => {
   return true;
 };
 
+const getScheduleNumericId = (row) => {
+  const sid = row?.schedule_id ?? row?.scheduleId ?? row?.id;
+  const n = Number(sid);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 /**
  * When a previous zone is fully completed and a new zone is assigned,
  * Read and Bill should show only the active (new) assignment.
- * Completed accounts inside an active zone stay visible.
+ * Same-zone re-assign: drop prior-wave Completed (lower schedule ids) so old
+ * finished accounts disappear while current-wave Completed stay visible.
  * If every zone is completed (no new assignment yet), keep the full list.
  */
 const filterToActiveAssignmentZones = (list) => {
@@ -160,11 +167,47 @@ const filterToActiveAssignmentZones = (list) => {
     if (rows.some(isActiveAssignmentRow)) activeKeys.push(key);
   });
   if (activeKeys.length === 0) return list;
-  const keep = new Set(activeKeys);
-  const filtered = list.filter((row) => keep.has(getAssignmentGroupKey(row)));
+
+  // Prefer newest bill-month among active groups when cache still holds older months.
+  let keysToKeep = activeKeys;
+  const activeYms = activeKeys
+    .map((k) => {
+      const parts = String(k).split('|');
+      return parts.length > 1 ? parts[parts.length - 1] : '';
+    })
+    .filter((ym) => /^\d{4}-\d{2}$/.test(ym));
+  if (activeYms.length > 0) {
+    const newestYm = activeYms.slice().sort().reverse()[0];
+    const newestKeys = activeKeys.filter((k) => String(k).endsWith(`|${newestYm}`) || !String(k).includes('|'));
+    if (newestKeys.length > 0) keysToKeep = newestKeys;
+  }
+
+  const keep = new Set(keysToKeep);
+  const filtered = [];
+  keep.forEach((key) => {
+    const rows = byGroup.get(key) || [];
+    const activeRows = rows.filter(isActiveAssignmentRow);
+    if (activeRows.length === 0) return;
+    const waveIds = activeRows.map(getScheduleNumericId).filter((n) => n != null);
+    const waveMinId = waveIds.length > 0 ? Math.min(...waveIds) : null;
+    rows.forEach((row) => {
+      if (isActiveAssignmentRow(row)) {
+        filtered.push(row);
+        return;
+      }
+      // Completed: keep only current assignment wave (id >= min active id)
+      if (waveMinId == null) {
+        filtered.push(row);
+        return;
+      }
+      const id = getScheduleNumericId(row);
+      if (id != null && id >= waveMinId) filtered.push(row);
+    });
+  });
+
   if (filtered.length !== list.length) {
     console.log(
-      `📍 Read and Bill: showing ${filtered.length} account(s) from ${activeKeys.length} active zone(s); hid ${list.length - filtered.length} from completed assignment(s).`
+      `📍 Read and Bill: showing ${filtered.length} account(s) from ${keysToKeep.length} active zone(s); hid ${list.length - filtered.length} old completed assignment(s).`
     );
   }
   return filtered;
@@ -959,13 +1002,12 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
                   downloaded_reading_id: route.downloaded_reading_id,
                 }
               );
-              const local = findLocalProgress(
-                localByScheduleId,
-                localByAccount,
-                routeScheduleId,
-                accountKey,
-                getAccountTailKey(route)
-              );
+              // Overlay only by schedule_id — account-level match re-applies old-zone Completed
+              // onto a newly assigned schedule for the same consumer.
+              const local =
+                localByScheduleId[routeScheduleId] ??
+                localByScheduleId[Number(routeScheduleId)] ??
+                null;
 
               const scheduleStillOpen = /^(assigned|prepared|in progress|in-progress)$/i.test(
                 String(scheduleStatus || '').trim()
@@ -1001,7 +1043,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               }
 
               // Hard rule: never downgrade local completed / saved-offline → pending/Assigned
-              // but only for the same schedule id (local map is schedule-keyed now).
+              // for the same schedule id only.
               const overlay = pickNonDowngradedProgress(
                 apiStatus,
                 effectiveReading,
@@ -1031,13 +1073,22 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
 
             const activeRoutes = filterToActiveAssignmentZones(routesWithReaderId);
             await routesStorage.saveRoutes(activeRoutes);
+            // Drop durable completed for old finished zones so they cannot reappear.
+            try {
+              await completedAccountsStorage.pruneNotInAssignments(activeRoutes);
+            } catch (pruneErr) {
+              console.warn('Prune completed accounts:', pruneErr?.message || pruneErr);
+            }
 
             const mapped = activeRoutes.map((c, idx) => {
               const accountKey = getAccountKeyFromRecord(c);
+              const sid = getScheduleIdFromRecord(c);
+              // Only overlay local progress for THIS schedule — never by account alone
+              // (that re-marked a newly assigned zone as Completed from an old zone).
               const local =
-                localByScheduleId[getScheduleIdFromRecord(c)] ??
-                localByScheduleId[Number(getScheduleIdFromRecord(c))] ??
-                (accountKey ? localByAccount[accountKey] : null);
+                localByScheduleId[sid] ??
+                localByScheduleId[Number(sid)] ??
+                null;
               let status = normalizeCustomerStatus(
                 c.status,
                 c.current_reading ?? c.currentReading,
@@ -1047,7 +1098,7 @@ const ReadAndBill = ({ onBack, onViewRoutes }) => {
               );
               let currentReading = c.current_reading ?? c.currentReading ?? null;
               let consumption = c.consumption ?? 0;
-              // Final lock: local/durable completed always wins over Pending/Assigned
+              // Final lock: same-schedule local completed wins over Pending/Assigned
               if (local && statusProgressRank(local.status) > statusProgressRank(status)) {
                 status = local.status;
                 if (local.current_reading != null) currentReading = local.current_reading;
